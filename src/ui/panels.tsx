@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'preact/hooks';
+import { healthState, HEALTH_LABEL, pctOf } from '../core/combat';
 import { TOKEN_SIZES } from '../core/model';
 import { throttle } from '../core/throttle';
 import type { Board } from '../board/Board';
@@ -7,6 +8,7 @@ import type { UiState } from '../state/ui';
 import type { GridSettings, LabelMode, Token, TokenShape } from '../types';
 import { Field, Section, SliderField, Toggle, toast, useClient, useUi } from './common';
 import { uploadImage } from './uploads';
+import { HpBar, InitiativePanel, parseDamage } from './initiative';
 
 
 /** Wraps a callback in a throttle that always uses the latest closure. */
@@ -41,7 +43,9 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
   const editable = tokens.every((t) => client.canDo('edit', t));
   const allHidden = tokens.every((t) => t.hidden);
   const sizeLabel = TOKEN_SIZES.find((s) => s.size === t0.size)?.label ?? `${t0.size} squares`;
-  const sub = multi ? '' : [sizeLabel, t0.hidden ? 'hidden' : '', t0.locked ? 'locked' : ''].filter(Boolean).join(' · ');
+  const viewerSeesState = !client.isDM && !multi && t0.hpShow !== 'off' && t0.hpPct != null && healthState(t0.hpPct) !== 'ok';
+  const sub = multi ? '' : [sizeLabel, viewerSeesState ? HEALTH_LABEL[healthState(t0.hpPct)] : '', t0.hidden ? 'hidden' : '', t0.locked ? 'locked' : ''].filter(Boolean).join(' · ');
+  const tracked = client.isDM ? tokens.filter((t) => t.hp != null && t.maxHp != null) : [];
 
   return (
     <div class="tokentag" onMouseDown={(e) => e.stopPropagation()}>
@@ -49,6 +53,7 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
         <div class="tt-name">{multi ? `${tokens.length} tokens` : t0.name || 'Unnamed token'}</div>
         {sub && <div class="tt-sub">{sub}</div>}
       </div>
+      {tracked.length > 0 && <HpControl client={client} tokens={tracked} />}
       <button class="btn small primary" disabled={!editable} title="Edit token (E)" onClick={() => props.onEdit(ids)}>Edit</button>
       {!client.isDM && !multi && client.canDo('claim', t0) && (
         <button class="btn small" onClick={() => void client.updateToken(t0.id, { ownerUid: client.uid })}>Take control</button>
@@ -59,6 +64,31 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
       <span class="tt-hint">Ctrl+C / V copy · Del delete</span>
       <button class="icon-btn" title="Deselect" onClick={() => ui.select([])}>✕</button>
     </div>
+  );
+}
+
+/** Hit points of the selected token(s): a bar, the numbers, and a box to hurt or heal. DM only. */
+function HpControl(props: { client: TableClient; tokens: Token[] }) {
+  const { client, tokens } = props;
+  const [text, setText] = useState('');
+  const one = tokens.length === 1 ? tokens[0] : null;
+  /** The buttons always do what they say; Enter follows the sign (a plain number hurts, +number heals). */
+  const apply = (sign: 1 | -1 | 0) => {
+    const n = sign === 0 ? parseDamage(text) : parseDamage(text.replace(/^[+-]/, ''));
+    if (n == null) return;
+    void client.damage(tokens.map((t) => t.id), sign === 0 ? n : sign * n);
+    setText('');
+  };
+  return (
+    <span class="tt-hp" title={one ? `${one.hp} of ${one.maxHp} hit points` : `${tokens.length} tokens with hit points`}>
+      {one && <><HpBar pct={pctOf(one.hp, one.maxHp) ?? 0} width={70} /><span class="tt-hpnum">{one.hp}/{one.maxHp}</span></>}
+      {!one && <span class="tt-hpnum">{tokens.length} with HP</span>}
+      <input type="text" inputMode="numeric" placeholder="±" value={text} aria-label="Hit points to take off or give back"
+        onInput={(e) => setText((e.target as HTMLInputElement).value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') apply(0); e.stopPropagation(); }} />
+      <button class="btn small" title="Damage" onClick={() => apply(1)}>−</button>
+      <button class="btn small" title="Heal" onClick={() => apply(-1)}>+</button>
+    </span>
   );
 }
 
@@ -141,6 +171,15 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
 
       <Section id="fog" title="Fog of war">
         <Toggle checked={meta.fog.enabled} onChange={(v) => { void client.updateScene({ fog: { enabled: v } }); }} label="Fog of war on" />
+        <Toggle checked={meta.fog.vision} onChange={(v) => { void client.updateScene({ fog: { vision: v } }); }} label="Tokens clear the fog around them"
+          hint="Each token sees as far as its “Sight” setting (token editor). Hidden tokens never do." />
+        {meta.fog.vision && (
+          <>
+            <Toggle checked={meta.fog.explore} onChange={(v) => { void client.updateScene({ fog: { explore: v } }); }} label="Keep what they have explored"
+              hint="While your browser is open, ground a token has seen stays revealed after it leaves." />
+            <SightAll client={client} />
+          </>
+        )}
         <div class="row wrap">
           <button class="btn small" onClick={() => { if (confirm('Cover the whole map in fog again?')) void client.resetFog('hidden'); }}>Hide everything</button>
           <button class="btn small" onClick={() => void client.resetFog('clear')}>Reveal everything</button>
@@ -148,6 +187,24 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
         </div>
       </Section>
     </>
+  );
+}
+
+/** Give every token that belongs to a player the same sight distance in one go. */
+function SightAll(props: { client: TableClient }) {
+  const { client } = props;
+  const [ft, setFt] = useState('60');
+  const party = [...(client.scene?.tokens.values() ?? [])].filter((t) => t.ownerUid);
+  return (
+    <div class="row wrap">
+      <span class="field-label" style={{ marginBottom: 0 }}>Player tokens see</span>
+      <input type="number" class="num" min={0} step={5} value={ft} onInput={(e) => setFt((e.target as HTMLInputElement).value)} />
+      <span class="unit">ft</span>
+      <button class="btn small" disabled={!party.length} title={party.length ? `Set the sight of ${party.length} token${party.length === 1 ? '' : 's'}` : 'No token belongs to a player yet'}
+        onClick={() => { const n = Math.max(0, Number(ft) || 0); void client.updateTokens(party.map((t) => t.id), { sight: n }); toast(`${party.length} token${party.length === 1 ? '' : 's'} now see ${n} ft`, 'ok', 2000); }}>
+        Apply to {party.length}
+      </button>
+    </div>
   );
 }
 
@@ -174,6 +231,7 @@ export function TokenList(props: { client: TableClient; ui: UiState; board: Boar
               <span class="tok-name">
                 <span class={t.hidden ? 'muted' : ''}>{t.name || 'Unnamed'}</span>
                 {owner && <span class="tok-sub"><span class="dot" style={{ background: owner.color }} /> {owner.name}</span>}
+                {t.hp != null && t.maxHp != null && <span class="tok-sub"><HpBar pct={pctOf(t.hp, t.maxHp) ?? 0} width={46} /> {t.hp}/{t.maxHp}</span>}
               </span>
               <button class={`icon-btn ${t.hidden ? 'on' : ''}`} title={t.hidden ? 'Hidden from players. Click to reveal.' : 'Visible to players. Click to hide.'}
                 onClick={(e) => { e.stopPropagation(); void client.updateTokens([t.id], { hidden: !t.hidden }); }}>{t.hidden ? '🙈' : '👁'}</button>
@@ -188,7 +246,7 @@ export function TokenList(props: { client: TableClient; ui: UiState; board: Boar
 }
 
 /** The right-hand panel (DM): tabs plus a hide button. */
-export function Dock(props: { client: TableClient; ui: UiState; board: Board | null; onNewScene: () => void; onEdit: (ids: string[]) => void }) {
+export function Dock(props: { client: TableClient; ui: UiState; board: Board | null; onNewScene: () => void; onEdit: (ids: string[]) => void; onRoll: () => void }) {
   const { client, ui } = props;
   useClient(client);
   const d = useUi(ui);
@@ -201,11 +259,13 @@ export function Dock(props: { client: TableClient; ui: UiState; board: Board | n
         <div class="dock-tabs">
           <button class={tab === 'scene' ? 'on' : ''} onClick={() => ui.set({ dockTab: 'scene' })} title={title}>Scene</button>
           <button class={tab === 'tokens' ? 'on' : ''} onClick={() => ui.set({ dockTab: 'tokens' })}>Tokens</button>
+          <button class={tab === 'init' ? 'on' : ''} onClick={() => ui.set({ dockTab: 'init' })}>Initiative</button>
         </div>
         <button class="icon-btn" title="Hide this panel" aria-label="Hide panel" onClick={() => ui.set({ dockOpen: false })}>⟩</button>
       </div>
       {tab === 'scene' && <ScenePanel client={client} ui={ui} board={props.board} onNewScene={props.onNewScene} />}
       {tab === 'tokens' && <TokenList client={client} ui={ui} board={props.board} onEdit={props.onEdit} />}
+      {tab === 'init' && <InitiativePanel client={client} ui={ui} board={props.board} onRoll={props.onRoll} onEdit={props.onEdit} />}
     </aside>
   );
 }

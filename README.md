@@ -25,6 +25,9 @@ together with a link. Built for one DM and a handful of trusted friends, hosted 
 - **Ruler:** measure with your table's diagonal rule. Private until you choose to show it.
 - **Test move:** try a move without making it. The token shows at the new spot, a shadow stays behind, with the distance. Keep it or reset it. Others only see it if you switch on "Show others".
 - **Auras:** coloured areas around a token (radius in feet, from the edge or the centre, round or square, DM-only if you like).
+- **Initiative (DM tab):** "Roll for initiative" pops up a number box for every token (Enter jumps to the next, or press the dice). The order sorts itself, you step through turns and rounds, drag lines to reorder, and hide any line from players. Nothing is shown to players until you tick "Show the order to players".
+- **Hit points:** set on a token in the editor, shown as a bar on the token, in the initiative list and in the box at the bottom. Type a number and press − or + (Enter hurts, `+5` then Enter heals). Bloodied (half) and near death (a tenth) colour the token's edge. You choose what players see per token: nothing, colour only, or a bar. Players never receive the numbers, only a percentage, and the real values sit in the DM-only part of the database.
+- **Sight and fog:** give a token a sight distance (in feet) and, with "Tokens clear the fog around them" on, the fog opens around it as it moves. "Keep what they have explored" leaves the ground revealed behind them (it needs your browser open, because it is the DM's browser that adds the reveal strokes). Hidden tokens never clear fog, and a test move does not peek ahead.
 - **Token maker:** drag and zoom the picture, colour behind it, colour dropper, and a paint/erase brush.
 - **Scenes:** prepare a scene privately, then show it to players when ready. Tokens and fog are saved per scene.
 - **Accounts:** Google sign-in for DMs only (allowlist), saved library of maps and token art that follows you between devices.
@@ -40,6 +43,7 @@ together with a link. Built for one DM and a handful of trusted friends, hosted 
 | Ping | hold the left mouse button |
 | Menu | right-click a token (or empty space) |
 | Draw / templates / ruler / test move | `D`, `S`, `R`, `M` |
+| Hit points | select a token, type a number, `Enter` (hurt) or `+` button (heal) |
 | Tools | `V` select, `G` grid (DM), `F` fog (DM), `T` new token |
 | Undo / redo | `Ctrl+Z`, `Ctrl+Y` |
 | Copy / cut / paste / delete | `Ctrl+C`, `Ctrl+X`, `Ctrl+V`, `Del` |

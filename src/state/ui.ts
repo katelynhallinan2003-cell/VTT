@@ -20,7 +20,7 @@ export interface UiData {
   status: string | null;
   /** the right-hand panel is expanded */
   dockOpen: boolean;
-  dockTab: 'scene' | 'tokens';
+  dockTab: 'scene' | 'tokens' | 'init';
   drawTool: DrawTool;
   tplKind: TemplateKind;
   drawColor: string;

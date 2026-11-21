@@ -1,6 +1,8 @@
 import type {
-  Aura, Drawing, FogOp, GridSettings, LibraryItem, LivePlot, Permissions, Player, SceneMeta, TableMeta, TableSettings, Token, Vec,
+  Aura, Drawing, FogOp, GridSettings, HpShow, InitEntry, InitPub, InitState, LibraryItem, LivePlot, Permissions, Player, SceneMeta, TableMeta,
+  TableSettings, Token, Vec,
 } from '../types';
+import { cleanHp, emptyInit, orderOf } from './combat';
 
 export const DEFAULT_GRID: GridSettings = {
   cell: 70, ox: 0, oy: 0, visible: true, color: '#000000', opacity: 0.35,
@@ -60,6 +62,8 @@ export function normalizeSceneMeta(raw: any): SceneMeta {
     fog: {
       enabled: bool(m.fog?.enabled, false),
       base: m.fog?.base === 'clear' ? 'clear' : 'hidden',
+      vision: bool(m.fog?.vision, false),
+      explore: bool(m.fog?.explore, false),
     },
     createdAt: num(m.createdAt, 0),
   };
@@ -82,12 +86,26 @@ export function normalizeToken(id: string, raw: any, hidden: boolean): Token {
     imgY: num(t.imgY, 0),
     imgBg: typeof t.imgBg === 'string' ? t.imgBg : null,
     auras: normalizeAuras(t.auras),
+    ...cleanHpFields(t),
+    hpShow: hpShowOf(t.hpShow, typeof t.ownerUid === 'string'),
+    hpPct: typeof t.hpPct === 'number' && Number.isFinite(t.hpPct) ? Math.min(100, Math.max(0, Math.round(t.hpPct))) : null,
+    sight: Math.min(1000, Math.max(0, num(t.sight, 0))),
     ownerUid: typeof t.ownerUid === 'string' ? t.ownerUid : null,
     hidden,
     locked: bool(t.locked, false),
     z: num(t.z, 0),
     label: t.label === 'dm' || t.label === 'none' ? t.label : 'all',
   };
+}
+
+function cleanHpFields(t: any): { hp: number | null; maxHp: number | null } {
+  const c = cleanHp(typeof t.hp === 'number' ? t.hp : null, typeof t.maxHp === 'number' ? t.maxHp : null);
+  return { hp: c.hp, maxHp: c.max };
+}
+
+/** Players see a bar for tokens that belong to someone (the party), only the coloured state for everything else. */
+function hpShowOf(v: unknown, owned: boolean): HpShow {
+  return v === 'off' || v === 'state' || v === 'bar' ? v : owned ? 'bar' : 'state';
 }
 
 export function normalizeAuras(raw: any): Aura[] {
@@ -146,8 +164,63 @@ export function normalizeLive(uid: string, raw: any): LivePlot | null {
 
 /** Serialise a token for the database. `hidden` is implied by which subtree it lives in. */
 export function tokenToWire(t: Token): Record<string, unknown> {
-  const { id: _id, hidden: _hidden, ...rest } = t;
-  return stripUndefined({ ...rest, img: t.img ?? undefined, imgBg: t.imgBg ?? undefined, ownerUid: t.ownerUid ?? undefined, auras: t.auras.length ? t.auras : undefined });
+  // hp and maxHp are deliberately left out: they live in the DM-only part of the database
+  const { id: _id, hidden: _hidden, hp: _hp, maxHp: _maxHp, ...rest } = t;
+  return stripUndefined({
+    ...rest,
+    img: t.img ?? undefined,
+    imgBg: t.imgBg ?? undefined,
+    ownerUid: t.ownerUid ?? undefined,
+    auras: t.auras.length ? t.auras : undefined,
+    hpPct: t.hpPct ?? undefined,
+    sight: t.sight > 0 ? t.sight : undefined,
+  });
+}
+
+// ---------------------------------------------------------------- initiative
+function initEntries(raw: any): InitEntry[] {
+  if (!raw || typeof raw !== 'object') return [];
+  const out: InitEntry[] = [];
+  for (const [id, v] of Object.entries(raw as Record<string, any>)) {
+    if (!v || typeof v !== 'object') continue;
+    out.push({
+      id,
+      tk: typeof v.tk === 'string' ? v.tk : null,
+      n: str(v.n, '').slice(0, 60),
+      i: num(v.i, 0),
+      h: bool(v.h, false),
+      o: num(v.o, 0),
+    });
+  }
+  return orderOf(out);
+}
+
+export function normalizeInit(raw: any): InitState {
+  if (!raw || typeof raw !== 'object') return emptyInit();
+  const entries = initEntries(raw.entries);
+  const turn = typeof raw.turn === 'string' && entries.some((e) => e.id === raw.turn) ? raw.turn : null;
+  return { round: Math.max(0, Math.round(num(raw.round, 0))), turn, shown: bool(raw.shown, false), entries };
+}
+
+export function initToWire(s: InitState): Record<string, unknown> | null {
+  if (!s.entries.length && !s.round) return null;
+  const entries: Record<string, unknown> = {};
+  for (const e of s.entries) entries[e.id] = stripUndefined({ tk: e.tk ?? undefined, n: e.n || undefined, i: e.i, h: e.h || undefined, o: e.o });
+  return stripUndefined({ round: s.round, turn: s.turn ?? undefined, shown: s.shown || undefined, entries: s.entries.length ? entries : undefined });
+}
+
+export function normalizeInitPub(raw: any): InitPub | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const entries = initEntries(raw.entries).map((e) => ({ id: e.id, tk: e.tk, n: e.n, i: e.i, o: e.o }));
+  if (!entries.length) return null;
+  return { round: Math.max(0, Math.round(num(raw.round, 0))), turn: typeof raw.turn === 'string' ? raw.turn : null, entries };
+}
+
+export function initPubToWire(p: InitPub | null): Record<string, unknown> | null {
+  if (!p) return null;
+  const entries: Record<string, unknown> = {};
+  for (const e of p.entries) entries[e.id] = stripUndefined({ tk: e.tk ?? undefined, n: e.n || undefined, i: e.i, o: e.o });
+  return stripUndefined({ round: p.round, turn: p.turn ?? undefined, entries });
 }
 
 export function normalizeFogOp(raw: any): FogOp | null {

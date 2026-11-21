@@ -309,3 +309,33 @@ describe('security rules: drawings and live plotting', () => {
     expect(can(db, p1, 'write', `${T}/scenes/S2/live/p1`, { ruler: { ax: 0, ay: 0, bx: 5, by: 5 } })).toBe(false);
   });
 });
+
+describe('security rules: initiative and hit points', () => {
+  const db: any = makeDb();
+  db.tables.T1.dm.scenes.S1.init = { round: 1, entries: { a: { i: 12, o: 1, h: true } } };
+  db.tables.T1.dm.scenes.S1.hp = { mine: { hp: 5, max: 9 } };
+  db.tables.T1.scenes.S1.initPub = { round: 1, entries: { b: { i: 9, o: 1 } } };
+  it('players cannot read the DM\'s order or any hit points', () => {
+    expect(can(db, p1, 'read', `${T}/dm/scenes/S1/init`)).toBe(false);
+    expect(can(db, p1, 'read', `${T}/dm/scenes/S1/hp`)).toBe(false);
+    expect(can(db, p1, 'read', `${T}/dm/scenes/S1/hp/mine`)).toBe(false);
+    expect(can(db, dm, 'read', `${T}/dm/scenes/S1/init`)).toBe(true);
+    expect(can(db, dm, 'read', `${T}/dm/scenes/S1/hp`)).toBe(true);
+  });
+  it('players can read the revealed order but never change it', () => {
+    expect(can(db, p1, 'read', `${T}/scenes/S1/initPub`)).toBe(true);
+    expect(can(db, p1, 'write', `${T}/scenes/S1/initPub`, { round: 9, entries: { x: { i: 99, o: 1 } } })).toBe(false);
+    expect(can(db, p1, 'write', `${T}/scenes/S1/initPub/entries/b/i`, 99)).toBe(false);
+    expect(can(db, dm, 'write', `${T}/scenes/S1/initPub`, { round: 2, entries: { x: { i: 5, o: 1 } } })).toBe(true);
+  });
+  it('players cannot write hit points or the DM\'s order', () => {
+    expect(can(db, p1, 'write', `${T}/dm/scenes/S1/hp/mine`, { hp: 99, max: 99 })).toBe(false);
+    expect(can(db, p1, 'write', `${T}/dm/scenes/S1/init`, null)).toBe(false);
+    expect(can(db, dm, 'write', `${T}/dm/scenes/S1/hp/mine`, { hp: 1, max: 9 })).toBe(true);
+  });
+  it('the revealed order of a scene that is not live is unreadable to players', () => {
+    const other: any = makeDb();
+    other.tables.T1.scenes.S2.initPub = { round: 1, entries: { b: { i: 9, o: 1 } } };
+    expect(can(other, p1, 'read', `${T}/scenes/S2/initPub`)).toBe(false);
+  });
+});

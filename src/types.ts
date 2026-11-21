@@ -38,6 +38,10 @@ export interface FogSettings {
   enabled: boolean;
   /** state before any fog operations are applied */
   base: 'hidden' | 'clear';
+  /** tokens with a sight distance clear the fog around themselves while they stand there */
+  vision: boolean;
+  /** the DM's browser keeps the ground those tokens have seen revealed */
+  explore: boolean;
 }
 
 export interface SceneMeta {
@@ -58,6 +62,9 @@ export interface SceneMeta {
 
 export type TokenShape = 'circle' | 'square' | 'none';
 export type LabelMode = 'all' | 'dm' | 'none';
+/** off = players see nothing, state = bloodied / near death colouring, bar = a bar as well (never the numbers) */
+export type HpShow = 'off' | 'state' | 'bar';
+export type HealthState = 'ok' | 'bloodied' | 'mortal' | 'down';
 
 export interface Token {
   id: string;
@@ -80,6 +87,15 @@ export interface Token {
   imgBg: string | null;
   /** coloured areas around the token: auras and emanations */
   auras: Aura[];
+  /** hit points. Only the DM ever receives these (they live in the DM-only part of the database). */
+  hp: number | null;
+  maxHp: number | null;
+  /** what players get to see of this token's health */
+  hpShow: HpShow;
+  /** health as a whole percentage, for players. Written only when `hpShow` is not 'off'. */
+  hpPct: number | null;
+  /** how far this token can see, in feet (0 = it does not clear fog by itself) */
+  sight: number;
   ownerUid: string | null;
   /** DM-only token (stored in the DM-only subtree, invisible to players) */
   hidden: boolean;
@@ -133,6 +149,36 @@ export interface LivePlot {
   ruler: { a: Vec; b: Vec } | null;
   /** token id -> where they are trying that token out */
   ghosts: Record<string, Vec>;
+}
+
+/** One line of the initiative order. */
+export interface InitEntry {
+  id: string;
+  /** the token it stands for (null for things like lair actions) */
+  tk: string | null;
+  n: string;
+  /** the initiative number */
+  i: number;
+  /** kept secret from players */
+  h: boolean;
+  /** position in the order (smaller goes first) */
+  o: number;
+}
+/** The DM's full initiative state. */
+export interface InitState {
+  round: number;
+  /** entry whose turn it is */
+  turn: string | null;
+  /** players can see the order */
+  shown: boolean;
+  /** in turn order */
+  entries: InitEntry[];
+}
+/** What players are shown once the DM reveals the order: no hidden entries. */
+export interface InitPub {
+  round: number;
+  turn: string | null;
+  entries: { id: string; tk: string | null; n: string; i: number; o: number }[];
 }
 
 export type FogMode = 'r' | 'h'; // reveal | hide

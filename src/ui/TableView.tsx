@@ -10,6 +10,7 @@ import { Toasts, copyText, toast, useClient, useTheme, useUi } from './common';
 import { AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewSceneModal, PlayersModal, ScenesModal, SettingsModal } from './modals';
 import { DrawFlyout, RulerFlyout, TemplateFlyout, TestMoveBar, TextBox } from './drawTools';
 import { Dock, TokenTag } from './panels';
+import { InitRollModal, InitStrip } from './initiative';
 import { TokenEditorModal } from './tokenEditor';
 
 type ModalState =
@@ -22,6 +23,7 @@ type ModalState =
   | { kind: 'claim' }
   | { kind: 'players' }
   | { kind: 'editToken'; ids: string[] }
+  | { kind: 'initRoll' }
   | { kind: 'grid'; rect: Rect; derived: { cell: number; ox: number; oy: number } };
 
 const Icon = (props: { d: string; size?: number }) => (
@@ -279,8 +281,9 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
 
       {/* ---------------- right dock (DM) */}
       {client.isDM && (d.dockOpen
-        ? <Dock client={client} ui={ui} board={board} onNewScene={() => setModal({ kind: 'newScene' })} onEdit={(ids) => setModal({ kind: 'editToken', ids })} />
+        ? <Dock client={client} ui={ui} board={board} onNewScene={() => setModal({ kind: 'newScene' })} onEdit={(ids) => setModal({ kind: 'editToken', ids })} onRoll={() => setModal({ kind: 'initRoll' })} />
         : <button class="dock-tab" onClick={() => ui.set({ dockOpen: true })}>Scene panel</button>)}
+      <InitStrip client={client} ui={ui} board={board} />
       {mySel && <TokenTag client={client} ui={ui} onEdit={(ids) => setModal({ kind: 'editToken', ids })} />}
 
       {/* ---------------- overlays */}
@@ -322,6 +325,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {modal?.kind === 'library' && <LibraryModal client={client} onClose={() => setModal(null)} onUseMap={useLibraryMap} onAddToken={addLibraryToken} />}
       {modal?.kind === 'settings' && <SettingsModal client={client} onClose={() => setModal(null)} onSignOut={client.isDM ? props.onSignOut : undefined} />}
       {modal?.kind === 'players' && <PlayersModal client={client} onClose={() => setModal(null)} />}
+      {modal?.kind === 'initRoll' && <InitRollModal client={client} onClose={() => setModal(null)} />}
       {modal?.kind === 'editToken' && <TokenEditorModal client={client} ids={modal.ids} onClose={() => setModal(null)} />}
       {modal?.kind === 'claim' && <ClaimModal client={client} onClose={() => setModal(null)} onNewToken={() => openAddToken()} />}
       {modal?.kind === 'grid' && (

@@ -27,11 +27,15 @@ export const P = {
   sceneDraw: (tid: string, sid: string) => `tables/${tid}/scenes/${sid}/draw`,
   sceneDrawing: (tid: string, sid: string, id: string) => `tables/${tid}/scenes/${sid}/draw/${id}`,
   sceneLive: (tid: string, sid: string) => `tables/${tid}/scenes/${sid}/live`,
+  sceneInitPub: (tid: string, sid: string) => `tables/${tid}/scenes/${sid}/initPub`,
   sceneLiveOf: (tid: string, sid: string, uid: string) => `tables/${tid}/scenes/${sid}/live/${uid}`,
 
   // DM-only data (sibling of `scenes`, because database read rules cascade downwards).
   dmScene: (tid: string, sid: string) => `tables/${tid}/dm/scenes/${sid}`,
   dmSceneTokens: (tid: string, sid: string) => `tables/${tid}/dm/scenes/${sid}/tokens`,
   dmSceneToken: (tid: string, sid: string, id: string) => `tables/${tid}/dm/scenes/${sid}/tokens/${id}`,
+  dmSceneInit: (tid: string, sid: string) => `tables/${tid}/dm/scenes/${sid}/init`,
+  dmSceneHp: (tid: string, sid: string) => `tables/${tid}/dm/scenes/${sid}/hp`,
+  dmSceneHpOf: (tid: string, sid: string, id: string) => `tables/${tid}/dm/scenes/${sid}/hp/${id}`,
   sceneIndex: (tid: string) => `tables/${tid}/dm/sceneIndex`,
 };

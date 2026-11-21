@@ -1,16 +1,20 @@
 import type { Backend, Unsub } from '../backend/types';
 import { SERVER_TS } from '../backend/types';
 import {
-  drawingToWire, normalizeDrawing, normalizeFogOp, normalizeLive, normalizeMeta, normalizePlayer, normalizeSceneMeta,
-  normalizeSettings, normalizeToken, stripUndefined, tokenToWire, DEFAULT_GRID, DM_COLOR,
+  drawingToWire, initPubToWire, initToWire, normalizeDrawing, normalizeFogOp, normalizeInit, normalizeInitPub, normalizeLive, normalizeMeta,
+  normalizePlayer, normalizeSceneMeta, normalizeSettings, normalizeToken, stripUndefined, tokenToWire, DEFAULT_GRID, DM_COLOR,
 } from '../core/model';
+import {
+  cleanHp, EXPLORE_MIN_CELLS, EXPLORE_PATH_CELLS, emptyInit, moveEntry, nextTurn, orderOf, pctOf, prevTurn, sightRadiusPx, sortByInit, toPub,
+} from '../core/combat';
+import { lineOp } from '../core/fog';
 import { can, detectPreset, PRESETS, type Action } from '../core/permissions';
 import { mapRect, snapTokenCenter } from '../core/geometry';
 import { movedPoints } from '../core/draw';
 import { throttle } from '../core/throttle';
 import type {
-  Drawing, FogOp, LivePlot, GridSettings, Permissions, PermPreset, Ping, Player, Role, SceneIndexEntry, SceneMeta,
-  TableMeta, TableSettings, Token, Vec,
+  Drawing, FogOp, InitEntry, InitPub, InitState, LivePlot, GridSettings, Permissions, PermPreset, Ping, Player, Role, SceneIndexEntry,
+  SceneMeta, TableMeta, TableSettings, Token, Vec,
 } from '../types';
 import { History } from './history';
 import { P } from './paths';
@@ -28,6 +32,13 @@ export interface SceneState {
   /** what other people are plotting right now */
   live: Map<string, LivePlot>;
   liveRev: number;
+  /** the DM's full initiative order (DM only) */
+  init: InitState;
+  /** the order as players may see it (null until the DM reveals it) */
+  initPub: InitPub | null;
+  initRev: number;
+  /** hit points, from the DM-only part of the database (DM only) */
+  hpDm: Map<string, { hp: number; max: number }>;
   metaRev: number;
 }
 
@@ -197,8 +208,11 @@ export class TableClient {
 
     const s: SceneState = {
       id: sid, loaded: false, meta: null, tokens: new Map(), tokensRev: 0,
-      fogOps: new Map(), fogRev: 0, draws: new Map(), drawRev: 0, live: new Map(), liveRev: 0, metaRev: 0,
+      fogOps: new Map(), fogRev: 0, draws: new Map(), drawRev: 0, live: new Map(), liveRev: 0,
+      init: emptyInit(), initPub: null, initRev: 0, hpDm: new Map(), metaRev: 0,
     };
+    this.explored.clear();
+    this.mirrorSig = null;
     this.scene = s;
     const b = this.backend;
     const tid = this.tableId;
@@ -210,22 +224,46 @@ export class TableClient {
       s.meta = v ? normalizeSceneMeta(v) : null;
       s.loaded = true;
       s.metaRev++;
+      this.tokensChanged(); // switching "remember explored ground" on reveals where the tokens stand right away
       this.bump();
     }, sceneFail('scene')));
 
     const tokenHandlers = (hidden: boolean) => ({
-      added: (k: string, v: any) => { if (live()) { s.tokens.set(k, normalizeToken(k, v, hidden)); s.tokensRev++; this.bump(); } },
-      changed: (k: string, v: any) => { if (live()) { s.tokens.set(k, normalizeToken(k, v, hidden)); s.tokensRev++; this.bump(); } },
+      added: (k: string, v: any) => { if (live()) { s.tokens.set(k, this.withHp(s, normalizeToken(k, v, hidden))); s.tokensRev++; this.tokensChanged(); this.bump(); } },
+      changed: (k: string, v: any) => { if (live()) { s.tokens.set(k, this.withHp(s, normalizeToken(k, v, hidden))); s.tokensRev++; this.tokensChanged(); this.bump(); } },
       removed: (k: string) => {
         if (!live()) return;
         const cur = s.tokens.get(k);
         // ignore the "removed" half of a reveal/hide move, which arrives after the new copy was added
-        if (cur && cur.hidden === hidden) { s.tokens.delete(k); s.tokensRev++; this.bump(); }
+        if (cur && cur.hidden === hidden) { s.tokens.delete(k); s.tokensRev++; this.tokensChanged(); this.bump(); }
       },
     });
     this.sceneUnsubs.push(b.listenChildren(P.sceneTokens(tid, sid), tokenHandlers(false), sceneFail('tokens')));
     if (this.role === 'dm') {
       this.sceneUnsubs.push(b.listenChildren(P.dmSceneTokens(tid, sid), tokenHandlers(true), sceneFail('hidden tokens')));
+      const hpSet = (k: string, v: any) => {
+        if (!live()) return;
+        const c = cleanHp(typeof v?.hp === 'number' ? v.hp : null, typeof v?.max === 'number' ? v.max : null);
+        if (c.hp == null || c.max == null) s.hpDm.delete(k); else s.hpDm.set(k, { hp: c.hp, max: c.max });
+        const t = s.tokens.get(k);
+        if (t) s.tokens.set(k, this.withHp(s, t));
+        s.tokensRev++; this.bump();
+      };
+      this.sceneUnsubs.push(b.listenChildren(P.dmSceneHp(tid, sid), {
+        added: hpSet, changed: hpSet,
+        removed: (k) => hpSet(k, null),
+      }, sceneFail('hit points')));
+      this.sceneUnsubs.push(b.listen(P.dmSceneInit(tid, sid), (v) => {
+        if (!live()) return;
+        s.init = normalizeInit(v);
+        s.initRev++; this.bump();
+      }, sceneFail('initiative')));
+    } else {
+      this.sceneUnsubs.push(b.listen(P.sceneInitPub(tid, sid), (v) => {
+        if (!live()) return;
+        s.initPub = normalizeInitPub(v);
+        s.initRev++; this.bump();
+      }, sceneFail('initiative')));
     }
 
     const fogSet = (k: string, v: any) => {
@@ -309,6 +347,13 @@ export class TableClient {
   }
 
   // ---------------------------------------------------------------- tokens
+  private hpPath(id: string) { return P.dmSceneHpOf(this.tableId, this.viewSceneId!, id); }
+  /** Overlay the DM-only hit points on a token read from the public part of the database. */
+  private withHp(s: SceneState, t: Token): Token {
+    const h = s.hpDm.get(t.id);
+    return h ? { ...t, hp: h.hp, maxHp: h.max } : { ...t, hp: null, maxHp: null };
+  }
+
   async addToken(partial: Partial<Token> & { x: number; y: number }, opts: { record?: boolean } = {}): Promise<string> {
     const sid = this.viewSceneId;
     if (!sid) throw new Error('No scene is open');
@@ -316,8 +361,11 @@ export class TableClient {
     const z = Math.max(0, ...[...(this.scene?.tokens.values() ?? [])].map((t) => t.z)) + 1;
     const hidden = this.isDM && !!partial.hidden;
     const token = normalizeToken(id, { ...partial, z }, hidden);
-    if (!this.isDM) token.ownerUid = this.uid; // players may only create tokens they own
-    await this.backend.set(this.tokenPath(token), tokenToWire(token));
+    if (!this.isDM) { token.ownerUid = this.uid; token.hp = token.maxHp = null; } // players may only create tokens they own, and never set hit points
+    token.hpPct = token.hp != null && token.hpShow !== 'off' ? pctOf(token.hp, token.maxHp) : null;
+    const updates: Record<string, any> = { [this.tokenPath(token)]: tokenToWire(token) };
+    if (token.hp != null && token.maxHp != null) updates[this.hpPath(id)] = { hp: token.hp, max: token.maxHp };
+    await this.backend.update(updates);
     if (opts.record !== false) this.recordCreated([token], 'Add token');
     return id;
   }
@@ -325,12 +373,18 @@ export class TableClient {
   /** Write tokens back exactly as they were (used by undo and by paste). */
   async restoreTokens(tokens: Token[]): Promise<void> {
     const updates: Record<string, any> = {};
-    for (const t of tokens) updates[this.tokenPath(t)] = tokenToWire(t);
+    for (const t of tokens) {
+      updates[this.tokenPath(t)] = tokenToWire(t);
+      if (this.isDM && t.hp != null && t.maxHp != null) updates[this.hpPath(t.id)] = { hp: t.hp, max: t.maxHp };
+    }
     if (Object.keys(updates).length) await this.backend.update(updates);
   }
   private async deleteTokensRaw(tokens: Pick<Token, 'id' | 'hidden'>[]): Promise<void> {
     const updates: Record<string, any> = {};
-    for (const t of tokens) updates[this.tokenPath(t)] = null;
+    for (const t of tokens) {
+      updates[this.tokenPath(t)] = null;
+      if (this.isDM) updates[this.hpPath(t.id)] = null;
+    }
     if (Object.keys(updates).length) await this.backend.update(updates);
   }
   private recordCreated(tokens: Token[], label: string) {
@@ -357,8 +411,16 @@ export class TableClient {
     const base = this.tokenPath(cur);
     const updates: Record<string, any> = {};
     for (const [k, v] of Object.entries(patch)) {
-      if (k === 'id' || k === 'hidden') continue;
+      if (k === 'id' || k === 'hidden' || k === 'hp' || k === 'maxHp' || k === 'hpPct') continue;
       updates[`${base}/${k}`] = v === undefined ? null : v;
+    }
+    // hit points live in the DM-only part of the database; players only ever see a percentage
+    if (this.isDM && ('hp' in patch || 'maxHp' in patch || 'hpShow' in patch)) {
+      const c = cleanHp('hp' in patch ? patch.hp : cur.hp, 'maxHp' in patch ? patch.maxHp : cur.maxHp);
+      if ('hp' in patch || 'maxHp' in patch) updates[this.hpPath(cur.id)] = c.hp == null || c.max == null ? null : { hp: c.hp, max: c.max };
+      const show = patch.hpShow ?? cur.hpShow;
+      const pct = show === 'off' ? null : pctOf(c.hp, c.max);
+      updates[`${base}/hpPct`] = pct;
     }
     if (Object.keys(updates).length) await this.backend.update(updates);
   }
@@ -592,11 +654,184 @@ export class TableClient {
   /** Forget what we shared (leaving a scene). */
   private clearLive() {
     this.pushLive.cancel();
+    if (this.exploreTimer) { clearTimeout(this.exploreTimer); this.exploreTimer = null; }
+    if (this.mirrorTimer) { clearTimeout(this.mirrorTimer); this.mirrorTimer = null; }
     const sid = this.liveSid;
     this.liveMine = { ruler: null, ghosts: {} };
     this.liveSid = null;
     this.liveArmed = false;
     if (sid && this.started) void this.backend.remove(P.sceneLiveOf(this.tableId, sid, this.uid)).catch(() => undefined);
+  }
+
+  // ---------------------------------------------------------------- hit points (DM)
+  /** Take hit points off (or, with a negative number, give them back). One undo step. */
+  async damage(ids: string[], amount: number): Promise<void> {
+    if (!this.isDM || !Number.isFinite(amount) || amount === 0) return;
+    const before: { id: string; hp: number | null }[] = [];
+    const after: { id: string; hp: number }[] = [];
+    for (const id of ids) {
+      const t = this.scene?.tokens.get(id);
+      if (!t || t.hp == null || t.maxHp == null) continue;
+      before.push({ id, hp: t.hp });
+      after.push({ id, hp: Math.min(t.maxHp, Math.max(0, t.hp - Math.round(amount))) });
+    }
+    if (!after.length) return;
+    const apply = (list: { id: string; hp: number | null }[]) => Promise.all(list.map((x) => this.updateToken(x.id, { hp: x.hp }))).then(() => undefined);
+    await apply(after);
+    this.history.push({
+      label: amount > 0 ? 'Damage' : 'Healing', // no coalescing key: every hit is its own undo step
+      undo: () => apply(before),
+      redo: () => apply(after),
+    });
+  }
+
+  // ---------------------------------------------------------------- initiative (DM)
+  private mirrorSig: string | null = null;
+  private mirrorTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Write the DM's order, and what players may see of it, in one go. */
+  private async saveInit(next: InitState): Promise<void> {
+    const sid = this.viewSceneId;
+    if (!sid || !this.isDM) return;
+    // keep the stored names in step with the tokens they stand for
+    const tokens = this.scene?.tokens ?? new Map<string, Token>();
+    const entries = next.entries.map((e) => ({ ...e, n: (e.tk && tokens.get(e.tk)?.name) || e.n }));
+    const state: InitState = { ...next, entries };
+    const pub = initPubToWire(toPub(state, tokens));
+    this.mirrorSig = JSON.stringify(pub);
+    await this.backend.update({
+      [P.dmSceneInit(this.tableId, sid)]: initToWire(state),
+      [P.sceneInitPub(this.tableId, sid)]: pub,
+    });
+  }
+
+  /** Token renamed, hidden or revealed: players' copy of the order may need to follow. */
+  private syncInitMirror() {
+    const s = this.scene;
+    if (!this.isDM || !s || !this.viewSceneId || !s.init.shown) return;
+    if (this.mirrorTimer) clearTimeout(this.mirrorTimer);
+    this.mirrorTimer = setTimeout(() => {
+      this.mirrorTimer = null;
+      const sc = this.scene;
+      if (!sc || !this.viewSceneId || !sc.init.shown) return;
+      const pub = initPubToWire(toPub(sc.init, sc.tokens));
+      const sig = JSON.stringify(pub);
+      if (sig === this.mirrorSig) return;
+      this.mirrorSig = sig;
+      void this.backend.set(P.sceneInitPub(this.tableId, this.viewSceneId), pub).catch(() => undefined);
+    }, 120);
+  }
+
+  /** Set (or change) initiative numbers for several tokens at once, then sort. Blank rows are left alone. */
+  async initApply(rows: { tk: string | null; n: string; i: number; h?: boolean }[]): Promise<void> {
+    const s = this.scene;
+    if (!s || !this.isDM) return;
+    let entries = [...s.init.entries];
+    let seq = entries.length;
+    for (const r of rows) {
+      if (!Number.isFinite(r.i)) continue;
+      const cur = r.tk ? entries.find((e) => e.tk === r.tk) : undefined;
+      if (cur) entries = entries.map((e) => (e === cur ? { ...e, i: r.i, n: r.n || e.n } : e));
+      else entries.push({ id: this.backend.newKey(), tk: r.tk, n: r.n, i: r.i, h: !!r.h, o: (++seq + 1000) * 1000 });
+    }
+    entries = sortByInit(entries);
+    const turn = s.init.turn && entries.some((e) => e.id === s.init.turn) ? s.init.turn : entries[0]?.id ?? null;
+    await this.saveInit({ ...s.init, entries, turn, round: entries.length ? Math.max(1, s.init.round) : 0 });
+  }
+
+  async initAddFree(name: string, i: number): Promise<void> {
+    await this.initApply([{ tk: null, n: name.trim() || 'Something', i }]);
+  }
+
+  /** Change one line: its number (re-sorts), name, or whether players may see it. */
+  async initEdit(id: string, patch: Partial<Pick<InitEntry, 'i' | 'h' | 'n'>>): Promise<void> {
+    const s = this.scene;
+    if (!s || !this.isDM) return;
+    let entries = s.init.entries.map((e) => (e.id === id ? { ...e, ...patch } : e));
+    if (patch.i !== undefined && Number.isFinite(patch.i)) entries = sortByInit(entries);
+    await this.saveInit({ ...s.init, entries });
+  }
+
+  async initRemove(id: string): Promise<void> {
+    const s = this.scene;
+    if (!s || !this.isDM) return;
+    const order = orderOf(s.init.entries);
+    const idx = order.findIndex((e) => e.id === id);
+    const entries = order.filter((e) => e.id !== id);
+    let turn = s.init.turn;
+    if (turn === id) turn = entries.length ? entries[Math.min(idx, entries.length - 1)].id : null;
+    await this.saveInit({ ...s.init, entries, turn, round: entries.length ? s.init.round : 0 });
+  }
+
+  /** Drag and drop: put `id` just before `beforeId` (null = last). */
+  async initMove(id: string, beforeId: string | null): Promise<void> {
+    const s = this.scene;
+    if (!s || !this.isDM) return;
+    await this.saveInit({ ...s.init, entries: moveEntry(s.init.entries, id, beforeId) });
+  }
+
+  async initSort(): Promise<void> {
+    const s = this.scene;
+    if (!s || !this.isDM) return;
+    await this.saveInit({ ...s.init, entries: sortByInit(s.init.entries) });
+  }
+
+  async initStep(dir: 1 | -1): Promise<void> {
+    const s = this.scene;
+    if (!s || !this.isDM || !s.init.entries.length) return;
+    const r = dir === 1 ? nextTurn(s.init) : prevTurn(s.init);
+    await this.saveInit({ ...s.init, turn: r.turn, round: r.round });
+  }
+
+  /** Let players see the order (hidden lines stay hidden), or hide it from them again. */
+  async initShow(shown: boolean): Promise<void> {
+    const s = this.scene;
+    if (!s || !this.isDM) return;
+    await this.saveInit({ ...s.init, shown });
+  }
+
+  /** Clear the whole order (end of combat). */
+  async initEnd(): Promise<void> {
+    if (!this.isDM || !this.scene) return;
+    await this.saveInit(emptyInit());
+  }
+
+  // ---------------------------------------------------------------- explored ground (DM)
+  private explored = new Map<string, Vec>();
+  private exploreTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Called whenever tokens change. Does the DM-only chores that follow from them. */
+  private tokensChanged() {
+    if (!this.isDM) return;
+    this.syncInitMirror();
+    const m = this.scene?.meta;
+    if (!m?.fog.enabled || !m.fog.vision || !m.fog.explore) return;
+    if (this.exploreTimer) clearTimeout(this.exploreTimer);
+    this.exploreTimer = setTimeout(() => { this.exploreTimer = null; void this.exploreNow(); }, 500);
+  }
+
+  /** Reveal the ground that tokens with sight have seen: a circle where they stand, joined to the last place by a path for short moves. */
+  async exploreNow(): Promise<number> {
+    const s = this.scene;
+    const m = s?.meta;
+    if (!this.isDM || !s || !m || !m.fog.enabled || !m.fog.vision || !m.fog.explore) return 0;
+    const g = m.grid;
+    const sid = s.id;
+    const updates: Record<string, FogOp> = {};
+    let count = 0;
+    for (const t of s.tokens.values()) {
+      const r = sightRadiusPx(t, g);
+      if (r <= 0 || t.hidden) continue;
+      const last = this.explored.get(t.id);
+      const here = { x: t.x, y: t.y };
+      if (last && Math.hypot(here.x - last.x, here.y - last.y) < EXPLORE_MIN_CELLS * g.cell) continue;
+      const pts = last && Math.hypot(here.x - last.x, here.y - last.y) <= EXPLORE_PATH_CELLS * g.cell ? [last, here] : [here];
+      updates[`${P.sceneFog(this.tableId, sid)}/${this.backend.newKey()}`] = lineOp('r', pts, r * 2);
+      this.explored.set(t.id, here);
+      count++;
+    }
+    if (count && this.scene === s) await this.backend.update(updates);
+    return count;
   }
 
   // ---------------------------------------------------------------- pings

@@ -4,11 +4,12 @@ import {
 } from '../core/geometry';
 import { dashSegments, fitPenPoints, hitDrawing, isTemplate, joinPts, snapTemplate, templateLabel } from '../core/draw';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
+import { pctOf, toPub, visionCircles } from '../core/combat';
 import type { TableClient } from '../state/client';
 import type { StrokeSize, UiState } from '../state/ui';
 import type { DrawKind, Drawing, Ping, Rect, Token, Vec } from '../types';
 import { throttle } from '../core/throttle';
-import { TokenView } from './TokenView';
+import { TokenView, type TokenCtx } from './TokenView';
 import { DrawLayer, paintShape } from './DrawLayer';
 import { canvasTexture, loadTexture, releaseTexture, setTextureFailHandler, type LoadedTexture } from './textures';
 import { diagnoseImage } from '../core/images';
@@ -93,6 +94,10 @@ export class Board {
   private fogMask = new FogMask();
   private fogSprite: Sprite | null = null;
   private fogTexSize = '';
+  /** circles around tokens that can see, cut out of the fog */
+  private visionG = new Graphics();
+  private visionMasked = false;
+  private seenInitRev = -1;
 
   private drag: Drag | null = null;
   private polyPts: Vec[] = [];
@@ -263,6 +268,7 @@ export class Board {
     if (!this.dirty) return;
     this.dirty = false;
     if (this.gridDirty) { this.drawGrid(); this.gridDirty = false; }
+    this.drawVision();
     this.drawAuras();
     this.drawOverlay();
     this.app.render();
@@ -309,6 +315,7 @@ export class Board {
       if (stale.length) this.ui.selectDrawings([...this.ui.data.drawSel].filter((id) => scene.draws.has(id)));
       this.dirty = true;
     }
+    if (scene.initRev !== this.seenInitRev) { this.seenInitRev = scene.initRev; this.dirty = true; }
     if (scene.liveRev !== this.seenLiveRev) {
       this.seenLiveRev = scene.liveRev;
       this.ghostsDirty = true;
@@ -335,7 +342,7 @@ export class Board {
     if (this.mapUrl) { releaseTexture(this.mapUrl, 'map'); this.mapUrl = null; }
     this.mapTex = null;
     this.cb.onMapError(null);
-    this.seenMetaRev = this.seenTokensRev = this.seenFogRev = this.seenDrawRev = this.seenLiveRev = -1;
+    this.seenMetaRev = this.seenTokensRev = this.seenFogRev = this.seenDrawRev = this.seenLiveRev = this.seenInitRev = -1;
     this.seenGridKey = '';
     if (this.fogSprite) this.fogSprite.visible = false;
     const saved = scene ? this.cams.get(scene.id) : undefined;
@@ -406,13 +413,24 @@ export class Board {
   }
 
   // ------------------------------------------------------------------ tokens
-  private tokenCtx(t: Token) {
+  private tokenCtx(t: Token): TokenCtx {
     const c = this.client;
     return {
       grid: c.grid,
       showLabel: t.label !== 'dm' || (c.isDM && !this.ui.data.dmPreview),
       textRes: this.textRes,
+      health: this.healthFor(t),
     };
+  }
+
+  /** The DM sees real health for every token that has some; everyone else sees only what the DM allows. */
+  private healthFor(t: Token): TokenCtx['health'] {
+    if (this.client.isDM && !this.ui.data.dmPreview) {
+      const pct = pctOf(t.hp, t.maxHp);
+      return pct == null ? null : { pct, bar: true };
+    }
+    if (t.hpShow === 'off' || t.hpPct == null) return null;
+    return { pct: t.hpPct, bar: t.hpShow === 'bar' };
   }
 
   private visibleToViewer(t: Token) { return !t.hidden || (this.client.isDM && !this.ui.data.dmPreview); }
@@ -479,7 +497,7 @@ export class Board {
       }
     }
     for (const [key, w] of want) {
-      const ctx = { ...this.tokenCtx(w.token), showLabel: false };
+      const ctx = { ...this.tokenCtx(w.token), showLabel: false, health: null };
       let v = this.ghostViews.get(key);
       const fresh = !v;
       if (!v) {
@@ -495,6 +513,44 @@ export class Board {
     for (const [key, v] of this.ghostViews) {
       if (!want.has(key)) { v.destroy(); this.ghostViews.delete(key); }
     }
+  }
+
+  // ------------------------------------------------------------------ vision (fog around tokens that can see)
+  /** Tokens that clear fog: visible ones with a sight distance. Hidden tokens never do, and a test move does not peek ahead. */
+  visionNow(): { id: string; x: number; y: number; r: number }[] {
+    const meta = this.client.scene?.meta;
+    if (!meta || !meta.fog.enabled || !meta.fog.vision) return [];
+    const toks = [...this.views.values()].filter((v) => !v.token.hidden);
+    return visionCircles(toks.map((v) => v.token), meta.grid, (t) => {
+      const v = this.views.get(t.id)!;
+      return v.testPos ? { x: v.token.x, y: v.token.y } : v.display;
+    });
+  }
+
+  private drawVision() {
+    const sprite = this.fogSprite;
+    if (!sprite) return;
+    const g = this.visionG;
+    g.clear();
+    const circles = sprite.visible ? this.visionNow() : [];
+    if (!circles.length) {
+      if (this.visionMasked) { sprite.setMask({ mask: null }); this.visionMasked = false; }
+      return;
+    }
+    for (const c of circles) g.circle(c.x, c.y, c.r);
+    g.fill(0xffffff);
+    if (!this.visionMasked) { sprite.setMask({ mask: g, inverse: true }); this.visionMasked = true; }
+  }
+
+  /** Whose turn is it, as far as this viewer is allowed to know? */
+  private currentTurnToken(): string | null {
+    const scene = this.client.scene;
+    if (!scene) return null;
+    if (this.client.isDM && !this.ui.data.dmPreview) {
+      return scene.init.entries.find((e) => e.id === scene.init.turn)?.tk ?? null;
+    }
+    const pub = this.client.isDM ? toPub(scene.init, scene.tokens) : scene.initPub;
+    return pub?.entries.find((e) => e.id === pub.turn)?.tk ?? null;
   }
 
   // ------------------------------------------------------------------ auras
@@ -514,6 +570,15 @@ export class Board {
         else g.circle(v.display.x, v.display.y, r);
         g.fill({ color: col, alpha: a.a }).stroke({ width: 2 / z, color: col, alpha: Math.min(1, a.a + 0.45) });
       }
+    }
+    // a golden halo behind the token whose turn it is
+    const turnTk = this.currentTurnToken();
+    const tv = turnTk ? this.views.get(turnTk) : null;
+    if (tv) {
+      const r = (tv.token.size * grid.cell) / 2;
+      const w = Math.max(4, grid.cell * 0.09);
+      g.circle(tv.display.x, tv.display.y, r + w * 1.2).fill({ color: 0xffd43b, alpha: 0.28 });
+      g.circle(tv.display.x, tv.display.y, r + w * 0.6).stroke({ width: w, color: 0xffd43b, alpha: 0.95 });
     }
   }
 
@@ -613,7 +678,7 @@ export class Board {
     const sizeKey = `${this.fogMask.canvas.width}x${this.fogMask.canvas.height}`;
     if (!this.fogSprite) {
       this.fogSprite = new Sprite(Texture.EMPTY);
-      this.fogLayer.addChild(this.fogSprite);
+      this.fogLayer.addChild(this.fogSprite, this.visionG);
     }
     if (sizeKey !== this.fogTexSize || this.fogSprite.texture === Texture.EMPTY) {
       const old = this.fogSprite.texture;

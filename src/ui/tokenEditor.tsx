@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { TOKEN_SIZES } from '../core/model';
 import type { TableClient } from '../state/client';
-import type { Aura, LabelMode, Token, TokenShape } from '../types';
+import type { Aura, HpShow, LabelMode, Token, TokenShape } from '../types';
 import { Field, Modal, SliderField, Toggle, toast, useClient } from './common';
 import { AuraEditor } from './auraEditor';
 import { NO_FRAMING, PickImage, TokenCropper, type PaintApi } from './tokenCropper';
@@ -59,6 +59,8 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
   const name = (draft.name ?? t0.name) as string;
   const auras = ('auras' in draft ? draft.auras : t0.auras) as Aura[];
   const imgBg = ('imgBg' in draft ? draft.imgBg : t0.imgBg) ?? null;
+  const hpVal = ('hp' in draft ? draft.hp : t0.hp) ?? null;
+  const maxHpVal = ('maxHp' in draft ? draft.maxHp : t0.maxHp) ?? null;
   const [paintTouched, setPaintTouched] = useState(false);
   const dirty = Object.keys(draft).length > 0 || !!file || paintTouched;
 
@@ -148,6 +150,40 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
               </Field>
               <Toggle checked={!!(val('hidden') ?? false)} onChange={(v) => set({ hidden: v })} label="Hidden from players" />
               <Toggle checked={!!(val('locked') ?? false)} onChange={(v) => set({ locked: v })} label="Locked in place" hint="Players can't move or edit it." />
+            </>
+          )}
+          {client.isDM && (
+            <>
+              <h4>Health</h4>
+              {!multi && (
+                <div class="row">
+                  <Field label="Hit points now">
+                    <input type="number" min={0} value={hpVal ?? ''} placeholder="Not tracked" disabled={!editable}
+                      onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ hp: v === '' ? null : Number(v) }); }} />
+                  </Field>
+                  <Field label="Maximum">
+                    <input type="number" min={1} value={maxHpVal ?? ''} placeholder="Max" disabled={!editable}
+                      onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ maxHp: v === '' ? null : Number(v) }); }} />
+                  </Field>
+                </div>
+              )}
+              <Field label="Players see" hint="Players only ever get a percentage, never the numbers.">
+                <select disabled={!editable} value={val('hpShow') ?? ''} onChange={(e) => set({ hpShow: (e.target as HTMLSelectElement).value as HpShow })}>
+                  {val('hpShow') === null && <option value="">Mixed</option>}
+                  <option value="off">Nothing about its health</option>
+                  <option value="state">Bloodied and near-death colouring</option>
+                  <option value="bar">A health bar as well</option>
+                </select>
+              </Field>
+              <h4>Sight</h4>
+              <Field label="Sees as far as (feet)" hint="0: it does not clear fog by itself. Turn on “Tokens clear the fog around them” in the Scene panel.">
+                <div class="row wrap" style={{ marginBottom: 0 }}>
+                  <input type="number" class="num" min={0} step={5} disabled={!editable} value={(draft.sight ?? same('sight') ?? '') as number | ''}
+                    placeholder={val('sight') === null ? 'Mixed' : '0'}
+                    onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ sight: v === '' ? 0 : Math.max(0, Number(v)) }); }} />
+                  {[0, 30, 60, 120].map((n) => <button key={n} class="btn small" disabled={!editable} onClick={() => set({ sight: n })}>{n === 0 ? 'None' : `${n} ft`}</button>)}
+                </div>
+              </Field>
             </>
           )}
           {!multi && <AuraEditor auras={auras} ft={client.grid.ft} isDM={client.isDM} disabled={!editable} onChange={(a) => set({ auras: a })} />}

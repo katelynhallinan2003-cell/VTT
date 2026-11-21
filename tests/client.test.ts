@@ -111,7 +111,7 @@ describe('TableClient over the mock backend', () => {
     await dm.addFogOp({ m: 'h', t: 'rect', p: '10,10,20,20' });
     await waitFor(() => pl.scene?.fogOps.size === 2, 'fog ops');
     expect(pl.fogOpsSorted().map(([, o]) => o.m)).toEqual(['r', 'h']);
-    expect(pl.scene!.meta!.fog).toEqual({ enabled: true, base: 'hidden' });
+    expect(pl.scene!.meta!.fog).toEqual({ enabled: true, base: 'hidden', vision: false, explore: false });
     await dm.undoFog();
     await waitFor(() => pl.scene?.fogOps.size === 1, 'undo');
     await dm.resetFog('clear');
@@ -260,5 +260,182 @@ describe('TableClient over the mock backend', () => {
     expect(xs[1] - xs[0]).toBeCloseTo(70, 0); // kept their spacing
     await dm.history.undo();
     await waitFor(() => dm.scene!.tokens.size === 2, 'paste undone');
+  });
+
+  it('keeps hit points where only the DM can read them, and tells players just a percentage', async () => {
+    const { dm, pl, dmB, tid, sid } = await setup();
+    const id = await dm.addToken({ x: 35, y: 35, name: 'Ogre', hp: 40, maxHp: 40 });
+    await waitFor(() => dm.scene?.tokens.get(id)?.hp === 40, 'hp on the DM side');
+    await waitFor(() => pl.scene?.tokens.has(id) === true, 'token on the player side');
+    const dump = () => dmB.dump().tables[tid];
+    expect(dump().dm.scenes[sid].hp[id]).toEqual({ hp: 40, max: 40 });
+    expect(JSON.stringify(dump().scenes[sid].tokens[id])).not.toContain('"hp"');
+    expect(JSON.stringify(dump().scenes[sid].tokens[id])).not.toContain('maxHp');
+
+    await dm.damage([id], 25);
+    await waitFor(() => dm.scene?.tokens.get(id)?.hp === 15, 'damage');
+    await waitFor(() => pl.scene?.tokens.get(id)?.hpPct === 38, 'players\' percentage');
+    expect(pl.scene!.tokens.get(id)!.hp).toBeNull();
+    expect(pl.scene!.tokens.get(id)!.hpShow).toBe('state');
+
+    await dm.damage([id], -100); // healing stops at the maximum
+    await waitFor(() => dm.scene?.tokens.get(id)?.hp === 40, 'healed');
+    await dm.damage([id], 999); // and damage at zero
+    await waitFor(() => dm.scene?.tokens.get(id)?.hp === 0, 'dropped');
+    await waitFor(() => pl.scene?.tokens.get(id)?.hpPct === 0, 'down for players');
+  });
+
+  it('can hide health from players entirely, and undoes damage', async () => {
+    const { dm, pl } = await setup();
+    const id = await dm.addToken({ x: 35, y: 35, name: 'Boss', hp: 100, maxHp: 100, hpShow: 'off' });
+    await waitFor(() => pl.scene?.tokens.has(id) === true, 'token');
+    expect(pl.scene!.tokens.get(id)!.hpPct).toBeNull();
+    await dm.damage([id], 60);
+    await waitFor(() => dm.scene?.tokens.get(id)?.hp === 40, 'damage');
+    await sleep(40);
+    expect(pl.scene!.tokens.get(id)!.hpPct).toBeNull();
+
+    await dm.updateToken(id, { hpShow: 'bar' });
+    await waitFor(() => pl.scene?.tokens.get(id)?.hpPct === 40, 'now shown');
+    await dm.updateToken(id, { hpShow: 'off' });
+    await waitFor(() => pl.scene?.tokens.get(id)?.hpPct === null, 'hidden again');
+
+    await dm.history.undo(); // undo the last edit that was recorded: the damage
+    await waitFor(() => dm.scene?.tokens.get(id)?.hp === 100, 'damage undone');
+
+    // two hits in quick succession undo one at a time
+    await dm.damage([id], 10);
+    await dm.damage([id], 20);
+    await waitFor(() => dm.scene?.tokens.get(id)?.hp === 70, 'two hits');
+    await dm.history.undo();
+    await waitFor(() => dm.scene?.tokens.get(id)?.hp === 90, 'second hit undone');
+    await dm.history.undo();
+    await waitFor(() => dm.scene?.tokens.get(id)?.hp === 100, 'first hit undone');
+  });
+
+  it('ignores hit points set by a player', async () => {
+    const { pl } = await setup();
+    const id = await pl.addToken({ x: 35, y: 35, name: 'Aria', hp: 99, maxHp: 99 });
+    await waitFor(() => pl.scene?.tokens.has(id) === true, 'token');
+    expect(pl.scene!.tokens.get(id)!.hp).toBeNull();
+    expect(pl.scene!.tokens.get(id)!.hpPct).toBeNull();
+  });
+
+  it('copies hit points to pasted tokens and cleans up when a token is deleted and restored', async () => {
+    const { dm, dmB, tid, sid } = await setup();
+    const id = await dm.addToken({ x: 35, y: 35, name: 'Wolf', hp: 11, maxHp: 11 }, { record: false });
+    await waitFor(() => dm.scene?.tokens.get(id)?.hp === 11, 'wolf');
+    dm.copyTokens([id]);
+    const [copy] = await dm.pasteTokens({ x: 400, y: 400 });
+    await waitFor(() => dm.scene?.tokens.get(copy)?.hp === 11, 'copy has hp');
+    await dm.removeTokens([copy]);
+    await waitFor(() => !dm.scene?.tokens.has(copy), 'deleted');
+    expect(dmB.dump().tables[tid].dm.scenes[sid].hp[copy]).toBeUndefined();
+    await dm.history.undo();
+    await waitFor(() => dm.scene?.tokens.get(copy)?.hp === 11, 'restored with hp');
+  });
+
+  it('runs an initiative order: roll, sort, reveal, hide a line, step through turns', async () => {
+    const { dm, pl, dmB, tid, sid } = await setup();
+    const a = await dm.addToken({ x: 35, y: 35, name: 'Aria' }, { record: false });
+    const g = await dm.addToken({ x: 105, y: 35, name: 'Goblin' }, { record: false });
+    const sneak = await dm.addToken({ x: 175, y: 35, name: 'Assassin', hidden: true }, { record: false });
+    await waitFor(() => dm.scene!.tokens.size === 3, 'tokens');
+
+    await dm.initApply([{ tk: a, n: 'Aria', i: 12 }, { tk: g, n: 'Goblin', i: 17 }, { tk: sneak, n: 'Assassin', i: 21, h: true }]);
+    await waitFor(() => dm.scene!.init.entries.length === 3, 'entries');
+    const names = () => dm.scene!.init.entries.map((x) => x.n);
+    expect(names()).toEqual(['Assassin', 'Goblin', 'Aria']);
+    expect(dm.scene!.init.round).toBe(1);
+    expect(dm.scene!.init.turn).toBe(dm.scene!.init.entries[0].id);
+
+    // players know nothing until the DM reveals the order
+    await sleep(40);
+    expect(pl.scene!.initPub).toBeNull();
+    expect(dmB.dump().tables[tid].scenes[sid].initPub).toBeUndefined();
+
+    await dm.initShow(true);
+    await waitFor(() => pl.scene?.initPub?.entries.length === 2, 'players see the order');
+    expect(pl.scene!.initPub!.entries.map((x) => x.n)).toEqual(['Goblin', 'Aria']);
+    expect(JSON.stringify(dmB.dump().tables[tid].scenes[sid].initPub)).not.toContain('Assassin');
+    expect(pl.scene!.initPub!.turn).toBeNull(); // the assassin is acting, which players must not learn
+
+    await dm.initStep(1);
+    await waitFor(() => pl.scene?.initPub?.turn === dm.scene!.init.entries[1].id, 'turn moves');
+    await dm.initStep(1);
+    await dm.initStep(1);
+    await waitFor(() => dm.scene!.init.round === 2, 'new round');
+    await waitFor(() => pl.scene?.initPub?.round === 2, 'players see the round');
+
+    // revealing a hidden token makes its line public without touching the order
+    await dm.updateToken(sneak, { hidden: false });
+    await dm.initEdit(dm.scene!.init.entries[0].id, { h: false });
+    await waitFor(() => pl.scene?.initPub?.entries.length === 3, 'now visible');
+
+    // changing a number re-sorts; dragging overrides the sort
+    const ariaEntry = dm.scene!.init.entries.find((x) => x.tk === a)!;
+    await dm.initEdit(ariaEntry.id, { i: 30 });
+    await waitFor(() => names()[0] === 'Aria', 'resorted');
+    await dm.initMove(ariaEntry.id, null);
+    await waitFor(() => names()[2] === 'Aria', 'moved to the end');
+
+    // removing the line whose turn it is passes the turn on
+    const turnId = dm.scene!.init.turn!;
+    await dm.initRemove(turnId);
+    await waitFor(() => dm.scene!.init.entries.length === 2 && dm.scene!.init.turn !== turnId && dm.scene!.init.turn !== null, 'turn passed on');
+
+    await dm.initShow(false);
+    await waitFor(() => pl.scene?.initPub === null, 'hidden again');
+    await dm.initEnd();
+    await waitFor(() => dm.scene!.init.entries.length === 0 && dm.scene!.init.round === 0, 'combat ended');
+    expect(dmB.dump().tables[tid].dm?.scenes?.[sid]?.init).toBeUndefined();
+  });
+
+  it('keeps the players\' copy of the order in step when a token is renamed or hidden', async () => {
+    const { dm, pl } = await setup();
+    const a = await dm.addToken({ x: 35, y: 35, name: 'Aria' }, { record: false });
+    const b = await dm.addToken({ x: 105, y: 35, name: 'Bram' }, { record: false });
+    await waitFor(() => dm.scene!.tokens.size === 2, 'tokens');
+    await dm.initApply([{ tk: a, n: 'Aria', i: 15 }, { tk: b, n: 'Bram', i: 10 }]);
+    await dm.initShow(true);
+    await waitFor(() => pl.scene?.initPub?.entries.length === 2, 'shown');
+    await dm.updateToken(a, { name: 'Aria the Bold' });
+    await waitFor(() => pl.scene?.initPub?.entries[0].n === 'Aria the Bold', 'renamed');
+    await dm.updateToken(b, { hidden: true });
+    await waitFor(() => pl.scene?.initPub?.entries.length === 1, 'hidden token leaves the list');
+  });
+
+  it('reveals ground as sighted tokens move, and only when told to', async () => {
+    const { dm, sid } = await setup();
+    const id = await dm.addToken({ x: 350, y: 350, name: 'Scout', size: 1, sight: 30 }, { record: false });
+    await waitFor(() => !!dm.scene?.tokens.get(id), 'token');
+    await dm.resetFog('hidden');
+    await waitFor(() => dm.scene?.meta?.fog.enabled === true, 'fog on');
+    expect(await dm.exploreNow()).toBe(0); // switched off
+
+    await dm.updateScene({ fog: { vision: true, explore: true } });
+    await waitFor(() => dm.scene?.meta?.fog.explore === true, 'explore on');
+    expect(await dm.exploreNow()).toBe(1); // where it stands
+    await waitFor(() => dm.scene!.fogOps.size === 1, 'first reveal');
+    const first = [...dm.scene!.fogOps.values()][0];
+    expect(first).toMatchObject({ m: 'r', t: 'line' });
+    expect((first as any).w).toBe(2 * (6 * 70 + 35)); // 30 ft is 6 squares, plus the token's own radius
+
+    expect(await dm.exploreNow()).toBe(0); // no movement, nothing new
+    await dm.moveTokens([{ id, x: 350 + 70 * 4, y: 350 }]);
+    expect(await dm.exploreNow()).toBe(1);
+    await waitFor(() => dm.scene!.fogOps.size === 2, 'trail');
+    const trail = [...dm.scene!.fogOps.values()][1] as any;
+    expect(trail.p.split(',').length).toBe(4); // a path from the old spot to the new one
+
+    await dm.moveTokens([{ id, x: 350 + 70 * 40, y: 350 }]);
+    expect(await dm.exploreNow()).toBe(1);
+    await waitFor(() => dm.scene!.fogOps.size === 3, 'jump');
+    expect(([...dm.scene!.fogOps.values()][2] as any).p.split(',').length).toBe(2); // a long jump only reveals where it landed
+
+    const hid = await dm.addToken({ x: 100, y: 100, name: 'Hidden scout', sight: 60, hidden: true }, { record: false });
+    await waitFor(() => !!dm.scene?.tokens.get(hid), 'hidden token');
+    expect(await dm.exploreNow()).toBe(0); // hidden tokens never reveal anything for players
+    void sid;
   });
 });

@@ -1,4 +1,5 @@
 import { Container, Graphics, Sprite, Text } from 'pixi.js';
+import { healthState, HEALTH_COLOR } from '../core/combat';
 import type { GridSettings, Token } from '../types';
 import { loadTexture, type LoadedTexture } from './textures';
 
@@ -7,6 +8,8 @@ export interface TokenCtx {
   /** DM sees names of hidden tokens flagged; players never get hidden tokens at all */
   showLabel: boolean;
   textRes: number;
+  /** how healthy this token looks to whoever is watching (null = show nothing) */
+  health: { pct: number; bar: boolean } | null;
 }
 
 const hex = (c: string) => parseInt(c.replace('#', '').padEnd(6, '0').slice(0, 6), 16) || 0xffffff;
@@ -40,6 +43,7 @@ export class TokenView {
   private sprite: Sprite | null = null;
   private maskG = new Graphics();
   private ring = new Graphics();
+  private healthG = new Graphics();
   private initial: Text;
   private label: Text;
   private key = '';
@@ -47,6 +51,7 @@ export class TokenView {
   private tex: LoadedTexture | null = null;
   private placed = false;
   private onDirty: () => void;
+  private health: TokenCtx['health'] = null;
 
   constructor(onDirty: () => void) {
     this.onDirty = onDirty;
@@ -57,13 +62,15 @@ export class TokenView {
       style: { fontFamily: 'system-ui, sans-serif', fontWeight: '600', fill: 0xffffff, fontSize: 14, stroke: { color: 0x000000, width: 4, join: 'round' } },
     });
     this.label.anchor.set(0.5, 0);
-    this.container.addChild(this.base, this.maskG, this.initial, this.ring, this.label);
+    this.container.addChild(this.base, this.maskG, this.initial, this.ring, this.healthG, this.label);
   }
 
   apply(token: Token, ctx: TokenCtx) {
     this.token = token;
     const g = ctx.grid;
-    const key = [token.size, token.shape, token.ring, token.ringW, token.imgScale, token.imgX, token.imgY, token.imgBg, token.name ? token.name[0] : '?', g.cell].join('|');
+    this.health = ctx.health;
+    const key = [token.size, token.shape, token.ring, token.ringW, token.imgScale, token.imgX, token.imgY, token.imgBg, token.name ? token.name[0] : '?', g.cell,
+      ctx.health ? `${ctx.health.pct}/${ctx.health.bar}` : ''].join('|');
     if (key !== this.key) {
       this.key = key;
       this.redraw(token, ctx);
@@ -135,7 +142,39 @@ export class TokenView {
     this.initial.style.fontSize = Math.max(10, D * 0.5);
 
     this.label.style.fontSize = Math.max(11, ctx.grid.cell * 0.22);
-    this.label.position.set(0, r + 2);
+    this.drawHealth(t, ctx);
+  }
+
+  /** Coloured edge for bloodied / near death / down, and a small bar under the token. */
+  private drawHealth(t: Token, ctx: TokenCtx) {
+    const g = this.healthG;
+    g.clear();
+    const D = t.size * ctx.grid.cell;
+    const r = D / 2;
+    const h = this.health;
+    let labelY = r + 2;
+    if (h) {
+      const state = healthState(h.pct);
+      const col = hex(HEALTH_COLOR[state]);
+      if (state !== 'ok') {
+        const w = Math.max(3, ctx.grid.cell * 0.07);
+        if (state === 'down') {
+          if (t.shape === 'square') g.rect(-r, -r, D, D); else g.circle(0, 0, r);
+          g.fill({ color: 0x000000, alpha: 0.5 });
+        }
+        if (t.shape === 'square') g.rect(-r - w / 2, -r - w / 2, D + w, D + w).stroke({ width: w, color: col, join: 'miter' });
+        else g.circle(0, 0, r + w / 2).stroke({ width: w, color: col });
+      }
+      if (h.bar) {
+        const bw = Math.max(24, D * 0.9);
+        const bh = Math.max(5, ctx.grid.cell * 0.1);
+        const y = r + 3;
+        g.roundRect(-bw / 2 - 1.5, y - 1.5, bw + 3, bh + 3, bh / 2 + 1.5).fill({ color: 0x000000, alpha: 0.72 });
+        if (h.pct > 0) g.roundRect(-bw / 2, y, Math.max(bh, (bw * h.pct) / 100), bh, bh / 2).fill(col);
+        labelY = y + bh + 4;
+      }
+    }
+    this.label.position.set(0, labelY);
   }
 
   /** Jump straight to a spot without sliding there. */

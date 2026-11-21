@@ -17,6 +17,7 @@ export interface UiData {
   status: string | null;
   /** the right-hand panel is expanded */
   dockOpen: boolean;
+  dockTab: 'scene' | 'tokens';
 }
 
 function readDock(): boolean {
@@ -28,7 +29,7 @@ export class UiState {
   data: UiData = {
     tool: 'select', fogMode: 'r', fogShape: 'rect', brushSize: 2,
     selection: new Set(), mapSelected: false, dmPreview: false, zoom: 1, status: null,
-    dockOpen: readDock(),
+    dockOpen: readDock(), dockTab: 'scene',
   };
   private listeners = new Set<() => void>();
   private queued = false;

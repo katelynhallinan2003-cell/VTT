@@ -8,8 +8,7 @@ import { UiState } from '../state/ui';
 import type { AuthUser, LibraryItem, Rect, Token, Vec } from '../types';
 import { Toasts, copyText, toast, useClient, useTheme, useUi } from './common';
 import { AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewSceneModal, PlayersModal, ScenesModal, SettingsModal } from './modals';
-import { ScenePanel, TokenTag } from './panels';
-import { getTheme, setTheme } from './theme';
+import { Dock, TokenTag } from './panels';
 import { TokenEditorModal } from './tokenEditor';
 
 type ModalState =
@@ -33,11 +32,13 @@ const ICONS = {
   fog: 'M7 18a4 4 0 0 1-.6-7.96A5.5 5.5 0 0 1 17 8.5a4.5 4.5 0 0 1 .5 9.5zM8 21h8',
   token: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 8v8M8 12h8',
   fit: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5',
+  undo: 'M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3',
+  redo: 'M15 14l5-5-5-5M20 9H10a6 6 0 0 0 0 12h3',
 };
 
-function ToolBtn(props: { icon: keyof typeof ICONS; label: string; hotkey?: string; on?: boolean; onClick: () => void }) {
+function ToolBtn(props: { icon: keyof typeof ICONS; label: string; hotkey?: string; on?: boolean; disabled?: boolean; onClick: () => void }) {
   return (
-    <button class={`tool ${props.on ? 'on' : ''}`} title={`${props.label}${props.hotkey ? ` (${props.hotkey})` : ''}`} aria-label={props.label} onClick={props.onClick}>
+    <button class={`tool ${props.on ? 'on' : ''}`} disabled={props.disabled} title={`${props.label}${props.hotkey ? ` (${props.hotkey})` : ''}`} aria-label={props.label} onClick={props.onClick}>
       <Icon d={ICONS[props.icon]} />
     </button>
   );
@@ -67,6 +68,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       onGridRect: (rect, derived) => setModal({ kind: 'grid', rect, derived }),
       onMapError: setMapError,
       onTokenImageError: (m) => toast(m, 'error', 9000),
+      onNotice: (m, k) => toast(m, k, 1800),
     });
     let dead = false;
     void b.init().then(() => { if (!dead) { boardRef.current = b; setBoard(b); (window as any).__vtt = { client, ui, board: b }; } });
@@ -189,6 +191,9 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
         {client.isDM && <ToolBtn icon="fog" label="Fog of war" hotkey="F" on={d.tool === 'fog'} onClick={() => ui.set({ tool: d.tool === 'fog' ? 'select' : 'fog' })} />}
         <ToolBtn icon="token" label="Add token" hotkey="T" onClick={() => client.canDo('create') ? openAddToken() : toast('You are not allowed to add tokens.', 'error')} />
         <div class="tool-sep" />
+        <ToolBtn icon="undo" label={client.history.undoLabel ? `Undo: ${client.history.undoLabel}` : 'Undo'} hotkey="Ctrl+Z" disabled={!client.history.canUndo} onClick={() => void board?.runHistory('undo')} />
+        <ToolBtn icon="redo" label={client.history.redoLabel ? `Redo: ${client.history.redoLabel}` : 'Redo'} hotkey="Ctrl+Y" disabled={!client.history.canRedo} onClick={() => void board?.runHistory('redo')} />
+        <div class="tool-sep" />
         <ToolBtn icon="fit" label="Fit map to screen" hotkey="0" onClick={() => board?.fit()} />
         <div class="zoom">{Math.round(d.zoom * 100)}%</div>
       </nav>
@@ -253,13 +258,12 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
         {client.isDM && <button class="btn small" onClick={() => setModal({ kind: 'scenes' })}>Scenes</button>}
         {client.isDM && <button class="btn small" onClick={() => setModal({ kind: 'library' })}>Library</button>}
         {client.isDM && <button class="btn small" onClick={() => copyText(`${location.href.split('#')[0]}#/t/${client.tableId}`)}>Copy player link</button>}
-        <button class="btn small" title="Switch light / dark" onClick={() => setTheme(getTheme() === 'light' ? 'dark' : 'light')}>{getTheme() === 'light' ? '☾' : '☀'}</button>
         <button class="btn small" onClick={() => setModal({ kind: 'settings' })}>Settings</button>
       </header>
 
       {/* ---------------- right dock (DM) */}
       {client.isDM && (d.dockOpen
-        ? <ScenePanel client={client} ui={ui} board={board} onNewScene={() => setModal({ kind: 'newScene' })} />
+        ? <Dock client={client} ui={ui} board={board} onNewScene={() => setModal({ kind: 'newScene' })} onEdit={(ids) => setModal({ kind: 'editToken', ids })} />
         : <button class="dock-tab" onClick={() => ui.set({ dockOpen: true })}>Scene panel</button>)}
       {mySel && <TokenTag client={client} ui={ui} onEdit={(ids) => setModal({ kind: 'editToken', ids })} />}
 

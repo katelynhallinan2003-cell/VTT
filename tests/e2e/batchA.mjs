@@ -73,23 +73,32 @@ await dm.keyboard.press('Escape');
 
 // dock: collapse a section, hide the dock
 await dm.locator('.sect-head', { hasText: 'Grid' }).click();
-check('a section can be collapsed', (await dm.locator('.dock >> text=Square size').count()) === 0);
+check('a section can be collapsed', (await dm.locator('.dock >> text=Show grid').count()) === 0);
 await dm.screenshot({ path: '/tmp/shots/44-dock-collapsed.png' });
 await dm.locator('.dock .icon-btn[title="Hide this panel"]').click();
 check('the dock can be hidden', (await dm.locator('.dock').count()) === 0 && (await dm.locator('.dock-tab').count()) === 1);
 await dm.locator('.dock-tab').click();
 check('and shown again', (await dm.locator('.dock').count()) === 1);
 await dm.locator('.sect-head', { hasText: 'Grid' }).click();
+await dm.locator('.sect-head', { hasText: 'Fine-tune' }).click();
 await sleep(150);
 const sw = await dm.locator('.dock input[type=range]').first().boundingBox();
 check('sliders are a decent width', sw.width > 120, `${Math.round(sw.width)}px`);
 
-// dark theme
-await dm.locator('button[title="Switch light / dark"]').click();
+// themes now live in Settings
+await dm.getByRole('button', { name: 'Settings' }).click();
 await sleep(200);
-await dm.screenshot({ path: '/tmp/shots/45-dark.png' });
-check('theme toggles to dark', (await dm.evaluate(() => document.documentElement.dataset.theme)) === 'dark');
-await dm.locator('button[title="Switch light / dark"]').click();
+check('no light/dark button in the top bar', (await dm.locator('button[title="Switch light / dark"]').count()) === 0);
+check('settings lists several themes', (await dm.locator('.theme-tile').count()) >= 5);
+await dm.locator('.theme-tile', { hasText: 'Dark' }).first().click();
+await sleep(200);
+await dm.screenshot({ path: '/tmp/shots/45-dark-settings.png' });
+check('theme switches to dark', (await dm.evaluate(() => document.documentElement.dataset.theme)) === 'dark');
+check('the drawing surface stays white in dark mode', (await dm.evaluate(() => window.__vtt.client.scene?.meta?.bg)) === '#ffffff');
+await dm.locator('.theme-tile', { hasText: 'Light' }).first().click();
+await sleep(150);
+await dm.keyboard.press('Escape');
+await sleep(150);
 
 // player joins, then DM removes them
 const tid = await dm.evaluate(() => location.hash.replace('#/t/', ''));

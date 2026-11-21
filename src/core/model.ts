@@ -15,7 +15,9 @@ export const TOKEN_SIZES: { label: string; size: number }[] = [
   { label: 'Gargantuan', size: 4 },
 ];
 
-export const DEFAULT_BG = '#eceae4';
+export const DEFAULT_BG = '#ffffff';
+/** earlier versions defaulted to these; treat them as "not chosen" so every table gets the white drawing surface */
+const OLD_DEFAULT_BGS = new Set(['#1b1d23', '#eceae4']);
 export const DM_COLOR = '#ffe119';
 
 export const PLAYER_COLORS = [
@@ -53,7 +55,7 @@ export function normalizeSceneMeta(raw: any): SceneMeta {
     mapY: num(m.mapY, 0),
     mapScale: Math.max(0.01, num(m.mapScale, 1)),
     mapLocked: bool(m.mapLocked, true),
-    bg: str(m.bg, DEFAULT_BG),
+    bg: OLD_DEFAULT_BGS.has(str(m.bg, '')) ? DEFAULT_BG : str(m.bg, DEFAULT_BG),
     grid: normalizeGrid(m.grid),
     fog: {
       enabled: bool(m.fog?.enabled, false),
@@ -78,6 +80,7 @@ export function normalizeToken(id: string, raw: any, hidden: boolean): Token {
     imgScale: Math.max(0.1, num(t.imgScale, 1)),
     imgX: num(t.imgX, 0),
     imgY: num(t.imgY, 0),
+    imgBg: typeof t.imgBg === 'string' ? t.imgBg : null,
     ownerUid: typeof t.ownerUid === 'string' ? t.ownerUid : null,
     hidden,
     locked: bool(t.locked, false),
@@ -89,7 +92,7 @@ export function normalizeToken(id: string, raw: any, hidden: boolean): Token {
 /** Serialise a token for the database. `hidden` is implied by which subtree it lives in. */
 export function tokenToWire(t: Token): Record<string, unknown> {
   const { id: _id, hidden: _hidden, ...rest } = t;
-  return stripUndefined({ ...rest, img: t.img ?? undefined, ownerUid: t.ownerUid ?? undefined });
+  return stripUndefined({ ...rest, img: t.img ?? undefined, imgBg: t.imgBg ?? undefined, ownerUid: t.ownerUid ?? undefined });
 }
 
 export function normalizeFogOp(raw: any): FogOp | null {

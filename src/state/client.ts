@@ -5,11 +5,12 @@ import {
   stripUndefined, tokenToWire, DEFAULT_GRID, DM_COLOR,
 } from '../core/model';
 import { can, detectPreset, PRESETS, type Action } from '../core/permissions';
-import { mapRect } from '../core/geometry';
+import { mapRect, snapTokenCenter } from '../core/geometry';
 import type {
   FogOp, GridSettings, Permissions, PermPreset, Ping, Player, Role, SceneIndexEntry, SceneMeta,
-  TableMeta, TableSettings, Token,
+  TableMeta, TableSettings, Token, Vec,
 } from '../types';
+import { History } from './history';
 import { P } from './paths';
 
 export interface SceneState {
@@ -28,6 +29,9 @@ export type ScenePatch = Partial<Omit<SceneMeta, 'grid' | 'fog'>> & {
   fog?: Partial<SceneMeta['fog']>;
 };
 
+let tokenClipboard: Token[] = [];
+const UNDOABLE_SCENE_KEYS = new Set(['mapX', 'mapY', 'mapScale', 'mapLocked', 'bg', 'grid', 'fog']);
+
 /**
  * Everything the app knows about one table, kept in sync with the backend.
  * Reads come from listeners (which fire immediately for local writes, so the UI is optimistic);
@@ -44,6 +48,7 @@ export class TableClient {
   scene: SceneState | null = null;
   rev = 0;
   lastError: string | null = null;
+  readonly history = new History(() => this.bump());
 
   private listeners = new Set<() => void>();
   private pingListeners = new Set<(p: Ping) => void>();
@@ -177,6 +182,7 @@ export class TableClient {
     for (const u of this.sceneUnsubs) u();
     this.sceneUnsubs = [];
     this.seenPings.clear();
+    this.history.clear();
     this.viewSceneId = sid;
     if (!sid) { this.scene = null; this.bump(); return; }
 
@@ -272,7 +278,7 @@ export class TableClient {
   }
 
   // ---------------------------------------------------------------- tokens
-  async addToken(partial: Partial<Token> & { x: number; y: number }): Promise<string> {
+  async addToken(partial: Partial<Token> & { x: number; y: number }, opts: { record?: boolean } = {}): Promise<string> {
     const sid = this.viewSceneId;
     if (!sid) throw new Error('No scene is open');
     const id = this.backend.newKey();
@@ -281,7 +287,28 @@ export class TableClient {
     const token = normalizeToken(id, { ...partial, z }, hidden);
     if (!this.isDM) token.ownerUid = this.uid; // players may only create tokens they own
     await this.backend.set(this.tokenPath(token), tokenToWire(token));
+    if (opts.record !== false) this.recordCreated([token], 'Add token');
     return id;
+  }
+
+  /** Write tokens back exactly as they were (used by undo and by paste). */
+  async restoreTokens(tokens: Token[]): Promise<void> {
+    const updates: Record<string, any> = {};
+    for (const t of tokens) updates[this.tokenPath(t)] = tokenToWire(t);
+    if (Object.keys(updates).length) await this.backend.update(updates);
+  }
+  private async deleteTokensRaw(tokens: Pick<Token, 'id' | 'hidden'>[]): Promise<void> {
+    const updates: Record<string, any> = {};
+    for (const t of tokens) updates[this.tokenPath(t)] = null;
+    if (Object.keys(updates).length) await this.backend.update(updates);
+  }
+  private recordCreated(tokens: Token[], label: string) {
+    const snaps = tokens.map((t) => ({ ...t }));
+    this.history.push({
+      label,
+      undo: () => this.deleteTokensRaw(snaps),
+      redo: () => this.restoreTokens(snaps),
+    });
   }
 
   async updateToken(id: string, patch: Partial<Omit<Token, 'id'>>): Promise<void> {
@@ -305,11 +332,28 @@ export class TableClient {
     if (Object.keys(updates).length) await this.backend.update(updates);
   }
 
-  async updateTokens(ids: string[], patch: Partial<Omit<Token, 'id'>>) {
+  async updateTokens(ids: string[], patch: Partial<Omit<Token, 'id'>>, opts: { record?: boolean } = {}) {
+    const before: { id: string; prev: Partial<Omit<Token, 'id'>> }[] = [];
+    for (const id of ids) {
+      const cur = this.scene?.tokens.get(id);
+      if (!cur) continue;
+      const prev: Record<string, unknown> = {};
+      for (const k of Object.keys(patch)) prev[k] = (cur as any)[k] ?? null;
+      before.push({ id, prev: prev as Partial<Omit<Token, 'id'>> });
+    }
     await Promise.all(ids.map((id) => this.updateToken(id, patch)));
+    if (opts.record !== false && before.length) {
+      const keys = Object.keys(patch).sort().join(',');
+      this.history.push({
+        label: 'Edit token',
+        key: `tok:${before.map((b) => b.id).join('+')}:${keys}`,
+        undo: async () => { await Promise.all(before.map((b) => this.updateToken(b.id, b.prev))); },
+        redo: async () => { await Promise.all(before.map((b) => this.updateToken(b.id, patch))); },
+      });
+    }
   }
-
-  async moveTokens(moves: { id: string; x: number; y: number }[]): Promise<void> {
+  /** Move tokens. Pass `before` (their old positions) to make it an undoable step. */
+  async moveTokens(moves: { id: string; x: number; y: number }[], before?: { id: string; x: number; y: number }[]): Promise<void> {
     const updates: Record<string, any> = {};
     for (const m of moves) {
       const t = this.scene?.tokens.get(m.id);
@@ -319,15 +363,28 @@ export class TableClient {
       updates[`${base}/y`] = Math.round(m.y * 10) / 10;
     }
     if (Object.keys(updates).length) await this.backend.update(updates);
+    if (before?.length) {
+      this.history.push({
+        label: before.length > 1 ? 'Move tokens' : 'Move token',
+        undo: () => this.moveTokens(before),
+        redo: () => this.moveTokens(moves),
+      });
+    }
   }
 
   async removeTokens(ids: string[]): Promise<void> {
-    const updates: Record<string, any> = {};
+    const snaps: Token[] = [];
     for (const id of ids) {
       const t = this.scene?.tokens.get(id);
-      if (t) updates[this.tokenPath(t)] = null;
+      if (t) snaps.push({ ...t });
     }
-    if (Object.keys(updates).length) await this.backend.update(updates);
+    if (!snaps.length) return;
+    await this.deleteTokensRaw(snaps);
+    this.history.push({
+      label: snaps.length > 1 ? 'Delete tokens' : 'Delete token',
+      undo: () => this.restoreTokens(snaps),
+      redo: () => this.deleteTokensRaw(snaps),
+    });
   }
 
   async bringToFront(ids: string[]) {
@@ -341,6 +398,7 @@ export class TableClient {
 
   async duplicateTokens(ids: string[], offsetPx: number): Promise<string[]> {
     const out: string[] = [];
+    const made: Token[] = [];
     for (const id of ids) {
       const t = this.scene?.tokens.get(id);
       if (!t) continue;
@@ -348,8 +406,46 @@ export class TableClient {
       const baseName = t.name.replace(/\s+\d+$/, '');
       const siblings = [...(this.scene?.tokens.values() ?? [])].filter((o) => o.name.replace(/\s+\d+$/, '') === baseName && baseName);
       const name = baseName ? `${baseName} ${siblings.length + 1}` : '';
-      out.push(await this.addToken({ ...rest, name, x: t.x + offsetPx, y: t.y + offsetPx, ownerUid: this.isDM ? null : this.uid }));
+      const nid = await this.addToken({ ...rest, name, x: t.x + offsetPx, y: t.y + offsetPx, ownerUid: this.isDM ? null : this.uid }, { record: false });
+      out.push(nid);
+      const made1 = this.scene?.tokens.get(nid);
+      if (made1) made.push(made1);
     }
+    if (made.length) this.recordCreated(made, made.length > 1 ? 'Duplicate tokens' : 'Duplicate token');
+    return out;
+  }
+
+  /** Remember tokens for pasting (works across scenes). */
+  copyTokens(ids: string[]): number {
+    const list = ids.map((id) => this.scene?.tokens.get(id)).filter((t): t is Token => !!t).map((t) => ({ ...t }));
+    tokenClipboard = list;
+    return list.length;
+  }
+  get clipboardCount() { return tokenClipboard.length; }
+
+  /** Paste the copied tokens with their group centred on `at` (snapped to the grid). */
+  async pasteTokens(at: Vec): Promise<string[]> {
+    const list = tokenClipboard;
+    if (!list.length || !this.canDo('create')) return [];
+    const cx = list.reduce((a, t) => a + t.x, 0) / list.length;
+    const cy = list.reduce((a, t) => a + t.y, 0) / list.length;
+    const g = this.grid;
+    const out: string[] = [];
+    const made: Token[] = [];
+    for (const t of list) {
+      const { id: _id, ...rest } = t;
+      let x = at.x + (t.x - cx);
+      let y = at.y + (t.y - cy);
+      if (g.snap) ({ x, y } = snapTokenCenter(g, t.size, { x, y }));
+      const baseName = t.name.replace(/\s+\d+$/, '');
+      const siblings = [...(this.scene?.tokens.values() ?? [])].filter((o) => baseName && o.name.replace(/\s+\d+$/, '') === baseName);
+      const name = baseName ? `${baseName} ${siblings.length + 1}` : '';
+      const nid = await this.addToken({ ...rest, name, x, y, ownerUid: this.isDM ? t.ownerUid : this.uid }, { record: false });
+      out.push(nid);
+      const made1 = this.scene?.tokens.get(nid);
+      if (made1) made.push(made1);
+    }
+    if (made.length) this.recordCreated(made, made.length > 1 ? 'Paste tokens' : 'Paste token');
     return out;
   }
 
@@ -390,7 +486,7 @@ export class TableClient {
     return sid;
   }
 
-  async updateScene(patch: ScenePatch): Promise<void> {
+  async updateScene(patch: ScenePatch, opts: { record?: boolean } = {}): Promise<void> {
     const sid = this.viewSceneId;
     if (!sid || !this.isDM) return;
     const base = P.sceneMeta(this.tableId, sid);
@@ -401,7 +497,33 @@ export class TableClient {
       } else updates[`${base}/${k}`] = v === undefined ? null : v;
     }
     if (patch.name) updates[`${P.sceneIndex(this.tableId)}/${sid}/name`] = patch.name;
-    if (Object.keys(updates).length) await this.backend.update(updates);
+    if (!Object.keys(updates).length) return;
+
+    // remember how things were, for Ctrl+Z (only for plain settings, not for swapping the map picture)
+    const meta = this.scene?.meta;
+    const undoable = opts.record !== false && !!meta && Object.keys(patch).every((k) => UNDOABLE_SCENE_KEYS.has(k));
+    let prev: ScenePatch | null = null;
+    if (undoable && meta) {
+      prev = {};
+      for (const [k, v] of Object.entries(patch)) {
+        if (k === 'grid' || k === 'fog') {
+          const sub: Record<string, unknown> = {};
+          for (const k2 of Object.keys(v as object)) sub[k2] = (meta as any)[k][k2];
+          (prev as any)[k] = sub;
+        } else (prev as any)[k] = (meta as any)[k];
+      }
+    }
+    await this.backend.update(updates);
+    if (prev) {
+      const before = prev;
+      const keys = Object.keys(updates).map((u) => u.split('/').slice(-2).join('.')).sort().join(',');
+      this.history.push({
+        label: 'Change scene settings',
+        key: `scene:${sid}:${keys}`,
+        undo: () => this.updateScene(before, { record: false }),
+        redo: () => this.updateScene(patch, { record: false }),
+      });
+    }
   }
 
   async setSceneMap(url: string, w: number, h: number) {
@@ -430,7 +552,14 @@ export class TableClient {
     const sid = this.viewSceneId;
     if (!sid || !this.isDM) return;
     if (!this.scene?.meta?.fog.enabled) await this.updateScene({ fog: { enabled: true } });
-    await this.backend.set(`${P.sceneFog(this.tableId, sid)}/${this.backend.newKey()}`, op);
+    const key = this.backend.newKey();
+    const path = `${P.sceneFog(this.tableId, sid)}/${key}`;
+    await this.backend.set(path, op);
+    this.history.push({
+      label: op.m === 'r' ? 'Reveal fog' : 'Hide with fog',
+      undo: () => this.backend.remove(path),
+      redo: () => this.backend.set(path, op),
+    });
   }
   async undoFog(): Promise<void> {
     const sid = this.viewSceneId;
@@ -442,10 +571,19 @@ export class TableClient {
   async resetFog(base: 'hidden' | 'clear'): Promise<void> {
     const sid = this.viewSceneId;
     if (!sid) return;
-    await this.backend.update({
-      [P.sceneFog(this.tableId, sid)]: null,
-      [`${P.sceneMeta(this.tableId, sid)}/fog/base`]: base,
-      [`${P.sceneMeta(this.tableId, sid)}/fog/enabled`]: true,
+    const prevOps: Record<string, FogOp> = Object.fromEntries(this.scene?.fogOps ?? []);
+    const prevBase = this.scene?.meta?.fog.base ?? 'hidden';
+    const prevEnabled = this.scene?.meta?.fog.enabled ?? false;
+    const apply = (ops: Record<string, FogOp> | null, b: 'hidden' | 'clear', enabled: boolean) => this.backend.update({
+      [P.sceneFog(this.tableId, sid)]: ops && Object.keys(ops).length ? ops : null,
+      [`${P.sceneMeta(this.tableId, sid)}/fog/base`]: b,
+      [`${P.sceneMeta(this.tableId, sid)}/fog/enabled`]: enabled,
+    });
+    await apply(null, base, true);
+    this.history.push({
+      label: base === 'hidden' ? 'Cover the map in fog' : 'Reveal the whole map',
+      undo: () => apply(prevOps, prevBase, prevEnabled),
+      redo: () => apply(null, base, true),
     });
   }
 

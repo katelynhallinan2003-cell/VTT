@@ -18,6 +18,8 @@ export interface BoardCallbacks {
   onMapError(message: string | null): void;
   /** a token's picture could not be loaded (shown once per picture) */
   onTokenImageError(message: string): void;
+  /** short messages such as "Undid: Move token" */
+  onNotice(message: string, kind: 'info' | 'ok' | 'error'): void;
 }
 
 type Drag =
@@ -30,6 +32,7 @@ type Drag =
 
 const num = (c: string) => parseInt(c.replace('#', '').padEnd(6, '0').slice(0, 6), 16) || 0xffffff;
 const SELECT = 0x4da3ff;
+const PRESS_PING_MS = 450;
 
 interface PingFx { g: Graphics; label: Text; born: number; x: number; y: number; color: number }
 
@@ -76,6 +79,8 @@ export class Board {
   private polyPts: Vec[] = [];
   private pointerW: Vec | null = null;
   private spaceDown = false;
+  /** holding the left button on empty space for a moment sends a ping */
+  private press: { x: number; y: number; w: Vec; t0: number; timer: number } | null = null;
   private dirty = true;
   private raf = 0;
   private lastT = 0;
@@ -160,6 +165,7 @@ export class Board {
 
   destroy() {
     this.destroyed = true;
+    this.cancelPress();
     setTextureFailHandler(null);
     cancelAnimationFrame(this.raf);
     this.resizeObs?.disconnect();
@@ -231,6 +237,7 @@ export class Board {
     for (const v of this.views.values()) if (v.tick(dt)) moving = true;
     if (moving) this.dirty = true;
     if (this.pings.length) { this.tickPings(); this.dirty = true; }
+    if (this.press) this.dirty = true;
     if (!this.dirty) return;
     this.dirty = false;
     if (this.gridDirty) { this.drawGrid(); this.gridDirty = false; }
@@ -493,6 +500,15 @@ export class Board {
     const lw = 2.5 / z;
     const grid = this.client.grid;
 
+    if (this.press) {
+      const k = Math.min(1, (performance.now() - this.press.t0) / PRESS_PING_MS);
+      if (k > 0.25) {
+        const col = num(this.client.me?.color ?? '#ffffff');
+        g.circle(this.press.w.x, this.press.w.y, 6 / z).fill({ color: col, alpha: 0.9 });
+        g.arc(this.press.w.x, this.press.w.y, (10 + 14 * k) / z, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k).stroke({ width: 3 / z, color: col, alpha: 0.9 });
+      }
+    }
+
     for (const id of this.ui.data.selection) {
       const v = this.views.get(id);
       if (!v) continue;
@@ -605,9 +621,9 @@ export class Board {
     const w = this.screenToWorld(e.clientX, e.clientY);
     this.pointerW = w;
 
-    if (e.button === 1) { e.preventDefault(); void this.client.ping(w.x, w.y); return; }
+    if (e.button === 1) e.preventDefault();
     canvas.setPointerCapture(e.pointerId);
-    if (e.button === 2 || (e.button === 0 && this.spaceDown)) {
+    if (e.button === 1 || e.button === 2 || (e.button === 0 && this.spaceDown)) {
       this.drag = { kind: 'pan', sx: e.clientX, sy: e.clientY, tx: this.cam.tx, ty: this.cam.ty, moved: false, button: e.button };
       this.updateCursor();
       return;
@@ -638,17 +654,48 @@ export class Board {
         this.drag = { kind: 'tokens', ids: movable, anchor, start: w, origins, moved: false };
         this.updateCursor();
       }
+      this.startPress(w, e);
       return;
     }
     const meta = this.client.scene?.meta;
     if (this.client.isDM && meta && !meta.mapLocked && meta.mapW && rectContains(mapRect(meta), w)) {
       this.ui.set({ mapSelected: true, selection: new Set() });
       this.drag = { kind: 'map', start: w, orig: { x: meta.mapX, y: meta.mapY }, moved: false };
+      this.startPress(w, e);
       return;
     }
     const base = e.shiftKey ? new Set(this.ui.data.selection) : new Set<string>();
     if (!e.shiftKey) this.ui.select([]);
     this.drag = { kind: 'marquee', start: w, cur: w, base };
+    this.startPress(w, e);
+  }
+
+  /** Holding the left button still for a moment pings that spot. Moving more than a few pixels turns it into a normal drag. */
+  private startPress(w: Vec, e: PointerEvent) {
+    if (!this.client.canDo('ping')) return;
+    this.cancelPress();
+    this.press = {
+      x: e.clientX, y: e.clientY, w, t0: performance.now(),
+      timer: window.setTimeout(() => {
+        const p = this.press;
+        if (!p) return;
+        this.press = null;
+        const d = this.drag;
+        if (d?.kind === 'marquee') this.drag = null;
+        else if (d?.kind === 'tokens' || d?.kind === 'map') {
+          if (d.moved) return;
+          if (d.kind === 'tokens') for (const id of d.ids) { const v = this.views.get(id); if (v) v.dragging = false; }
+          this.drag = null;
+          this.updateCursor();
+        }
+        void this.client.ping(p.w.x, p.w.y);
+        this.invalidate();
+      }, PRESS_PING_MS),
+    };
+  }
+
+  private cancelPress() {
+    if (this.press) { clearTimeout(this.press.timer); this.press = null; }
   }
 
   private startFog(w: Vec, e: PointerEvent) {
@@ -684,6 +731,7 @@ export class Board {
   private onPointerMove(e: PointerEvent) {
     const w = this.screenToWorld(e.clientX, e.clientY);
     this.pointerW = w;
+    if (this.press && Math.hypot(e.clientX - this.press.x, e.clientY - this.press.y) > 6) this.cancelPress();
     const d = this.drag;
     if (!d) {
       const hover = this.ui.data.tool === 'select' && !!this.hitToken(w);
@@ -756,6 +804,7 @@ export class Board {
   }
 
   private onPointerUp(e: PointerEvent) {
+    this.cancelPress();
     const d = this.drag;
     this.drag = null;
     try { this.app.canvas.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
@@ -774,13 +823,15 @@ export class Board {
       case 'tokens': {
         this.sendMoves.cancel();
         const moves: { id: string; x: number; y: number }[] = [];
+        const before: { id: string; x: number; y: number }[] = [];
         for (const id of d.ids) {
           const v = this.views.get(id);
           if (!v) continue;
           v.dragging = false;
-          if (d.moved) moves.push({ id, x: v.display.x, y: v.display.y });
+          const o = d.origins.get(id);
+          if (d.moved) { moves.push({ id, x: v.display.x, y: v.display.y }); if (o) before.push({ id, x: o.x, y: o.y }); }
         }
-        if (moves.length) void this.client.moveTokens(moves);
+        if (moves.length) void this.client.moveTokens(moves, before);
         break;
       }
       case 'rect': {
@@ -797,6 +848,16 @@ export class Board {
         this.sendMap.flush();
         break;
       case 'marquee': break;
+    }
+  }
+
+  /** Ctrl+Z / Ctrl+Y (also used by the toolbar buttons). */
+  async runHistory(dir: 'undo' | 'redo') {
+    try {
+      const label = await this.client.history[dir]();
+      this.cb.onNotice(label ? `${dir === 'undo' ? 'Undid' : 'Redid'}: ${label}` : `Nothing to ${dir}`, 'info');
+    } catch (err) {
+      this.cb.onNotice(`Couldn't ${dir}: ${(err as Error).message}`, 'error');
     }
   }
 
@@ -836,7 +897,25 @@ export class Board {
       ui.select([...this.views.keys()]);
       return;
     }
-    if (mod && e.key.toLowerCase() === 'z' && ui.data.tool === 'fog' && c.isDM) { e.preventDefault(); void c.undoFog(); return; }
+    if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); void this.runHistory(e.shiftKey ? 'redo' : 'undo'); return; }
+    if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); void this.runHistory('redo'); return; }
+    if (mod && (e.key.toLowerCase() === 'c' || e.key.toLowerCase() === 'x') && ui.data.selection.size) {
+      e.preventDefault();
+      const n = c.copyTokens([...ui.data.selection]);
+      if (n) this.cb.onNotice(`Copied ${n} token${n > 1 ? 's' : ''}`, 'info');
+      if (e.key.toLowerCase() === 'x') {
+        const ids = [...ui.data.selection].filter((id) => c.canDo('delete', c.scene?.tokens.get(id)));
+        if (ids.length) void c.removeTokens(ids);
+      }
+      return;
+    }
+    if (mod && e.key.toLowerCase() === 'v') {
+      e.preventDefault();
+      if (!c.clipboardCount) return;
+      if (!c.canDo('create')) { this.cb.onNotice('You are not allowed to add tokens.', 'error'); return; }
+      void c.pasteTokens(this.pointerW ?? this.viewCenterWorld()).then((ids) => { if (ids.length) ui.select(ids); });
+      return;
+    }
     if (mod) return;
 
     if (e.key.startsWith('Arrow') && ui.data.selection.size) {
@@ -848,7 +927,10 @@ export class Board {
         .map((id) => c.scene?.tokens.get(id))
         .filter((t): t is Token => !!t && c.canDo('move', t))
         .map((t) => ({ id: t.id, x: t.x + dx, y: t.y + dy }));
-      if (moves.length) void c.moveTokens(moves);
+      if (moves.length) {
+        const before = moves.map((m) => { const t = c.scene!.tokens.get(m.id)!; return { id: t.id, x: t.x, y: t.y }; });
+        void c.moveTokens(moves, before);
+      }
       return;
     }
 

@@ -9,8 +9,8 @@ import { addLibraryItem, removeLibraryItem, watchLibrary } from '../state/accoun
 import type { TableClient } from '../state/client';
 import type { LibraryItem, Permissions, TokenShape, Vec } from '../types';
 import { Field, Modal, SliderField, Toggle, copyText, toast, useClient, useTheme } from './common';
-import { getTheme, setTheme } from './theme';
-import { TokenCropper, NO_FRAMING, type Framing } from './tokenCropper';
+import { THEMES, getAccent, getTheme, setAccent, setTheme } from './theme';
+import { TokenCropper, NO_FRAMING, type Framing, type PaintApi } from './tokenCropper';
 import { addRecent, getRecent, uploadImage } from './uploads';
 
 const asErr = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -52,6 +52,8 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
   const [preview, setPreview] = useState<string | null>(null);
   const [ringW, setRingW] = useState(0.06);
   const [framing, setFraming] = useState<Framing>({ ...NO_FRAMING });
+  const [imgBg, setImgBg] = useState<string | null>(null);
+  const paintApi = useRef<PaintApi | null>(null);
   const recent = getRecent();
 
   useEffect(() => {
@@ -67,7 +69,18 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
     setBusy(true);
     try {
       let img: string | null = null;
-      if (file) {
+      let fr: Framing = framing;
+      const painted = !!paintApi.current?.hasPaint();
+      if (painted) {
+        // the painting is merged into the picture, so it stays put when the token is resized
+        const blob = await paintApi.current!.bake(chosenUrl, framing, shape);
+        const up = await uploadImage(client, blob, 'token', name || 'token');
+        img = up.url;
+        fr = { ...NO_FRAMING };
+        if (client.isDM && saveLib && client.backend.kind !== 'mock') {
+          await addLibraryItem(client.backend, client.uid, 'tokens', { name: name || 'token', url: up.url, thumb: up.thumb, w: up.w, h: up.h });
+        }
+      } else if (file) {
         const up = await uploadImage(client, file, 'token', name || file.name);
         img = up.url;
         if (client.isDM && saveLib && client.backend.kind !== 'mock') {
@@ -81,7 +94,7 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
       const grid = client.grid;
       const p = grid.snap ? snapTokenCenter(grid, size, props.at) : props.at;
       const id = await client.addToken({
-        x: p.x, y: p.y, name, img, size, shape, ring, ringW, ...framing, hidden: client.isDM && hidden,
+        x: p.x, y: p.y, name, img, size, shape, ring, ringW, ...fr, imgBg, hidden: client.isDM && hidden,
         ownerUid: client.isDM ? (owner || null) : client.uid,
       });
       props.onCreated(id);
@@ -96,7 +109,7 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
     <Modal title="Add token" onClose={props.onClose} width={760}
       footer={<><button class="btn" onClick={props.onClose}>Cancel</button><button class="btn primary" disabled={busy} onClick={create}>{busy ? 'Working…' : 'Add to board'}</button></>}>
       <div class="two-col">
-        <TokenCropper src={chosenUrl} shape={shape} ring={ring} ringW={ringW} name={name} framing={framing} onChange={setFraming} />
+        <TokenCropper src={chosenUrl} shape={shape} ring={ring} ringW={ringW} name={name} framing={framing} onChange={setFraming} bg={imgBg} onBg={setImgBg} paintApi={paintApi} />
         <div>
           <Field label="Name"><input type="text" value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} placeholder="Goblin 1" autoFocus /></Field>
           <div class="row">
@@ -384,20 +397,31 @@ export function SettingsModal(props: { client: TableClient; onClose: () => void;
       <MyProfile client={client} />
 
       <h3>Appearance</h3>
-      <div class="seg">
-        <button class={theme === 'light' ? 'on' : ''} onClick={() => setTheme('light')}>Light</button>
-        <button class={theme === 'dark' ? 'on' : ''} onClick={() => setTheme('dark')}>Dark</button>
+      <p class="muted">These are just for you, in this browser. The map background colour is set per scene in the scene panel (white by default).</p>
+      <div class="theme-grid">
+        {THEMES.map((t) => (
+          <button key={t.id} class={`theme-tile ${theme === t.id ? 'on' : ''}`} onClick={() => setTheme(t.id)}>
+            <div class="sw"><span style={{ background: t.swatch[0] }} /><span style={{ background: t.swatch[1] }} /><span style={{ background: t.swatch[2] }} /></div>
+            <div class="lbl">{t.label}</div>
+          </button>
+        ))}
       </div>
-      <p class="muted">Applies to this browser only. The map background colour is set per scene in the scene panel.</p>
+      <Field label="Accent colour" hint="Buttons and highlights. Leave on the theme's own colour, or pick yours.">
+        <div class="row wrap">
+          <input type="color" value={getAccent() ?? '#4da3ff'} onInput={(e) => setAccent((e.target as HTMLInputElement).value)} />
+          <button class="btn small" disabled={!getAccent()} onClick={() => setAccent(null)}>Use the theme's colour</button>
+        </div>
+      </Field>
 
       <h3>Keyboard &amp; mouse</h3>
       <ul class="keys">
-        <li><kbd>Right-drag</kbd> or <kbd>Space</kbd>+drag — pan</li>
+        <li><kbd>Middle-drag</kbd>, <kbd>Right-drag</kbd> or <kbd>Space</kbd>+drag — pan</li>
         <li><kbd>Wheel</kbd> — zoom, <kbd>0</kbd> — fit the map</li>
-        <li><kbd>Middle-click</kbd> — ping</li>
+        <li>Hold <kbd>left mouse</kbd> on the map or a token for a moment — ping</li>
         <li><kbd>Shift</kbd>+click — multi-select, drag on empty space — box select</li>
         <li><kbd>Alt</kbd> while dragging — move without snapping</li>
-        <li><kbd>Arrows</kbd> — nudge a square, <kbd>Del</kbd> — delete, <kbd>Ctrl</kbd>+<kbd>D</kbd> — duplicate</li>
+        <li><kbd>Arrows</kbd> — nudge a square, <kbd>Del</kbd> — delete</li>
+        <li><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo, <kbd>Ctrl</kbd>+<kbd>Y</kbd> redo, <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>X</kbd> / <kbd>V</kbd> copy, cut, paste tokens</li>
         <li><kbd>V</kbd> select · <kbd>G</kbd> grid · <kbd>F</kbd> fog (DM)</li>
       </ul>
 

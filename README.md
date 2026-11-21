@@ -17,7 +17,10 @@ together with a link. Built for one DM and a handful of trusted friends, hosted 
 - **Permissions:** Trusting (default) / Standard / Strict presets plus individual toggles.
 - **Hidden tokens:** DM-only tokens that players cannot even download. Reveal and hide at will.
 - **Fog of war:** manual, VBM-style. Reveal or hide with boxes, free-form shapes or a brush. Undo, hide all, reveal all, and preview as players.
-- **Pings:** middle-click.
+- **Pings:** hold the left mouse button on the map or a token.
+- **Undo / redo:** Ctrl+Z / Ctrl+Y for token moves, edits, deletes, map moves, grid changes and fog.
+- **Themes:** light (white drawing surface) and dark, plus a few fun ones, and your own accent colour, all in Settings.
+- **Token maker:** drag and zoom the picture, colour behind it, colour dropper, and a paint/erase brush.
 - **Scenes:** prepare a scene privately, then show it to players when ready. Tokens and fog are saved per scene.
 - **Accounts:** Google sign-in for DMs only (allowlist), saved library of maps and token art that follows you between devices.
 
@@ -25,14 +28,15 @@ together with a link. Built for one DM and a handful of trusted friends, hosted 
 
 | | |
 | --- | --- |
-| Pan | right-drag, or Space + drag |
+| Pan | middle-drag, right-drag, or Space + drag |
 | Zoom | mouse wheel (zooms toward the cursor), `0` fits the map |
 | Select | click, Shift+click, or drag a box on empty space |
 | Move | drag (Alt = no snapping). Arrow keys nudge one square |
-| Ping | middle-click |
+| Ping | hold the left mouse button |
 | Menu | right-click a token (or empty space) |
 | Tools | `V` select, `G` grid (DM), `F` fog (DM), `T` new token |
-| Delete / duplicate | `Del`, `Ctrl+D` |
+| Undo / redo | `Ctrl+Z`, `Ctrl+Y` |
+| Copy / cut / paste / delete | `Ctrl+C`, `Ctrl+X`, `Ctrl+V`, `Del` |
 
 ## Run it
 

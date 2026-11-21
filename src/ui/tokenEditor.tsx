@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { TOKEN_SIZES } from '../core/model';
 import type { TableClient } from '../state/client';
 import type { LabelMode, Token, TokenShape } from '../types';
 import { Field, Modal, SliderField, Toggle, toast, useClient } from './common';
-import { NO_FRAMING, PickImage, TokenCropper } from './tokenCropper';
+import { NO_FRAMING, PickImage, TokenCropper, type PaintApi } from './tokenCropper';
 import { uploadImage } from './uploads';
 
 function sizeNote(client: TableClient, size: number): string {
@@ -26,6 +26,7 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const paintApi = useRef<PaintApi | null>(null);
 
   // the token vanished (deleted by someone else): close
   useEffect(() => { if (!t0) props.onClose(); }, [!!t0]);
@@ -55,13 +56,20 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
   const ringW = (draft.ringW ?? t0.ringW) as number;
   const size = (val('size') ?? t0.size) as number;
   const name = (draft.name ?? t0.name) as string;
-  const dirty = Object.keys(draft).length > 0 || !!file;
+  const imgBg = ('imgBg' in draft ? draft.imgBg : t0.imgBg) ?? null;
+  const [paintTouched, setPaintTouched] = useState(false);
+  const dirty = Object.keys(draft).length > 0 || !!file || paintTouched;
 
   async function save() {
     setBusy(true);
     try {
       const patch: Partial<Token> = { ...draft };
-      if (file) {
+      if (!multi && paintApi.current?.hasPaint()) {
+        const blob = await paintApi.current.bake(img, framing, shape);
+        const up = await uploadImage(client, blob, 'token', name || 'token');
+        patch.img = up.url;
+        Object.assign(patch, NO_FRAMING);
+      } else if (file) {
         const up = await uploadImage(client, file, 'token', file.name);
         patch.img = up.url;
       }
@@ -87,7 +95,7 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
         {!multi && (
           <div>
             <TokenCropper src={img} shape={shape} ring={ring} ringW={ringW} name={name} framing={framing} disabled={!editable}
-              onChange={(f) => set(f)} />
+              onChange={(f) => set(f)} bg={imgBg} onBg={(c) => set({ imgBg: c })} paintApi={paintApi} onPaint={() => setPaintTouched(true)} />
             <div class="row wrap" style={{ marginTop: '10px', justifyContent: 'center' }}>
               <PickImage label={img ? 'Replace picture…' : 'Add picture…'} disabled={!editable} onFile={(f) => { setFile(f); set({ ...NO_FRAMING }); }} />
               {img && <button class="btn small" disabled={!editable} onClick={() => { setFile(null); set({ img: null, ...NO_FRAMING }); }}>Remove picture</button>}

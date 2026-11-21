@@ -76,6 +76,8 @@ export interface Token {
   imgScale: number;
   imgX: number;
   imgY: number;
+  /** colour filling the token shape behind the picture (visible where the picture does not reach) */
+  imgBg: string | null;
   ownerUid: string | null;
   /** DM-only token (stored in the DM-only subtree, invisible to players) */
   hidden: boolean;

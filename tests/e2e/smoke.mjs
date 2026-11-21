@@ -112,12 +112,15 @@ check('fog ops sync to player', (await pl.evaluate(() => window.__vtt.client.sce
 await dm.screenshot({ path: '/tmp/shots/04-dm-fog.png' });
 await pl.screenshot({ path: '/tmp/shots/05-player-fog.png' });
 
-// ---- ping with middle click
+// ---- ping by holding the left mouse button
 const pingBefore = await pl.evaluate(() => window.__vtt.board.pings.length);
-await dm.mouse.click(700, 450, { button: 'middle' });
+await dm.mouse.move(700, 450);
+await dm.mouse.down();
+await sleep(800);
+await dm.mouse.up();
 await sleep(500);
 const pingAfter = await pl.evaluate(() => window.__vtt.board.pings.length);
-check('middle-click ping appears on the player screen', pingAfter > pingBefore, `${pingBefore} -> ${pingAfter}`);
+check('hold-to-ping appears on the player screen', pingAfter > pingBefore, `${pingBefore} -> ${pingAfter}`);
 await pl.screenshot({ path: '/tmp/shots/06-player-ping.png' });
 
 // ---- scenes: private scene prep, then switch players over

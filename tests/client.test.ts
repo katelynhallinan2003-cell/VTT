@@ -194,4 +194,71 @@ describe('TableClient over the mock backend', () => {
     await pl.joinAsPlayer('Aria again', '#00ff00');
     await waitFor(() => dm.players.get('p1')?.name === 'Aria again', 'rejoined');
   });
+
+  it('undoes and redoes a token move, a delete and a rename', async () => {
+    const { dm } = await setup();
+    const id = await dm.addToken({ x: 35, y: 35, name: 'Orc', size: 1 }, { record: false });
+    await waitFor(() => !!dm.scene?.tokens.get(id), 'token');
+    const before = [{ id, x: 35, y: 35 }];
+    await dm.moveTokens([{ id, x: 245, y: 105 }], before);
+    await waitFor(() => dm.scene?.tokens.get(id)?.x === 245, 'moved');
+    expect(dm.history.canUndo).toBe(true);
+    await dm.history.undo();
+    await waitFor(() => dm.scene?.tokens.get(id)?.x === 35, 'move undone');
+    await dm.history.redo();
+    await waitFor(() => dm.scene?.tokens.get(id)?.x === 245, 'move redone');
+
+    await dm.updateTokens([id], { name: 'Big Orc' });
+    await waitFor(() => dm.scene?.tokens.get(id)?.name === 'Big Orc', 'renamed');
+    await dm.history.undo();
+    await waitFor(() => dm.scene?.tokens.get(id)?.name === 'Orc', 'rename undone');
+
+    await dm.removeTokens([id]);
+    await waitFor(() => !dm.scene?.tokens.get(id), 'deleted');
+    await dm.history.undo();
+    await waitFor(() => dm.scene?.tokens.get(id)?.name === 'Orc', 'delete undone');
+  });
+
+  it('collapses a burst of the same edit into one undo step', async () => {
+    const { dm } = await setup();
+    const id = await dm.addToken({ x: 35, y: 35, name: 'Slider', size: 1 }, { record: false });
+    await waitFor(() => !!dm.scene?.tokens.get(id), 'token');
+    for (const w of [0.02, 0.04, 0.06, 0.08]) await dm.updateTokens([id], { ringW: w });
+    await waitFor(() => dm.scene?.tokens.get(id)?.ringW === 0.08, 'ring set');
+    await dm.history.undo();
+    await waitFor(() => dm.scene?.tokens.get(id)?.ringW === 0.06 || dm.scene?.tokens.get(id)?.ringW !== 0.08, 'ring undone');
+    expect(dm.scene!.tokens.get(id)!.ringW).not.toBe(0.08);
+    expect(dm.history.canUndo).toBe(false);
+  });
+
+  it('undoes map movement and clears history when the scene changes', async () => {
+    const { dm, sid } = await setup();
+    const x0 = dm.scene!.meta!.mapX;
+    await dm.updateScene({ mapX: x0 + 120 });
+    await waitFor(() => dm.scene?.meta?.mapX === x0 + 120, 'map moved');
+    await dm.history.undo();
+    await waitFor(() => dm.scene?.meta?.mapX === x0, 'map move undone');
+    await dm.updateScene({ mapX: x0 + 5 });
+    expect(dm.history.canUndo).toBe(true);
+    await dm.openScene(sid);
+    expect(dm.history.canUndo).toBe(false);
+  });
+
+  it('copies and pastes tokens at a new spot, leaving the originals alone', async () => {
+    const { dm } = await setup();
+    const a = await dm.addToken({ x: 35, y: 35, name: 'Wolf', size: 1 }, { record: false });
+    const b = await dm.addToken({ x: 105, y: 35, name: 'Wolf', size: 1 }, { record: false });
+    await waitFor(() => !!dm.scene?.tokens.get(a) && !!dm.scene?.tokens.get(b), 'tokens');
+    expect(dm.copyTokens([a, b])).toBe(2);
+    expect(dm.clipboardCount).toBe(2);
+    const ids = await dm.pasteTokens({ x: 600, y: 500 });
+    expect(ids).toHaveLength(2);
+    await waitFor(() => ids.every((i) => !!dm.scene?.tokens.get(i)), 'pasted');
+    expect(dm.scene!.tokens.size).toBe(4);
+    expect(dm.scene!.tokens.get(a)!.x).toBe(35);
+    const xs = ids.map((i) => dm.scene!.tokens.get(i)!.x).sort((p, q) => p - q);
+    expect(xs[1] - xs[0]).toBeCloseTo(70, 0); // kept their spacing
+    await dm.history.undo();
+    await waitFor(() => dm.scene!.tokens.size === 2, 'paste undone');
+  });
 });

@@ -59,7 +59,7 @@ export class TokenView {
   apply(token: Token, ctx: TokenCtx) {
     this.token = token;
     const g = ctx.grid;
-    const key = [token.size, token.shape, token.ring, token.ringW, token.imgScale, token.imgX, token.imgY, token.name ? token.name[0] : '?', g.cell].join('|');
+    const key = [token.size, token.shape, token.ring, token.ringW, token.imgScale, token.imgX, token.imgY, token.imgBg, token.name ? token.name[0] : '?', g.cell].join('|');
     if (key !== this.key) {
       this.key = key;
       this.redraw(token, ctx);
@@ -102,15 +102,16 @@ export class TokenView {
     this.maskG.clear();
     this.ring.clear();
     const noImage = !this.tex;
+    const imgFill = t.imgBg ? hex(t.imgBg) : 0x20232b;
 
     if (t.shape === 'circle') {
-      this.base.circle(0, 0, r).fill(noImage ? hashColor(t.name || t.id) : 0x20232b);
+      this.base.circle(0, 0, r).fill(noImage ? hashColor(t.name || t.id) : imgFill);
       // The clip shape is also drawn (in the same colour as the base), so transparent artwork sits on a dark disc.
-      this.maskG.circle(0, 0, r - ringPx / 2).fill(noImage ? hashColor(t.name || t.id) : 0x20232b);
+      this.maskG.circle(0, 0, r - ringPx / 2).fill(noImage ? hashColor(t.name || t.id) : imgFill);
       if (ringPx > 0) this.ring.circle(0, 0, r - ringPx / 2).stroke({ width: ringPx, color: hex(t.ring) });
     } else if (t.shape === 'square') {
-      this.base.rect(-r, -r, D, D).fill(noImage ? hashColor(t.name || t.id) : 0x20232b);
-      this.maskG.rect(-r + ringPx / 2, -r + ringPx / 2, D - ringPx, D - ringPx).fill(noImage ? hashColor(t.name || t.id) : 0x20232b);
+      this.base.rect(-r, -r, D, D).fill(noImage ? hashColor(t.name || t.id) : imgFill);
+      this.maskG.rect(-r + ringPx / 2, -r + ringPx / 2, D - ringPx, D - ringPx).fill(noImage ? hashColor(t.name || t.id) : imgFill);
       if (ringPx > 0) this.ring.rect(-r + ringPx / 2, -r + ringPx / 2, D - ringPx, D - ringPx).stroke({ width: ringPx, color: hex(t.ring), join: 'miter' });
     } else if (noImage) {
       this.base.circle(0, 0, r).fill(hashColor(t.name || t.id));

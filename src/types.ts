@@ -62,7 +62,7 @@ export interface SceneMeta {
 
 export type TokenShape = 'circle' | 'square' | 'none';
 export type LabelMode = 'all' | 'dm' | 'none';
-/** off = players see nothing, state = bloodied / near death colouring, bar = a bar as well (never the numbers) */
+/** off = players see nothing, state = bloodied / near death colouring only, bar = that colouring plus a health bar (never the numbers) */
 export type HpShow = 'off' | 'state' | 'bar';
 export type HealthState = 'ok' | 'bloodied' | 'mortal' | 'down';
 
@@ -90,6 +90,8 @@ export interface Token {
   /** hit points. Only the DM ever receives these (they live in the DM-only part of the database). */
   hp: number | null;
   maxHp: number | null;
+  /** temporary hit points: soaked up before real ones, never healed, and not counted against the maximum. DM only. */
+  tempHp: number;
   /** what players get to see of this token's health */
   hpShow: HpShow;
   /** health as a whole percentage, for players. Written only when `hpShow` is not 'off'. */

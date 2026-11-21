@@ -88,6 +88,7 @@ export function normalizeToken(id: string, raw: any, hidden: boolean): Token {
     imgBg: typeof t.imgBg === 'string' ? t.imgBg : null,
     auras: normalizeAuras(t.auras),
     ...cleanHpFields(t),
+    tempHp: 0,
     hpShow: hpShowOf(t.hpShow, typeof t.ownerUid === 'string'),
     hpPct: typeof t.hpPct === 'number' && Number.isFinite(t.hpPct) ? Math.min(100, Math.max(0, Math.round(t.hpPct))) : null,
     sight: Math.min(1000, Math.max(0, num(t.sight, 0))),
@@ -178,7 +179,7 @@ export function normalizeLive(uid: string, raw: any): LivePlot | null {
 /** Serialise a token for the database. `hidden` is implied by which subtree it lives in. */
 export function tokenToWire(t: Token): Record<string, unknown> {
   // hp and maxHp are deliberately left out: they live in the DM-only part of the database
-  const { id: _id, hidden: _hidden, hp: _hp, maxHp: _maxHp, ...rest } = t;
+  const { id: _id, hidden: _hidden, hp: _hp, maxHp: _maxHp, tempHp: _tempHp, ...rest } = t;
   return stripUndefined({
     ...rest,
     img: t.img ?? undefined,

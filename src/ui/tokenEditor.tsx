@@ -24,6 +24,8 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
   const t0 = tokens[0];
   const multi = tokens.length > 1;
   const [draft, setDraft] = useState<Partial<Token>>({});
+  // the picture tools (paint, erase, auto select, behind-picture colour, shape, ring thickness) start tucked away for a token that already has a picture
+  const [tools, setTools] = useState(() => !t0?.img);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -61,6 +63,7 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
   const imgBg = ('imgBg' in draft ? draft.imgBg : t0.imgBg) ?? null;
   const hpVal = ('hp' in draft ? draft.hp : t0.hp) ?? null;
   const maxHpVal = ('maxHp' in draft ? draft.maxHp : t0.maxHp) ?? null;
+  const tempVal = ('tempHp' in draft ? draft.tempHp : t0.tempHp) ?? 0;
   const [paintTouched, setPaintTouched] = useState(false);
   const dirty = Object.keys(draft).length > 0 || !!file || paintTouched;
 
@@ -98,11 +101,14 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
       <div class={multi ? '' : 'two-col'}>
         {!multi && (
           <div>
-            <TokenCropper src={img} shape={shape} ring={ring} ringW={ringW} name={name} framing={framing} disabled={!editable}
+            <TokenCropper src={img} shape={shape} ring={ring} ringW={ringW} name={name} framing={framing} disabled={!editable} tools={tools}
               onChange={(f) => set(f)} bg={imgBg} onBg={(c) => set({ imgBg: c })} paintApi={paintApi} onPaint={() => setPaintTouched(true)} />
             <div class="row wrap" style={{ marginTop: '10px', justifyContent: 'center' }}>
               <PickImage label={img ? 'Replace picture…' : 'Add picture…'} disabled={!editable} onFile={(f) => { setFile(f); set({ ...NO_FRAMING }); }} />
               {img && <button class="btn small" disabled={!editable} onClick={() => { setFile(null); set({ img: null, ...NO_FRAMING }); }}>Remove picture</button>}
+              <button class={`btn small ${tools ? 'primary' : ''}`} title="Show or hide the painting, erasing, shape and ring thickness tools" onClick={() => setTools((v) => !v)}>
+                {tools ? 'Hide picture tools' : 'Picture tools…'}
+              </button>
             </div>
           </div>
         )}
@@ -120,15 +126,21 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
                 {TOKEN_SIZES.map((s) => <option value={s.size}>{s.label}</option>)}
               </select>
             </Field>
-            <Field label="Shape">
-              <select disabled={!editable} value={val('shape') ?? ''} onChange={(e) => set({ shape: (e.target as HTMLSelectElement).value as TokenShape })}>
-                {val('shape') === null && <option value="">Mixed</option>}
-                <option value="circle">Circle</option><option value="square">Square</option><option value="none">No frame</option>
-              </select>
-            </Field>
             <Field label="Ring"><input type="color" disabled={!editable} value={ring} onInput={(e) => set({ ring: (e.target as HTMLInputElement).value })} /></Field>
           </div>
-          <SliderField label="Ring thickness" value={Math.round(ringW * 100)} min={0} max={20} step={1} unit="%" onInput={(v) => editable && set({ ringW: v / 100 })} />
+          {(tools || multi) && (
+            <>
+              <div class="row">
+                <Field label="Shape">
+                  <select disabled={!editable} value={val('shape') ?? ''} onChange={(e) => set({ shape: (e.target as HTMLSelectElement).value as TokenShape })}>
+                    {val('shape') === null && <option value="">Mixed</option>}
+                    <option value="circle">Circle</option><option value="square">Square</option><option value="none">No frame</option>
+                  </select>
+                </Field>
+              </div>
+              <SliderField label="Ring thickness" value={Math.round(ringW * 100)} min={0} max={20} step={1} unit="%" onInput={(v) => editable && set({ ringW: v / 100 })} />
+            </>
+          )}
 
           <Field label="Name shown on the board">
             <select disabled={!editable} value={val('label') ?? ''} onChange={(e) => set({ label: (e.target as HTMLSelectElement).value as LabelMode })}>
@@ -165,14 +177,18 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
                     <input type="number" min={1} value={maxHpVal ?? ''} placeholder="Max" disabled={!editable}
                       onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ maxHp: v === '' ? null : Number(v) }); }} />
                   </Field>
+                  <Field label="Temp HP" hint="Soaks up damage first. Can go past the maximum.">
+                    <input type="number" min={0} value={tempVal || ''} placeholder="0" disabled={!editable || hpVal == null}
+                      onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ tempHp: v === '' ? 0 : Math.max(0, Number(v)) }); }} />
+                  </Field>
                 </div>
               )}
-              <Field label="Players see" hint="Players only ever get a percentage, never the numbers.">
+              <Field label="What players see of its health" hint="Players never see the numbers, only what this setting shows.">
                 <select disabled={!editable} value={val('hpShow') ?? ''} onChange={(e) => set({ hpShow: (e.target as HTMLSelectElement).value as HpShow })}>
                   {val('hpShow') === null && <option value="">Mixed</option>}
-                  <option value="off">Nothing about its health</option>
-                  <option value="state">Bloodied and near-death colouring</option>
-                  <option value="bar">A health bar as well</option>
+                  <option value="off">Nothing at all</option>
+                  <option value="state">Colour only: orange when bloodied, red when near death (no bar)</option>
+                  <option value="bar">Colour and a health bar (no numbers)</option>
                 </select>
               </Field>
               <h4>Sight</h4>

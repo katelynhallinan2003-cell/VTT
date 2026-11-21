@@ -6,15 +6,19 @@ import type { UiState } from '../state/ui';
 import type { InitEntry, Token } from '../types';
 import { Modal, Toggle, toast, useClient, useUi } from './common';
 
-/** A thin health bar, coloured by how hurt the creature is. */
-export function HpBar(props: { pct: number; width?: number }) {
+/** A thin health bar, coloured by how hurt the creature is. Temporary hit points show as a blue strip along the top (as a share of the maximum). */
+export function HpBar(props: { pct: number; width?: number; temp?: number }) {
   const col = HEALTH_COLOR[healthState(props.pct)];
   return (
     <span class="hpbar" style={{ width: props.width ? `${props.width}px` : undefined }} title={HEALTH_LABEL[healthState(props.pct)]}>
       <i style={{ width: `${Math.max(0, Math.min(100, props.pct))}%`, background: col }} />
+      {props.temp != null && props.temp > 0 && <b class="hpbar-temp" style={{ width: `${Math.min(100, props.temp)}%` }} />}
     </span>
   );
 }
+
+/** What fraction of its maximum a token's temporary hit points are, as a percentage. */
+export const tempPct = (t: Pick<Token, 'tempHp' | 'maxHp'>): number => (t.maxHp ? (t.tempHp / t.maxHp) * 100 : 0);
 
 /** "7" or "-7" is damage, "+7" is healing. Returns the amount to take off (negative heals). */
 export function parseDamage(text: string): number | null {
@@ -150,14 +154,15 @@ function InitRow(props: {
       </div>
       {hasHp && token && (
         <div class="init-sub">
-          <HpBar pct={pct ?? 0} width={70} />
-          <span class="init-hp">{token.hp}/{token.maxHp}</span>
+          <HpBar pct={pct ?? 0} width={70} temp={tempPct(token)} />
+          <span class="init-hp">{token.hp}/{token.maxHp}{token.tempHp > 0 && <span class="temp-hp" title="Temporary hit points"> +{token.tempHp}</span>}</span>
           <span class="init-dmg">
             <input type="text" inputMode="numeric" placeholder="HP ±" value={dmg} title="Type a number, then − to hurt or + to heal. Enter hurts, or heals when you start with +."
               onInput={(ev) => setDmg((ev.target as HTMLInputElement).value)}
               onKeyDown={(ev) => { if (ev.key === 'Enter') applyDamage(0); ev.stopPropagation(); }} />
             <button class="icon-btn" title="Damage" onClick={() => applyDamage(1)}>−</button>
             <button class="icon-btn" title="Heal" onClick={() => applyDamage(-1)}>+</button>
+            <button class="icon-btn" title="Give temporary hit points (you keep the higher of the old and new amount)" onClick={() => { const n = parseDamage(dmg.replace(/^[+-]/, '')); if (n != null && token) { void client.giveTemp([token.id], Math.abs(n)); setDmg(''); } }}>T</button>
           </span>
         </div>
       )}

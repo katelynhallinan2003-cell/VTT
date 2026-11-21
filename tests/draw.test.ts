@@ -4,6 +4,7 @@ import {
   beamWidthPx, dashSegments, distToSegment, drawingBounds, fillModeOf, fitPenPoints, handlesOf, hitDrawing, joinPts, movedPoints, parsePts, pointInPoly,
   resizeDrawing, simplify, sizeFt, snapToEdgeMid, snapTemplate, templateFt, templateGeom, templateLabel, textMetrics, withSizeFt, MAX_PEN_POINTS,
 } from '../src/core/draw';
+import { cellPoly, coveredCells } from '../src/core/cells';
 import type { Drawing } from '../src/types';
 
 const grid = { ...DEFAULT_GRID, cell: 100, ft: 5 };
@@ -64,8 +65,8 @@ describe('spell templates', () => {
     expect(templateLabel('cone', grid, a, { x: 300, y: 0 }, 5)).toBe('15 ft cone');
     expect(templateLabel('beam', grid, a, { x: 600, y: 0 }, 10)).toBe('30 ft × 10 ft line');
   });
-  it('snaps the origin to a corner and the length to whole squares', () => {
-    const s = snapTemplate(grid, { x: 108, y: 93 }, { x: 441, y: 98 }, { origin: true, length: true });
+  it('snaps the origin to a corner (when asked) and the length to whole squares', () => {
+    const s = snapTemplate(grid, { x: 108, y: 93 }, { x: 441, y: 98 }, { origin: true, length: true, sphereAt: 'corner' });
     expect(s.a).toEqual({ x: 100, y: 100 });
     expect(Math.hypot(s.b.x - s.a.x, s.b.y - s.a.y)).toBeCloseTo(300);
   });
@@ -167,8 +168,9 @@ describe('spell templates on the grid (2024 rules)', () => {
     // never smaller than one square past the edge
     expect(templateFt(grid, s.a, T('emanation', { x: 130, y: 60 }, { x: 160, y: 50 }).b, 'emanation')).toBe(5);
   });
-  it('a sphere still starts on a corner', () => {
-    expect(T('sphere', { x: 108, y: 93 }, { x: 441, y: 98 }).a).toEqual({ x: 100, y: 100 });
+  it('a sphere starts in the middle of a square, or on a corner when asked', () => {
+    expect(T('sphere', { x: 108, y: 93 }, { x: 441, y: 98 }).a).toEqual({ x: 150, y: 50 });
+    expect(T('sphere', { x: 108, y: 93 }, { x: 441, y: 98 }, { sphereAt: 'corner' }).a).toEqual({ x: 100, y: 100 });
   });
   it('a cube lines up with the squares it covers, odd or even', () => {
     const odd = T('cube', { x: 105, y: 240 }, { x: 405, y: 240 }); // 3 squares wide
@@ -297,5 +299,40 @@ describe('normalisers', () => {
     expect(normalizeLive('u', { ruler: { ax: 1, ay: 2, bx: 3, by: 4, c: '#ff0000' } })!.ruler!.c).toBe('#ff0000');
     expect(normalizeLive('u', { ruler: { ax: 1, ay: 2, bx: 3, by: 4, c: 'nope' } })!.ruler!.c).toBeUndefined();
     expect(normalizeLive('u', { ghosts: { t1: { x: 5, y: 6 } } })!.ghosts.t1).toEqual({ x: 5, y: 6 });
+  });
+});
+
+describe('squares a template covers', () => {
+  const cells = (kind: any, a: any, b: any, w = 100) => coveredCells(grid, kind, a, b, w);
+  it('a sphere from the middle of a square lights the usual plus-shaped blobs', () => {
+    const c = { x: 550, y: 550 };
+    expect(cells('sphere', c, { x: 650, y: 550 })).toHaveLength(5); // 5 ft
+    expect(cells('sphere', c, { x: 750, y: 550 })).toHaveLength(13); // 10 ft
+    expect(cells('sphere', c, { x: 850, y: 550 })).toHaveLength(29); // 15 ft
+    expect(cells('sphere', c, { x: 950, y: 550 })).toHaveLength(49); // 20 ft
+  });
+  it('a sphere on a corner covers a clean block', () => {
+    const n = cells('sphere', { x: 500, y: 500 }, { x: 600, y: 500 }).length; // 5 ft from a corner: the four squares around it
+    expect(n).toBe(4);
+  });
+  it('an emanation leaves out its own square', () => {
+    const all = cells('emanation', { x: 550, y: 550 }, { x: 750, y: 550 });
+    expect(all.some((p) => p.x === 550 && p.y === 550)).toBe(false);
+    expect(all).toHaveLength(12); // the 10 ft blob of 13, without the middle one
+  });
+  it('a cube covers whole squares', () => {
+    expect(cells('cube', { x: 500, y: 550 }, { x: 800, y: 550 })).toHaveLength(9); // 15 ft cube: 3 x 3
+  });
+  it('a line covers the squares along it', () => {
+    expect(cells('beam', { x: 500, y: 550 }, { x: 900, y: 550 }, 100)).toHaveLength(4);
+    expect(cells('beam', { x: 500, y: 600 }, { x: 900, y: 600 }, 200)).toHaveLength(8);
+  });
+  it('a cone lights a widening triangle of squares', () => {
+    const n = cells('cone', { x: 500, y: 550 }, { x: 800, y: 550 }).length; // 15 ft cone
+    expect(n).toBeGreaterThanOrEqual(5);
+    expect(n).toBeLessThanOrEqual(9);
+  });
+  it('lists the corners of a square', () => {
+    expect(cellPoly(grid, { x: 150, y: 50 })).toEqual([{ x: 100, y: 0 }, { x: 200, y: 0 }, { x: 200, y: 100 }, { x: 100, y: 100 }]);
   });
 });

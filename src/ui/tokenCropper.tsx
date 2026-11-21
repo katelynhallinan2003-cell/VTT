@@ -83,6 +83,8 @@ export function TokenCropper(props: {
   paintApi?: { current: PaintApi | null };
   /** called when the painting changes (so a Save button can light up) */
   onPaint?: () => void;
+  /** show the painting, erasing and colour-behind tools (default yes). The picture can always be moved and zoomed. */
+  tools?: boolean;
 }) {
   const [nat, setNat] = useState<{ w: number; h: number } | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -290,6 +292,8 @@ export function TokenCropper(props: {
   }, [erased, imgEl, props.shape, props.framing.imgScale, props.framing.imgX, props.framing.imgY]);
 
   useEffect(() => { updateCursor({ clientX: 0, clientY: 0 }, false); }, [mode]);
+  const showTools = props.tools !== false;
+  useEffect(() => { if (!showTools) setMode('move'); }, [showTools]);
 
   const D = FRAME;
   const f = props.framing;
@@ -379,7 +383,7 @@ export function TokenCropper(props: {
     : mode === 'paint' ? 'Paint sits on top of the picture and is saved into it.'
     : mode === 'erasePaint' ? 'Rubs out your paint. The picture underneath stays.'
     : mode === 'eraseImage' ? 'Cuts parts out of the picture itself. Place and zoom the picture first.'
-    : 'Click a part of the picture to select it. Drag away from the click to select more, back toward it to select less. Shift-click adds to the selection.';
+    : '';
 
   return (
     <div class="cropper">
@@ -421,46 +425,61 @@ export function TokenCropper(props: {
       ) : (
         <div class="muted small">No picture yet. Add one, then drag it into place.</div>
       )}
-      <div class="crop-tools stack-tools">
-        <div class="seg wrap">
-          {modeBtn('move', 'Move', 'Drag the picture around')}
-          {modeBtn('paint', 'Paint', 'Paint over the token')}
-          {modeBtn('erasePaint', 'Erase paint', 'Rub out your painting')}
-          {modeBtn('eraseImage', 'Erase image', 'Cut parts out of the picture itself', noEdit || imgErr)}
-          {modeBtn('wand', 'Wand', 'Select an area by colour, then paint or erase just inside it', noEdit || imgErr)}
-        </div>
-      </div>
-      <div class="crop-tools brush-row">
-        {mode !== 'move' && (
-          <>
-            {mode === 'paint' && <ColorPick value={brush} onChange={setBrush} label="Brush colour" />}
-            {brushMode && <span class="muted small">Size</span>}
-            {brushMode && <input type="range" min={4} max={140} value={brushSize} onInput={(e) => setBrushSize(Number((e.target as HTMLInputElement).value))} title="Brush size" />}
-            {mode === 'wand' && (
+      {showTools && (
+        <>
+          <div class="crop-tools stack-tools">
+            <div class="seg wrap">
+              {modeBtn('move', 'Move', 'Drag the picture around')}
+              {modeBtn('paint', 'Paint', 'Paint over the token')}
+              {modeBtn('erasePaint', 'Erase paint', 'Rub out your painting')}
+              {modeBtn('eraseImage', 'Erase image', 'Cut parts out of the picture itself', noEdit || imgErr)}
+              {modeBtn('wand', 'Auto select', 'Select an area by colour, then paint or erase just inside it', noEdit || imgErr)}
+            </div>
+          </div>
+          <div class="crop-tools brush-row">
+            {mode !== 'move' && (
               <>
-                <span class="muted small" title="How different a colour can be and still be selected">Sensitivity</span>
-                <input type="range" min={0} max={100} value={sens} title="Sensitivity" onInput={(e) => { const v = Number((e.target as HTMLInputElement).value); setSens(v); runWand(v); }} />
-                <span class="small num">{sens}%</span>
+                {mode === 'paint' && <ColorPick value={brush} onChange={setBrush} label="Brush colour" />}
+                {brushMode && <span class="muted small">Size</span>}
+                {brushMode && <input type="range" min={4} max={140} value={brushSize} onInput={(e) => setBrushSize(Number((e.target as HTMLInputElement).value))} title="Brush size" />}
+                {mode === 'wand' && (
+                  <>
+                    <span class="muted small" title="How different a colour can be and still be selected">Sensitivity</span>
+                    <input type="range" min={0} max={100} value={sens} title="Sensitivity" onInput={(e) => { const v = Number((e.target as HTMLInputElement).value); setSens(v); runWand(v); }} />
+                    <span class="small num">{sens}%</span>
+                  </>
+                )}
+                {brushMode && <button class="btn small" disabled={snaps.current.length === 0} onClick={undoStroke}>Undo stroke</button>}
+                {(mode === 'paint' || mode === 'erasePaint') && <button class="btn small" onClick={clearPaint}>Clear paint</button>}
+                {mode === 'eraseImage' && <button class="btn small" disabled={!erased} onClick={restoreImage}>Restore image</button>}
+                {selUi.on && (
+                  <span class="sel-row">
+                    <span class="muted small">{selUi.inv ? 'Working outside the selection' : 'Working inside the selection'}</span>
+                    <button class="btn small" onClick={invertSelection}>Invert</button>
+                    <button class="btn small" onClick={dropSelection}>Deselect</button>
+                  </span>
+                )}
               </>
             )}
-            {brushMode && <button class="btn small" disabled={snaps.current.length === 0} onClick={undoStroke}>Undo stroke</button>}
-            {(mode === 'paint' || mode === 'erasePaint') && <button class="btn small" onClick={clearPaint}>Clear paint</button>}
-            {mode === 'eraseImage' && <button class="btn small" disabled={!erased} onClick={restoreImage}>Restore image</button>}
-            {selUi.on && (
-              <span class="sel-row">
-                <span class="muted small">{selUi.inv ? 'Working outside the selection' : 'Working inside the selection'}</span>
-                <button class="btn small" onClick={invertSelection}>Invert</button>
-                <button class="btn small" onClick={dropSelection}>Deselect</button>
-              </span>
-            )}
-          </>
-        )}
-      </div>
-      <div class="crop-tools">
-        <span class="muted small" title="Fills the token behind the picture, so zooming out leaves a colour instead of a gap">Behind picture</span>
-        <ColorPick value={props.bg ?? '#20232b'} onChange={(c) => props.onBg(c)} label="Colour behind the picture" onClear={props.bg ? () => props.onBg(null) : undefined} />
-      </div>
-      <div class="muted small">{imgErr && needsImg ? "This picture's host doesn't let the editor read it, so it can't be selected or cut." : hint}</div>
+          </div>
+          <div class="crop-tools">
+            <span class="muted small" title="Fills the token behind the picture, so zooming out leaves a colour instead of a gap">Behind picture</span>
+            <ColorPick value={props.bg ?? '#20232b'} onChange={(c) => props.onBg(c)} label="Colour behind the picture" onClear={props.bg ? () => props.onBg(null) : undefined} />
+          </div>
+          {imgErr && needsImg
+            ? <div class="muted small">This picture's host doesn't let the editor read it, so it can't be selected or cut.</div>
+            : mode === 'wand'
+              ? (
+                <ul class="wand-tips">
+                  <li><strong>Click</strong> a part of the picture to select it.</li>
+                  <li><strong>Hold and drag</strong> away from where you clicked to select more, back toward it to select less.</li>
+                  <li><strong>Shift + click</strong> adds another area to the selection.</li>
+                  <li>Then <strong>Paint</strong>, <strong>Erase paint</strong> or <strong>Erase image</strong> only work inside it. <strong>Invert</strong> flips that to the outside.</li>
+                </ul>
+              )
+              : <div class="muted small">{hint}</div>}
+        </>
+      )}
       <span hidden>{paintTick}</span>
     </div>
   );

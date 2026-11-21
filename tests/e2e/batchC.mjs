@@ -86,7 +86,7 @@ await sleep(200);
 await dm.keyboard.press('e');
 await dm.waitForSelector('.modal');
 await dm.locator('.modal input[placeholder="Max"]').fill('12');
-await dm.locator('.modal select').filter({ hasText: 'Nothing about its health' }).selectOption('off');
+await dm.locator('.modal select').filter({ hasText: 'Nothing at all' }).selectOption('off');
 await dm.screenshot({ path: '/tmp/shots/72-token-editor-health.png' });
 await dm.locator('.modal-foot .btn.primary').click();
 await sleep(400);

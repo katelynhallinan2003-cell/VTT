@@ -39,6 +39,16 @@ export function cleanHp(hp: number | null | undefined, max: number | null | unde
   return { hp: Math.min(m, Math.max(0, h)), max: m };
 }
 
+/**
+ * Apply damage (positive) or healing (negative) to hit points and temporary hit points.
+ * Temp hit points take the damage first. Healing is capped at the maximum and leaves temp hit points alone.
+ */
+export function applyDamage(hp: number, max: number, temp: number, amount: number): { hp: number; tempHp: number } {
+  if (amount <= 0) return { hp: Math.min(max, Math.max(0, hp - amount)), tempHp: temp };
+  const soaked = Math.min(temp, amount);
+  return { hp: Math.max(0, hp - (amount - soaked)), tempHp: temp - soaked };
+}
+
 // ---------------------------------------------------------------- initiative
 const STEP = 1000;
 
@@ -136,7 +146,10 @@ export function visionCircles(
   return out;
 }
 
-/** Longest walk (in squares) that the explored trail follows as a path; longer jumps only reveal where the token landed. */
-export const EXPLORE_PATH_CELLS = 12;
 /** Moves shorter than this (in squares) do not add to the explored ground. */
 export const EXPLORE_MIN_CELLS = 0.4;
+/** A position change at least this many squares long, after the token had been still for a moment, counts as a teleport. */
+export const EXPLORE_TELEPORT_CELLS = 2;
+export const EXPLORE_TELEPORT_MS = 400;
+/** A single position change this long is a teleport however fast it came (a drag never covers this much between two updates). */
+export const EXPLORE_JUMP_CELLS = 12;

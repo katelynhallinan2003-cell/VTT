@@ -38,6 +38,10 @@ await dm.keyboard.press('e');
 await dm.waitForSelector('.crop-stage');
 await sleep(500);
 
+check('the picture tools start tucked away for a token that has a picture', (await dm.locator('.modal .seg button', { hasText: 'Erase image' }).count()) === 0 && (await dm.locator('.modal .field-label, .modal label', { hasText: 'Ring thickness' }).count()) === 0);
+check('but size and ring colour stay', (await dm.locator('.modal label, .modal .field-label', { hasText: /^Size/ }).count()) > 0);
+await dm.locator('.modal .btn', { hasText: 'Picture tools' }).click();
+await sleep(150);
 const modeBtn = (t) => dm.locator('.modal .seg button', { hasText: new RegExp(`^${t}$`) });
 const frame = async () => dm.locator('.modal .crop-frame').boundingBox();
 const alphaAt = (sel, fx, fy) => dm.locator(`.modal ${sel}`).evaluate((c, [fx, fy]) => {
@@ -55,8 +59,9 @@ async function swipe(f0, f1, steps = 8) {
   await dm.mouse.move(a.x, a.y); await dm.mouse.down(); await dm.mouse.move(b.x, b.y, { steps }); await dm.mouse.up();
 }
 
+check('opening the tools shows shape and ring thickness again', (await dm.locator('.modal', { hasText: 'Ring thickness' }).count()) === 1);
 check('the editor has five tools', (await dm.locator('.modal .seg button').count()) >= 5);
-for (const t of ['Move', 'Paint', 'Erase paint', 'Erase image', 'Wand']) check(`has a ${t} button`, (await modeBtn(t).count()) === 1);
+for (const t of ['Move', 'Paint', 'Erase paint', 'Erase image', 'Auto select']) check(`has a ${t} button`, (await modeBtn(t).count()) === 1);
 
 // brush-size circle instead of a cross
 await modeBtn('Paint').click();
@@ -104,7 +109,7 @@ await sleep(100);
 check('Restore image puts it all back', (await dm.locator('.modal .crop-frame > img').evaluate((e) => getComputedStyle(e).display)) !== 'none');
 
 // magic wand
-await modeBtn('Wand').click();
+await modeBtn('Auto select').click();
 const yellow = await at(0.25, 0.5);
 await dm.mouse.click(yellow.x, yellow.y);
 await sleep(100);
@@ -145,7 +150,7 @@ await dm.locator('.modal .sel-row .btn', { hasText: 'Deselect' }).click();
 await modeBtn('Restore image').count();
 await dm.locator('.modal .brush-row .btn', { hasText: 'Restore image' }).click();
 check('deselect clears the outline', (await dm.locator('.modal .sel-row').count()) === 0 && (await countAlpha('.sel-layer')) === 0);
-await modeBtn('Wand').click();
+await modeBtn('Auto select').click();
 const seed = await at(0.25, 0.5);
 await dm.mouse.move(seed.x, seed.y); await dm.mouse.down();
 await dm.mouse.move(seed.x + 6, seed.y, { steps: 2 });

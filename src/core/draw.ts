@@ -2,6 +2,9 @@
 import type { Drawing, DrawKind, GridSettings, Rect, Vec } from '../types';
 import { snapToCellCenter, snapToCorner } from './geometry';
 
+/** Where a sphere's centre sits: the middle of a square, a grid corner, or wherever you put it. */
+export type SphereSnap = 'center' | 'corner' | 'off';
+
 export const TEMPLATE_KINDS: DrawKind[] = ['cone', 'cube', 'sphere', 'emanation', 'beam'];
 export const isTemplate = (k: DrawKind) => TEMPLATE_KINDS.includes(k);
 /** shapes made from two points (start and end) */
@@ -187,10 +190,10 @@ export function snapToEdgeMid(grid: GridSettings, p: Vec): Vec {
  * Where a template starts on the grid, by the 2024 rules and what players expect at the table:
  * - cone, cube, line: the middle of a square's edge (a cone comes out of the side of the caster's square)
  * - emanation: the middle of a square (it comes out of the creature standing there, and is measured from its edge)
- * - sphere: a corner, so a 20 ft fireball covers a clean block of squares
+ * - sphere: the middle of a square by default (the point it bursts from), or a corner, as chosen
  */
-export function snapTemplateOrigin(grid: GridSettings, kind: DrawKind | undefined, p: Vec): Vec {
-  if (!kind || kind === 'sphere') return snapToCorner(grid, p);
+export function snapTemplateOrigin(grid: GridSettings, kind: DrawKind | undefined, p: Vec, sphereAt: SphereSnap = 'center'): Vec {
+  if (!kind || kind === 'sphere') return sphereAt === 'corner' ? snapToCorner(grid, p) : snapToCellCenter(grid, p);
   if (kind === 'emanation') return snapToCellCenter(grid, p);
   return snapToEdgeMid(grid, p);
 }
@@ -203,10 +206,10 @@ export function snapTemplateOrigin(grid: GridSettings, kind: DrawKind | undefine
  * A cube leans square onto the grid when it points roughly along a row or column, and so does a straight line,
  * so the squares they cover are whole ones.
  */
-export function snapTemplate(grid: GridSettings, a: Vec, b: Vec, opts: { origin: boolean; length: boolean; angleStep?: number; kind?: DrawKind; widthPx?: number }): { a: Vec; b: Vec } {
+export function snapTemplate(grid: GridSettings, a: Vec, b: Vec, opts: { origin: boolean; length: boolean; angleStep?: number; kind?: DrawKind; widthPx?: number; sphereAt?: SphereSnap }): { a: Vec; b: Vec } {
   const kind = opts.kind;
   const cell = grid.cell;
-  let A = opts.origin ? snapTemplateOrigin(grid, kind, a) : a;
+  let A = opts.origin ? snapTemplateOrigin(grid, kind, a, opts.sphereAt) : a;
   let ang = Math.atan2(b.y - A.y, b.x - A.x);
   let L = Math.hypot(b.x - A.x, b.y - A.y);
   if (opts.angleStep) ang = Math.round(ang / opts.angleStep) * opts.angleStep;

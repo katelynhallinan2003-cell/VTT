@@ -151,6 +151,17 @@ export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
           </select>
         </label>
       )}
+      {d.tplKind === 'sphere' && (
+        <>
+          <span class="field-label">Snap the centre to</span>
+          <div class="seg wrap">
+            {([['center', 'Middle of a square'], ['corner', 'Corner'], ['off', 'Nothing']] as const).map(([k, label]) => (
+              <button key={k} class={d.tplSphereSnap === k ? 'on' : ''} onClick={() => ui.set({ tplSphereSnap: k })}>{label}</button>
+            ))}
+          </div>
+        </>
+      )}
+      <Toggle checked={d.tplCover} onChange={(v) => ui.set({ tplCover: v })} label="Show the squares it covers" hint="A square counts when its middle is inside the area." />
       <p class="hint">{t.hint} Sizes snap to whole squares (hold Alt to turn that off, Shift to lock the angle).</p>
       <div class="row wrap">
         <button class="btn small" onClick={async () => { const n = await client.clearDrawings((x) => isTemplate(x.k), 'Clear templates'); toast(n ? `Cleared ${n} template${n > 1 ? 's' : ''}` : 'No templates to clear', 'info', 1800); }}>

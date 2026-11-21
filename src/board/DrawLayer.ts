@@ -1,5 +1,6 @@
 import { Container, Graphics, Text } from 'pixi.js';
 import { LINE_H, beamWidthPx, dashSegments, drawingBounds, fontStack, isTemplate, parsePts, templateGeom, textMetrics } from '../core/draw';
+import { cellPoly, coveredCells } from '../core/cells';
 import type { DrawKind, Drawing, GridSettings, Vec } from '../types';
 
 const hex = (c: string) => parseInt(c.replace('#', '').padEnd(6, '0').slice(0, 6), 16) || 0;
@@ -39,7 +40,7 @@ function ellipsePts(cx: number, cy: number, rx: number, ry: number): Vec[] {
 }
 
 /** Paint a shape onto a Graphics object. Text is handled separately by DrawLayer. */
-export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1) {
+export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1, cover = false) {
   const pts = s.pts;
   if (!pts.length) return;
   const col = hex(s.color);
@@ -50,12 +51,17 @@ export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1)
     if (pts.length < 2) return;
     const geom = templateGeom(s.k, pts[0], pts[1], beamWidthPx(grid, s.bw));
     const fillA = (s.fill > 0 ? s.fill : TEMPLATE_FILL) * alpha;
-    if (geom.type === 'circle') g.circle(geom.c.x, geom.c.y, Math.max(0.5, geom.r)).fill({ color: fcol, alpha: fillA });
-    else g.poly(geom.pts.flatMap((p) => [p.x, p.y])).fill({ color: fcol, alpha: fillA });
-    // an emanation does not include the square it comes out of
-    if (s.k === 'emanation' && geom.type === 'circle') {
-      const h = grid.cell / 2;
-      g.rect(geom.c.x - h, geom.c.y - h, grid.cell, grid.cell).cut();
+    if (cover) {
+      // light up the squares the area covers (the area itself is left unfilled so the squares read clearly)
+      for (const c of coveredCells(grid, s.k, pts[0], pts[1], beamWidthPx(grid, s.bw))) g.poly(cellPoly(grid, c).flatMap((p) => [p.x, p.y])).fill({ color: fcol, alpha: Math.max(0.5, fillA) * alpha });
+    } else {
+      if (geom.type === 'circle') g.circle(geom.c.x, geom.c.y, Math.max(0.5, geom.r)).fill({ color: fcol, alpha: fillA });
+      else g.poly(geom.pts.flatMap((p) => [p.x, p.y])).fill({ color: fcol, alpha: fillA });
+      // an emanation does not include the square it comes out of
+      if (s.k === 'emanation' && geom.type === 'circle') {
+        const h = grid.cell / 2;
+        g.rect(geom.c.x - h, geom.c.y - h, grid.cell, grid.cell).cut();
+      }
     }
     if (geom.type === 'circle') g.circle(geom.c.x, geom.c.y, Math.max(0.5, geom.r)).stroke({ ...stroke, width: Math.max(2, s.w) });
     else g.poly(geom.pts.flatMap((p) => [p.x, p.y]), true).stroke({ ...stroke, width: Math.max(2, s.w) });
@@ -129,8 +135,8 @@ export class DrawLayer {
   private items = new Map<string, Item>();
   private grid = '';
 
-  sync(list: Drawing[], grid: GridSettings, textRes: number) {
-    const gridSig = `${grid.cell}|${grid.ft}`;
+  sync(list: Drawing[], grid: GridSettings, textRes: number, cover = false) {
+    const gridSig = `${grid.cell}|${grid.ft}|${grid.ox}|${grid.oy}|${cover}`;
     const gridChanged = gridSig !== this.grid;
     this.grid = gridSig;
     const seen = new Set<string>();
@@ -149,7 +155,7 @@ export class DrawLayer {
         it.sig = sig;
         it.g.clear();
         if (d.k === 'text') this.paintText(it, d, textRes);
-        else paintShape(it.g, shapeOf(d), grid);
+        else paintShape(it.g, shapeOf(d), grid, 1, cover);
       }
       if (it.text && it.text.resolution !== textRes) it.text.resolution = textRes;
     });

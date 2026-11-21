@@ -1,5 +1,5 @@
 import type { Unsub } from '../backend/types';
-import { FONT_KEYS, type FillMode } from '../core/draw';
+import { FONT_KEYS, type FillMode, type SphereSnap } from '../core/draw';
 
 export type Tool = 'select' | 'grid' | 'fog' | 'draw' | 'template' | 'ruler';
 export type DrawTool = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'erase';
@@ -40,6 +40,10 @@ export interface UiData {
   drawDash: boolean;
   /** width of a line template in feet */
   tplWidth: number;
+  /** where a sphere's centre snaps: the middle of a square, a corner, or nowhere */
+  tplSphereSnap: SphereSnap;
+  /** light up the squares a template covers */
+  tplCover: boolean;
   /** drawings that are selected (token selection is separate) */
   drawSel: Set<string>;
   /** try out token moves without committing them */
@@ -87,6 +91,8 @@ export class UiState {
     rulerColor: readHex('vtt-ruler-color'),
     drawDash: readFlag('vtt-draw-dash', false),
     tplWidth: 5,
+    tplSphereSnap: readStr('vtt-tpl-sphere', 'center', ['center', 'corner', 'off'] as const),
+    tplCover: readFlag('vtt-tpl-cover', true),
     drawSel: new Set(), testMove: false, testCount: 0,
     sharePlot: readFlag('vtt-share-plot', false),
     textEdit: null, camRev: 0,
@@ -107,6 +113,8 @@ export class UiState {
     try {
       if (patch.drawTool !== undefined) localStorage.setItem('vtt-draw-tool', patch.drawTool);
       if (patch.tplKind !== undefined) localStorage.setItem('vtt-tpl-kind', patch.tplKind);
+      if (patch.tplSphereSnap !== undefined) localStorage.setItem('vtt-tpl-sphere', patch.tplSphereSnap);
+      if (patch.tplCover !== undefined) localStorage.setItem('vtt-tpl-cover', patch.tplCover ? '1' : '0');
       if (patch.drawColor !== undefined) localStorage.setItem('vtt-draw-color', patch.drawColor);
       if (patch.drawSize !== undefined) localStorage.setItem('vtt-draw-size', patch.drawSize);
       if (patch.drawFillMode !== undefined) localStorage.setItem('vtt-draw-fillmode', patch.drawFillMode);

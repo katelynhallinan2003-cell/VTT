@@ -69,7 +69,7 @@ export class Board {
   private liveSent = false;
   private seenDrawRev = -1;
   private seenLiveRev = -1;
-  private prevUi = { testMove: false, sharePlot: false, tool: 'select' as string, rulerColor: '' };
+  private prevUi = { testMove: false, sharePlot: false, tool: 'select' as string, rulerColor: '', cover: true };
   private distText!: Text;
 
   private cam = { zoom: 1, tx: 0, ty: 0 };
@@ -116,7 +116,9 @@ export class Board {
   private zoomSettleTimer: ReturnType<typeof setTimeout> | null = null;
   private textRes = 2;
   private destroyed = false;
-  private sendMoves: ReturnType<typeof throttle<[{ id: string; x: number; y: number }[]]>>;
+  private sendMoves: ReturnType<typeof throttle<[{ id: string; x: number; y: number }[], boolean]>>;
+  /** W (for warp) is held: tokens being dragged jump instead of walking (they do not clear the ground between) */
+  private teleportHeld = false;
   private sendMap: ReturnType<typeof throttle<[number, number]>>;
 
   constructor(host: HTMLElement, client: TableClient, ui: UiState, cb: BoardCallbacks) {
@@ -124,7 +126,7 @@ export class Board {
     this.client = client;
     this.ui = ui;
     this.cb = cb;
-    this.sendMoves = throttle((moves) => { void this.client.moveTokens(moves); }, 60);
+    this.sendMoves = throttle((moves, tp) => { void this.client.moveTokens(moves, undefined, { teleport: tp }); }, 60);
     this.sendMap = throttle((x, y) => { void this.client.updateScene({ mapX: x, mapY: y }); }, 80);
   }
 
@@ -323,7 +325,7 @@ export class Board {
     }
     if (scene.drawRev !== this.seenDrawRev) {
       this.seenDrawRev = scene.drawRev;
-      this.drawLayer.sync(this.drawingsShown(), c.grid, this.textRes);
+      this.drawLayer.sync(this.drawingsShown(), c.grid, this.textRes, this.ui.data.tplCover);
       const stale = [...this.ui.data.drawSel].filter((id) => !scene.draws.has(id));
       if (stale.length) this.ui.selectDrawings([...this.ui.data.drawSel].filter((id) => scene.draws.has(id)));
       this.dirty = true;
@@ -600,10 +602,11 @@ export class Board {
   private onUiChange() {
     const u = this.ui.data;
     const prev = this.prevUi;
-    this.prevUi = { testMove: u.testMove, sharePlot: u.sharePlot, tool: u.tool, rulerColor: u.rulerColor };
+    this.prevUi = { testMove: u.testMove, sharePlot: u.sharePlot, tool: u.tool, rulerColor: u.rulerColor, cover: u.tplCover };
     if (prev.testMove && !u.testMove && this.testMoves.size) this.resetTestMoves();
     if (u.sharePlot !== prev.sharePlot) this.publishLive(true);
     if (u.rulerColor !== prev.rulerColor) { this.publishLive(); this.invalidate(); }
+    if (u.tplCover !== prev.cover) this.refreshDraws();
     if (prev.tool !== u.tool) {
       this.cancelPress();
       if (this.ruler && u.tool !== 'ruler') { this.ruler = null; this.publishLive(); }
@@ -871,7 +874,7 @@ export class Board {
       paintShape(g, {
         k: d.dk, pts: d.pts, color: u.drawColor, w: isT ? Math.max(2, this.strokePx()) : this.strokePx(),
         fill: !isT && (d.dk === 'rect' || d.dk === 'ellipse') ? FILL_LEVEL[u.drawFillMode] : 0, fc: u.drawFillColor, dash: !isT && u.drawDash, bw: u.tplWidth,
-      }, grid, 0.85);
+      }, grid, 0.85, u.tplCover);
       if (isT && d.pts.length >= 2) this.plotLabel(li++, templateLabel(d.dk, grid, d.pts[0], d.pts[1], u.tplWidth), d.pts[1].x, d.pts[1].y - 12 / z, num(u.drawColor));
     }
 
@@ -956,7 +959,8 @@ export class Board {
     on(canvas, 'dblclick', (e: MouseEvent) => this.onDoubleClick(e));
     on(canvas, 'wheel', (e: WheelEvent) => this.onWheel(e), { passive: false });
     on(window, 'keydown', (e: KeyboardEvent) => this.onKeyDown(e));
-    on(window, 'keyup', (e: KeyboardEvent) => { if (e.code === 'Space') { this.spaceDown = false; this.updateCursor(); } });
+    on(window, 'keyup', (e: KeyboardEvent) => { if (e.code === 'Space') { this.spaceDown = false; this.updateCursor(); } if (e.key.toLowerCase() === 'w') this.teleportHeld = false; });
+    on(window, 'blur', () => { this.teleportHeld = false; });
     on(window, 'blur', () => { this.spaceDown = false; });
   }
 
@@ -1113,7 +1117,7 @@ export class Board {
   }
 
   private refreshDraws() {
-    this.drawLayer.sync(this.drawingsShown(), this.client.grid, this.textRes);
+    this.drawLayer.sync(this.drawingsShown(), this.client.grid, this.textRes, this.ui.data.tplCover);
     this.invalidate();
   }
 
@@ -1189,9 +1193,11 @@ export class Board {
   /** A template from the pointer-down point to the pointer, put on the grid the way the 2024 rules and the table expect. */
   private templateSnap(kind: DrawKind, start: Vec, w: Vec, e: PointerEvent): { a: Vec; b: Vec } {
     const grid = this.client.grid;
+    const sphereAt = this.ui.data.tplSphereSnap;
+    const free = kind === 'sphere' && sphereAt === 'off'; // a sphere that is told not to snap goes exactly where it is put
     return snapTemplate(grid, start, w, {
-      origin: grid.snap && !e.altKey, length: !e.altKey, angleStep: e.shiftKey ? Math.PI / 12 : undefined,
-      kind, widthPx: beamWidthPx(grid, this.ui.data.tplWidth),
+      origin: grid.snap && !e.altKey && !free, length: !e.altKey && !free, angleStep: e.shiftKey ? Math.PI / 12 : undefined,
+      kind, widthPx: beamWidthPx(grid, this.ui.data.tplWidth), sphereAt,
     });
   }
 
@@ -1413,7 +1419,7 @@ export class Board {
       v.target = { ...v.display };
       moves.push({ id, x: v.display.x, y: v.display.y });
     }
-    if (!this.ui.data.testMove) this.sendMoves(moves);
+    if (!this.ui.data.testMove) this.sendMoves(moves, this.teleportHeld);
   }
 
   private onPointerUp(e: PointerEvent) {
@@ -1454,7 +1460,7 @@ export class Board {
           const o = d.origins.get(id);
           if (d.moved) { moves.push({ id, x: v.display.x, y: v.display.y }); if (o) before.push({ id, x: o.x, y: o.y }); }
         }
-        if (moves.length) void this.client.moveTokens(moves, before);
+        if (moves.length) void this.client.moveTokens(moves, before, { teleport: this.teleportHeld });
         break;
       }
       case 'rect': {
@@ -1514,6 +1520,7 @@ export class Board {
     const mod = e.ctrlKey || e.metaKey;
 
     if (e.code === 'Space') { this.spaceDown = true; this.updateCursor(); e.preventDefault(); return; }
+    if (e.key.toLowerCase() === 'w' && !mod) { this.teleportHeld = true; return; }
 
     if (e.key === 'Escape') {
       if (this.testMoves.size) { this.resetTestMoves(); return; }

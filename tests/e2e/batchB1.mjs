@@ -156,6 +156,8 @@ await dm.evaluate((id) => window.__vtt.ui.select([id]), a);
 await sleep(200);
 await dm.locator('.tokentag button', { hasText: /Edit/ }).click();
 await dm.waitForSelector('.modal .crop-frame');
+const pt = dm.locator('.modal .btn', { hasText: /^Picture tools/ });
+if (await pt.count()) await pt.click();
 check('editor has a Dropper button', (await dm.locator('.modal button', { hasText: 'Dropper' }).count()) > 0);
 await dm.locator('.modal .crop-tools input[type=color]').last().evaluate((el) => {
   el.value = '#2f9e44';

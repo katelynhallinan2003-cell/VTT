@@ -5,7 +5,7 @@ import {
   normalizePlayer, normalizeSceneMeta, normalizeSettings, normalizeToken, stripUndefined, tokenToWire, DEFAULT_GRID, DM_COLOR,
 } from '../core/model';
 import {
-  cleanHp, EXPLORE_MIN_CELLS, EXPLORE_PATH_CELLS, emptyInit, moveEntry, nextTurn, orderOf, pctOf, prevTurn, sightRadiusPx, sortByInit, toPub,
+  applyDamage, cleanHp, EXPLORE_MIN_CELLS, EXPLORE_JUMP_CELLS, EXPLORE_TELEPORT_CELLS, EXPLORE_TELEPORT_MS, emptyInit, moveEntry, nextTurn, orderOf, pctOf, prevTurn, sightRadiusPx, sortByInit, toPub,
 } from '../core/combat';
 import { lineOp } from '../core/fog';
 import { can, detectPreset, PRESETS, type Action } from '../core/permissions';
@@ -38,7 +38,7 @@ export interface SceneState {
   initPub: InitPub | null;
   initRev: number;
   /** hit points, from the DM-only part of the database (DM only) */
-  hpDm: Map<string, { hp: number; max: number }>;
+  hpDm: Map<string, { hp: number; max: number; tmp: number }>;
   metaRev: number;
 }
 
@@ -59,6 +59,9 @@ const UNDOABLE_SCENE_KEYS = new Set(['mapX', 'mapY', 'mapScale', 'mapLocked', 'b
  * Reads come from listeners (which fire immediately for local writes, so the UI is optimistic);
  * writes are plain database updates.
  */
+/** What is stored for a token's hit points (temporary hit points only when there are some). */
+const hpWire = (hp: number, max: number, tmp: number) => ({ hp, max, ...(tmp > 0 ? { tmp } : {}) });
+
 export class TableClient {
   meta: TableMeta | null = null;
   metaLoaded = false;
@@ -215,7 +218,7 @@ export class TableClient {
       fogOps: new Map(), fogRev: 0, draws: new Map(), drawRev: 0, live: new Map(), liveRev: 0,
       init: emptyInit(), initPub: null, initRev: 0, hpDm: new Map(), metaRev: 0,
     };
-    this.explored.clear();
+    this.trails.clear();
     this.mirrorSig = null;
     this.scene = s;
     const b = this.backend;
@@ -248,7 +251,7 @@ export class TableClient {
       const hpSet = (k: string, v: any) => {
         if (!live()) return;
         const c = cleanHp(typeof v?.hp === 'number' ? v.hp : null, typeof v?.max === 'number' ? v.max : null);
-        if (c.hp == null || c.max == null) s.hpDm.delete(k); else s.hpDm.set(k, { hp: c.hp, max: c.max });
+        if (c.hp == null || c.max == null) s.hpDm.delete(k); else s.hpDm.set(k, { hp: c.hp, max: c.max, tmp: typeof v?.tmp === 'number' && v.tmp > 0 ? Math.round(v.tmp) : 0 });
         const t = s.tokens.get(k);
         if (t) s.tokens.set(k, this.withHp(s, t));
         s.tokensRev++; this.bump();
@@ -355,7 +358,7 @@ export class TableClient {
   /** Overlay the DM-only hit points on a token read from the public part of the database. */
   private withHp(s: SceneState, t: Token): Token {
     const h = s.hpDm.get(t.id);
-    return h ? { ...t, hp: h.hp, maxHp: h.max } : { ...t, hp: null, maxHp: null };
+    return h ? { ...t, hp: h.hp, maxHp: h.max, tempHp: h.tmp } : { ...t, hp: null, maxHp: null, tempHp: 0 };
   }
 
   async addToken(partial: Partial<Token> & { x: number; y: number }, opts: { record?: boolean } = {}): Promise<string> {
@@ -365,10 +368,10 @@ export class TableClient {
     const z = Math.max(0, ...[...(this.scene?.tokens.values() ?? [])].map((t) => t.z)) + 1;
     const hidden = this.isDM && !!partial.hidden;
     const token = normalizeToken(id, { ...partial, z }, hidden);
-    if (!this.isDM) { token.ownerUid = this.uid; token.hp = token.maxHp = null; } // players may only create tokens they own, and never set hit points
+    if (!this.isDM) { token.ownerUid = this.uid; token.hp = token.maxHp = null; token.tempHp = 0; } // players may only create tokens they own, and never set hit points
     token.hpPct = token.hp != null && token.hpShow !== 'off' ? pctOf(token.hp, token.maxHp) : null;
     const updates: Record<string, any> = { [this.tokenPath(token)]: tokenToWire(token) };
-    if (token.hp != null && token.maxHp != null) updates[this.hpPath(id)] = { hp: token.hp, max: token.maxHp };
+    if (token.hp != null && token.maxHp != null) updates[this.hpPath(id)] = hpWire(token.hp, token.maxHp, token.tempHp);
     await this.backend.update(updates);
     if (opts.record !== false) this.recordCreated([token], 'Add token');
     return id;
@@ -379,7 +382,7 @@ export class TableClient {
     const updates: Record<string, any> = {};
     for (const t of tokens) {
       updates[this.tokenPath(t)] = tokenToWire(t);
-      if (this.isDM && t.hp != null && t.maxHp != null) updates[this.hpPath(t.id)] = { hp: t.hp, max: t.maxHp };
+      if (this.isDM && t.hp != null && t.maxHp != null) updates[this.hpPath(t.id)] = hpWire(t.hp, t.maxHp, t.tempHp);
     }
     if (Object.keys(updates).length) await this.backend.update(updates);
   }
@@ -415,13 +418,14 @@ export class TableClient {
     const base = this.tokenPath(cur);
     const updates: Record<string, any> = {};
     for (const [k, v] of Object.entries(patch)) {
-      if (k === 'id' || k === 'hidden' || k === 'hp' || k === 'maxHp' || k === 'hpPct') continue;
+      if (k === 'id' || k === 'hidden' || k === 'hp' || k === 'maxHp' || k === 'tempHp' || k === 'hpPct') continue;
       updates[`${base}/${k}`] = v === undefined ? null : v;
     }
     // hit points live in the DM-only part of the database; players only ever see a percentage
-    if (this.isDM && ('hp' in patch || 'maxHp' in patch || 'hpShow' in patch)) {
+    if (this.isDM && ('hp' in patch || 'maxHp' in patch || 'tempHp' in patch || 'hpShow' in patch)) {
       const c = cleanHp('hp' in patch ? patch.hp : cur.hp, 'maxHp' in patch ? patch.maxHp : cur.maxHp);
-      if ('hp' in patch || 'maxHp' in patch) updates[this.hpPath(cur.id)] = c.hp == null || c.max == null ? null : { hp: c.hp, max: c.max };
+      const tmp = Math.max(0, Math.round('tempHp' in patch ? patch.tempHp ?? 0 : cur.tempHp));
+      if ('hp' in patch || 'maxHp' in patch || 'tempHp' in patch) updates[this.hpPath(cur.id)] = c.hp == null || c.max == null ? null : hpWire(c.hp, c.max, tmp);
       const show = patch.hpShow ?? cur.hpShow;
       const pct = show === 'off' ? null : pctOf(c.hp, c.max);
       updates[`${base}/hpPct`] = pct;
@@ -450,8 +454,9 @@ export class TableClient {
     }
   }
   /** Move tokens. Pass `before` (their old positions) to make it an undoable step. */
-  async moveTokens(moves: { id: string; x: number; y: number }[], before?: { id: string; x: number; y: number }[]): Promise<void> {
+  async moveTokens(moves: { id: string; x: number; y: number }[], before?: { id: string; x: number; y: number }[], opts: { teleport?: boolean } = {}): Promise<void> {
     const updates: Record<string, any> = {};
+    if (opts.teleport) for (const m of moves) this.noTrail.add(m.id); // this move is a jump: it does not clear the ground it passes over
     for (const m of moves) {
       const t = this.scene?.tokens.get(m.id);
       if (!t) continue;
@@ -459,7 +464,7 @@ export class TableClient {
       updates[`${base}/x`] = Math.round(m.x * 10) / 10;
       updates[`${base}/y`] = Math.round(m.y * 10) / 10;
     }
-    if (Object.keys(updates).length) await this.backend.update(updates);
+    try { if (Object.keys(updates).length) await this.backend.update(updates); } finally { if (opts.teleport) for (const m of moves) this.noTrail.delete(m.id); }
     if (before?.length) {
       this.history.push({
         label: before.length > 1 ? 'Move tokens' : 'Move token',
@@ -670,25 +675,46 @@ export class TableClient {
   }
 
   // ---------------------------------------------------------------- hit points (DM)
-  /** Take hit points off (or, with a negative number, give them back). One undo step. */
+  /**
+   * Take hit points off (or, with a negative number, give them back). One undo step.
+   * Temporary hit points soak up damage first. Healing never touches them and never goes past the maximum.
+   */
   async damage(ids: string[], amount: number): Promise<void> {
     if (!this.isDM || !Number.isFinite(amount) || amount === 0) return;
-    const before: { id: string; hp: number | null }[] = [];
-    const after: { id: string; hp: number }[] = [];
+    const before: { id: string; hp: number; tempHp: number }[] = [];
+    const after: { id: string; hp: number; tempHp: number }[] = [];
     for (const id of ids) {
       const t = this.scene?.tokens.get(id);
       if (!t || t.hp == null || t.maxHp == null) continue;
-      before.push({ id, hp: t.hp });
-      after.push({ id, hp: Math.min(t.maxHp, Math.max(0, t.hp - Math.round(amount))) });
+      before.push({ id, hp: t.hp, tempHp: t.tempHp });
+      after.push({ id, ...applyDamage(t.hp, t.maxHp, t.tempHp, Math.round(amount)) });
     }
     if (!after.length) return;
-    const apply = (list: { id: string; hp: number | null }[]) => Promise.all(list.map((x) => this.updateToken(x.id, { hp: x.hp }))).then(() => undefined);
+    const apply = (list: { id: string; hp: number; tempHp: number }[]) => Promise.all(list.map((x) => this.updateToken(x.id, { hp: x.hp, tempHp: x.tempHp }))).then(() => undefined);
     await apply(after);
     this.history.push({
       label: amount > 0 ? 'Damage' : 'Healing', // no coalescing key: every hit is its own undo step
       undo: () => apply(before),
       redo: () => apply(after),
     });
+  }
+
+  /** Give temporary hit points. The rules say you keep whichever is higher, the old or the new; pass `replace` to set it outright. */
+  async giveTemp(ids: string[], amount: number, replace = false): Promise<void> {
+    if (!this.isDM || !Number.isFinite(amount)) return;
+    const n = Math.max(0, Math.round(amount));
+    const before: { id: string; tempHp: number }[] = [];
+    const after: { id: string; tempHp: number }[] = [];
+    for (const id of ids) {
+      const t = this.scene?.tokens.get(id);
+      if (!t || t.hp == null || t.maxHp == null) continue;
+      before.push({ id, tempHp: t.tempHp });
+      after.push({ id, tempHp: replace ? n : Math.max(t.tempHp, n) });
+    }
+    if (!after.length) return;
+    const apply = (list: { id: string; tempHp: number }[]) => Promise.all(list.map((x) => this.updateToken(x.id, { tempHp: x.tempHp }))).then(() => undefined);
+    await apply(after);
+    this.history.push({ label: 'Temporary hit points', undo: () => apply(before), redo: () => apply(after) });
   }
 
   // ---------------------------------------------------------------- initiative (DM)
@@ -803,7 +829,13 @@ export class TableClient {
   }
 
   // ---------------------------------------------------------------- explored ground (DM)
-  private explored = new Map<string, Vec>();
+  /**
+   * What each token has walked since the trail was last written: the real route it took, seen through the stream of position changes.
+   * A jump with no walking in between (undo, a typed position, a token teleported on purpose) starts a new trail instead of joining the dots.
+   */
+  private trails = new Map<string, { anchor: Vec | null; pend: Vec[]; segs: Vec[][]; at: number; tele: boolean }>();
+  /** tokens being teleported right now (their next position change starts a new trail) */
+  private noTrail = new Set<string>();
   private exploreTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Called whenever tokens change. Does the DM-only chores that follow from them. */
@@ -812,29 +844,67 @@ export class TableClient {
     this.syncInitMirror();
     const m = this.scene?.meta;
     if (!m?.fog.enabled || !m.fog.vision || !m.fog.explore) return;
+    this.observeTrails();
     if (this.exploreTimer) clearTimeout(this.exploreTimer);
-    this.exploreTimer = setTimeout(() => { this.exploreTimer = null; void this.exploreNow(); }, 500);
+    this.exploreTimer = setTimeout(() => { this.exploreTimer = null; void this.exploreNow(); }, 400);
   }
 
-  /** Reveal the ground that tokens with sight have seen: a circle where they stand, joined to the last place by a path for short moves. */
+  /** Add each sighted token's current position to its trail. */
+  private observeTrails() {
+    const s = this.scene;
+    const m = s?.meta;
+    if (!s || !m) return;
+    const g = m.grid;
+    const now = Date.now();
+    for (const t of s.tokens.values()) {
+      if (sightRadiusPx(t, g) <= 0 || t.hidden) continue;
+      const here = { x: t.x, y: t.y };
+      let tr = this.trails.get(t.id);
+      if (!tr) { this.trails.set(t.id, { anchor: null, pend: [here], segs: [], at: now, tele: true }); continue; }
+      const last = tr.pend.length ? tr.pend[tr.pend.length - 1] : tr.anchor;
+      const dist = last ? Math.hypot(here.x - last.x, here.y - last.y) : Infinity;
+      if (last && dist < EXPLORE_MIN_CELLS * g.cell) continue;
+      const idle = now - tr.at;
+      tr.at = now;
+      const jumped = this.noTrail.has(t.id) || !last || dist > EXPLORE_JUMP_CELLS * g.cell || (idle > EXPLORE_TELEPORT_MS && dist > EXPLORE_TELEPORT_CELLS * g.cell);
+      if (jumped) {
+        // a jump starts over. The spot it left only counts if it was reached by walking (a landing spot that was just passed through is dropped)
+        if (tr.pend.length && !tr.tele) tr.segs.push(tr.pend);
+        tr.pend = [here];
+        tr.anchor = null;
+        tr.tele = true;
+      } else {
+        tr.tele = false;
+        if (!tr.pend.length && tr.anchor) tr.pend = [tr.anchor, here];
+        else tr.pend.push(here);
+      }
+    }
+  }
+
+  /** Reveal the ground the tokens with sight have walked: a thick line along each route (a circle where a token only stands). */
   async exploreNow(): Promise<number> {
     const s = this.scene;
     const m = s?.meta;
     if (!this.isDM || !s || !m || !m.fog.enabled || !m.fog.vision || !m.fog.explore) return 0;
+    this.observeTrails();
     const g = m.grid;
     const sid = s.id;
     const updates: Record<string, FogOp> = {};
     let count = 0;
     for (const t of s.tokens.values()) {
       const r = sightRadiusPx(t, g);
-      if (r <= 0 || t.hidden) continue;
-      const last = this.explored.get(t.id);
-      const here = { x: t.x, y: t.y };
-      if (last && Math.hypot(here.x - last.x, here.y - last.y) < EXPLORE_MIN_CELLS * g.cell) continue;
-      const pts = last && Math.hypot(here.x - last.x, here.y - last.y) <= EXPLORE_PATH_CELLS * g.cell ? [last, here] : [here];
-      updates[`${P.sceneFog(this.tableId, sid)}/${this.backend.newKey()}`] = lineOp('r', pts, r * 2);
-      this.explored.set(t.id, here);
-      count++;
+      const tr = this.trails.get(t.id);
+      if (!tr || r <= 0 || t.hidden) continue;
+      const lines = [...tr.segs, ...(tr.pend.length ? [tr.pend] : [])];
+      for (const line of lines) {
+        // keep the shape of the route but not every little step of it
+        const pts = line.filter((p, i) => i === 0 || i === line.length - 1 || Math.hypot(p.x - line[i - 1].x, p.y - line[i - 1].y) >= g.cell * 0.2);
+        updates[`${P.sceneFog(this.tableId, sid)}/${this.backend.newKey()}`] = lineOp('r', pts, r * 2);
+        count++;
+      }
+      if (lines.length) { const lastLine = lines[lines.length - 1]; tr.anchor = lastLine[lastLine.length - 1]; }
+      tr.segs = [];
+      tr.pend = [];
     }
     if (count && this.scene === s) await this.backend.update(updates);
     return count;

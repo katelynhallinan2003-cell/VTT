@@ -8,7 +8,7 @@ import type { DockTab, UiState } from '../state/ui';
 import type { Aura, GridSettings, LabelMode, Token, TokenShape } from '../types';
 import { Field, Section, SliderField, Toggle, toast, useClient, useUi } from './common';
 import { uploadImage } from './uploads';
-import { HpBar, InitiativePanel, parseDamage } from './initiative';
+import { HpBar, InitiativePanel, parseDamage, tempPct } from './initiative';
 import { AuraEditor } from './auraEditor';
 import { PlayersPanel } from './modals';
 
@@ -104,13 +104,15 @@ function HpControl(props: { client: TableClient; tokens: Token[] }) {
   };
   return (
     <span class="tt-hp" title={one ? `${one.hp} of ${one.maxHp} hit points` : `${tokens.length} tokens with hit points`}>
-      {one && <><HpBar pct={pctOf(one.hp, one.maxHp) ?? 0} width={70} /><span class="tt-hpnum">{one.hp}/{one.maxHp}</span></>}
+      {one && <><HpBar pct={pctOf(one.hp, one.maxHp) ?? 0} width={70} temp={tempPct(one)} /><span class="tt-hpnum">{one.hp}/{one.maxHp}{one.tempHp > 0 && <span class="temp-hp" title="Temporary hit points"> +{one.tempHp}</span>}</span></>}
       {!one && <span class="tt-hpnum">{tokens.length} with HP</span>}
       <input type="text" inputMode="numeric" placeholder="±" value={text} aria-label="Hit points to take off or give back"
         onInput={(e) => setText((e.target as HTMLInputElement).value)}
         onKeyDown={(e) => { if (e.key === 'Enter') apply(0); e.stopPropagation(); }} />
       <button class="btn small" title="Damage" onClick={() => apply(1)}>−</button>
       <button class="btn small" title="Heal" onClick={() => apply(-1)}>+</button>
+      <button class="btn small" title="Give temporary hit points. They soak up damage first, and you keep the higher of the old and new amount."
+        onClick={() => { const n = parseDamage(text.replace(/^[+-]/, '')); if (n == null) return; void client.giveTemp(tokens.map((t) => t.id), Math.abs(n)); setText(''); }}>Temp</button>
     </span>
   );
 }
@@ -199,7 +201,7 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
         {meta.fog.vision && (
           <>
             <Toggle checked={meta.fog.explore} onChange={(v) => { void client.updateScene({ fog: { explore: v } }); }} label="Keep what they have explored"
-              hint="While your browser is open, ground a token has seen stays revealed after it leaves." />
+              hint="While your browser is open, the ground a token walks over stays revealed, following the route it really took. Hold W (for warp) while dragging a token to teleport it without clearing the way." />
             <SightAll client={client} />
           </>
         )}

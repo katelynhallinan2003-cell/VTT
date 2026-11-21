@@ -1,9 +1,9 @@
 {
   "firebase": {
-    "apiKey": "PASTE_YOUR_FIREBASE_API_KEY",
-    "authDomain": "your-project.firebaseapp.com",
-    "databaseURL": "https://your-project-default-rtdb.firebaseio.com",
-    "projectId": "your-project",
-    "appId": "PASTE_YOUR_APP_ID"
+    "apiKey": "AIzaSyAAYFss_nF_DYczmtWECP0qCEeJiei1CX0",
+    "authDomain": "vttproject-6df2f.firebaseapp.com",
+    "databaseURL": "https://vttproject-6df2f-default-rtdb.firebaseio.com",
+    "projectId": "vttproject-6df2f",
+    "appId": "1:259104244357:web:12ac43c02d83f66f9f5fec"
   }
 }

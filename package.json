@@ -1,0 +1,27 @@
+{
+  "name": "friend-vtt",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "rules": "node scripts/build-rules.mjs",
+    "e2e": "node tests/e2e/smoke.mjs"
+  },
+  "dependencies": {
+    "firebase": "^13.4.0",
+    "pixi.js": "^8.23.0",
+    "preact": "^11.2.0"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "playwright-core": "^1.65.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1"
+  }
+}

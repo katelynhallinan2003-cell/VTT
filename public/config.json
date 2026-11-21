@@ -1,0 +1,9 @@
+{
+  "firebase": {
+    "apiKey": "PASTE_YOUR_FIREBASE_API_KEY",
+    "authDomain": "your-project.firebaseapp.com",
+    "databaseURL": "https://your-project-default-rtdb.firebaseio.com",
+    "projectId": "your-project",
+    "appId": "PASTE_YOUR_APP_ID"
+  }
+}

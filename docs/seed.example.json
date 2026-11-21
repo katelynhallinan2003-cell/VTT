@@ -1,0 +1,7 @@
+{
+  "config": {
+    "allowedEmails": {
+      "you@gmail,com": true
+    }
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "rules": {
+    "config": {
+      "allowedEmails": {
+        "$email": {
+          ".read": "auth != null && auth.token.email != null && auth.token.email.toLowerCase().replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',') === $email"
+        }
+      }
+    },
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid && auth.token.email_verified === true && root.child('config').child('allowedEmails').child(auth.token.email.toLowerCase().replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',')).val() === true"
+      }
+    },
+    "tables": {
+      "$tid": {
+        "owner": {
+          ".read": "auth != null",
+          ".write": "auth != null && !data.exists() && newData.val() === auth.uid && auth.token.email_verified === true && root.child('config').child('allowedEmails').child(auth.token.email.toLowerCase().replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',')).val() === true",
+          ".validate": "newData.isString()"
+        },
+        "meta": {
+          ".read": "auth != null",
+          ".write": "auth != null && root.child('tables').child($tid).child('owner').val() === auth.uid"
+        },
+        "settings": {
+          ".read": "auth != null",
+          ".write": "auth != null && root.child('tables').child($tid).child('owner').val() === auth.uid"
+        },
+        "upload": {
+          ".read": "auth != null",
+          ".write": "auth != null && root.child('tables').child($tid).child('owner').val() === auth.uid"
+        },
+        "players": {
+          ".read": "auth != null",
+          "$uid": {
+            ".write": "auth != null && (auth.uid === $uid || root.child('tables').child($tid).child('owner').val() === auth.uid)"
+          }
+        },
+        "dm": {
+          ".read": "auth != null && root.child('tables').child($tid).child('owner').val() === auth.uid",
+          ".write": "auth != null && root.child('tables').child($tid).child('owner').val() === auth.uid"
+        },
+        "scenes": {
+          "$sid": {
+            ".read": "auth != null && (root.child('tables').child($tid).child('owner').val() === auth.uid || root.child('tables').child($tid).child('meta').child('activeScene').val() === $sid)",
+            ".write": "auth != null && root.child('tables').child($tid).child('owner').val() === auth.uid",
+            "tokens": {
+              "$tkid": {
+                ".write": "auth != null && root.child('tables').child($tid).child('meta').child('activeScene').val() === $sid && ((!data.exists() && newData.exists() && newData.child('ownerUid').val() === auth.uid && root.child('tables').child($tid).child('settings').child('perm').child('playersCreateTokens').val() === true) || (data.exists() && data.child('locked').val() !== true && (root.child('tables').child($tid).child('settings').child('perm').child('playersMoveAnyToken').val() === true || data.child('ownerUid').val() === auth.uid || (!data.child('ownerUid').exists() && newData.child('ownerUid').val() === auth.uid)) && (newData.exists() || root.child('tables').child($tid).child('settings').child('perm').child('playersDeleteAnyToken').val() === true || data.child('ownerUid').val() === auth.uid)))",
+                "ownerUid": {
+                  ".validate": "root.child('tables').child($tid).child('owner').val() === auth.uid || newData.val() === data.val() || (!data.exists() && newData.val() === auth.uid)"
+                }
+              }
+            },
+            "pings": {
+              "$pid": {
+                ".write": "auth != null && root.child('tables').child($tid).child('meta').child('activeScene').val() === $sid && root.child('tables').child($tid).child('settings').child('perm').child('playersPing').val() === true",
+                ".validate": "newData.hasChildren(['x', 'y', 'uid']) && newData.child('uid').val() === auth.uid"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

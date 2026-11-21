@@ -93,6 +93,8 @@ export function normalizeToken(id: string, raw: any, hidden: boolean): Token {
     hpShow: hpShowOf(t.hpShow, typeof t.ownerUid === 'string'),
     hpPct: typeof t.hpPct === 'number' && Number.isFinite(t.hpPct) ? Math.min(100, Math.max(0, Math.round(t.hpPct))) : null,
     sight: Math.min(1000, Math.max(0, num(t.sight, 0))),
+    fly: bool(t.fly, false),
+    elev: Math.min(5000, Math.max(-1000, Math.round(num(t.elev, 0)))),
     initBonus: Math.min(99, Math.max(-99, Math.round(num(t.initBonus, 0)))),
     fx: normalizeFx(t.fx),
     ownerUid: typeof t.ownerUid === 'string' ? t.ownerUid : null,
@@ -149,6 +151,7 @@ export function normalizeDrawing(id: string, raw: any): Drawing | null {
     u: bool(raw.u, false),
     ho: bool(raw.ho, false),
     bw: Math.min(200, Math.max(1, num(raw.bw, 5))),
+    hz: typeof raw.hz === 'number' && Number.isFinite(raw.hz) && (raw.k === 'rect' || raw.k === 'ellipse') ? Math.min(5000, Math.max(-1000, Math.round(raw.hz))) : null,
     t: num(raw.t, 0),
   };
 }
@@ -158,6 +161,7 @@ export function drawingToWire(d: Omit<Drawing, 'id'> | Drawing): Record<string, 
   return stripUndefined({
     ...rest, txt: rest.txt || undefined, dash: rest.dash || undefined, fill: rest.fill || undefined,
     fc: rest.fc || undefined, font: rest.font || undefined, b: rest.b || undefined, i: rest.i || undefined, u: rest.u || undefined, ho: rest.ho || undefined,
+    hz: rest.hz ?? undefined,
   });
 }
 
@@ -191,6 +195,8 @@ export function tokenToWire(t: Token): Record<string, unknown> {
     auras: t.auras.length ? t.auras : undefined,
     hpPct: t.hpPct ?? undefined,
     sight: t.sight > 0 ? t.sight : undefined,
+    fly: t.fly ? true : undefined,
+    elev: t.fly && t.elev ? t.elev : undefined,
     initBonus: t.initBonus ? t.initBonus : undefined,
     fx: fxToWire(t.fx) ?? undefined,
   });

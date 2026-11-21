@@ -1,5 +1,5 @@
 import { Container, Graphics, Text } from 'pixi.js';
-import { LINE_H, beamWidthPx, dashSegments, drawingBounds, fontStack, isTemplate, parsePts, templateGeom, textMetrics } from '../core/draw';
+import { LINE_H, beamWidthPx, boundsOf, dashSegments, drawingBounds, fontStack, isTemplate, parsePts, templateGeom, textMetrics } from '../core/draw';
 import { cellPoly, coveredCells } from '../core/cells';
 import type { DrawKind, Drawing, GridSettings, Vec } from '../types';
 
@@ -142,7 +142,7 @@ export class DrawLayer {
     const seen = new Set<string>();
     list.forEach((d, i) => {
       seen.add(d.id);
-      const sig = `${d.k}|${d.p}|${d.color}|${d.w}|${d.fill}|${d.fc}|${d.dash}|${d.txt}|${d.fs}|${d.font}|${d.b}|${d.i}|${d.u}|${d.ho}|${d.bw}|${textRes}`;
+      const sig = `${d.k}|${d.p}|${d.color}|${d.w}|${d.fill}|${d.fc}|${d.dash}|${d.txt}|${d.fs}|${d.font}|${d.b}|${d.i}|${d.u}|${d.ho}|${d.bw}|${d.hz}|${textRes}`;
       let it = this.items.get(d.id);
       if (!it) {
         it = { root: new Container(), g: new Graphics(), text: null, sig: '' };
@@ -155,7 +155,7 @@ export class DrawLayer {
         it.sig = sig;
         it.g.clear();
         if (d.k === 'text') this.paintText(it, d, textRes);
-        else paintShape(it.g, shapeOf(d), grid, 1, cover);
+        else { paintShape(it.g, shapeOf(d), grid, 1, cover); this.paintZoneLabel(it, d, grid, textRes); }
       }
       if (it.text && it.text.resolution !== textRes) it.text.resolution = textRes;
     });
@@ -163,6 +163,26 @@ export class DrawLayer {
       if (!seen.has(id)) { it.root.destroy({ children: true }); this.items.delete(id); }
     }
     this.container.sortableChildren = true;
+  }
+
+  /** "10 ft" in the middle of a height zone. */
+  private paintZoneLabel(it: Item, d: Drawing, grid: GridSettings, textRes: number) {
+    if (d.hz == null) { if (it.text) it.text.visible = false; return; }
+    const pts = parsePts(d.p);
+    if (pts.length < 2) return;
+    const b = boundsOf(pts);
+    if (!it.text) {
+      it.text = new Text({ text: '', style: { fontFamily: 'system-ui, sans-serif', fontWeight: '700', fontSize: 20, fill: 0xffffff, stroke: { color: 0x000000, width: 4, join: 'round' } } });
+      it.text.anchor.set(0.5);
+      it.root.addChild(it.text);
+    }
+    const fs = Math.max(8, Math.min(grid.cell * 0.34, Math.min(b.w, b.h) * 0.45));
+    it.text.visible = true;
+    it.text.text = `${d.hz > 0 ? '+' : ''}${d.hz} ft`;
+    it.text.style.fontSize = fs;
+    (it.text.style.stroke as { width: number }).width = Math.max(2, fs * 0.2);
+    it.text.resolution = textRes;
+    it.text.position.set(b.x + b.w / 2, b.y + b.h / 2);
   }
 
   private paintText(it: Item, d: Drawing, textRes: number) {

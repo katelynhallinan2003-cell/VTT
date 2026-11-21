@@ -8,7 +8,7 @@ import { cellPoly, coveredCells } from '../src/core/cells';
 import type { Drawing } from '../src/types';
 
 const grid = { ...DEFAULT_GRID, cell: 100, ft: 5 };
-const d = (over: Partial<Drawing>): Drawing => ({ id: 'x', uid: 'u', k: 'pen', p: '', color: '#f00', w: 4, fill: 0, fc: '', dash: false, txt: '', fs: 28, font: '', b: false, i: false, u: false, ho: false, bw: 5, t: 0, ...over });
+const d = (over: Partial<Drawing>): Drawing => ({ id: 'x', uid: 'u', k: 'pen', p: '', color: '#f00', w: 4, fill: 0, fc: '', dash: false, txt: '', fs: 28, font: '', b: false, i: false, u: false, ho: false, bw: 5, hz: null, t: 0, ...over });
 
 describe('points', () => {
   it('round-trips and ignores junk', () => {

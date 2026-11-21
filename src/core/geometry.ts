@@ -30,16 +30,27 @@ export function snapToCellCenter(grid: GridSettings, p: Vec): Vec {
   };
 }
 
-/** Distance between two world points in feet according to the table's diagonal rule. */
-export function distanceFt(grid: GridSettings, a: Vec, b: Vec, rule: DistanceRule = grid.rule): number {
+/**
+ * Distance between two world points in feet according to the table's diagonal rule.
+ * `dzFt` is how much higher one end is than the other: the rule is applied between the flat distance and the height, so
+ * flying 30 feet up and 30 across costs 30 (or 45 on the 5-10-5 rule, 42.4 with straight lines).
+ */
+export function distanceFt(grid: GridSettings, a: Vec, b: Vec, rule: DistanceRule = grid.rule, dzFt = 0): number {
   const dx = Math.abs(b.x - a.x) / grid.cell;
   const dy = Math.abs(b.y - a.y) / grid.cell;
+  const dz = Math.abs(dzFt) / grid.ft;
   let squares: number;
-  if (rule === 'euclid') squares = Math.hypot(dx, dy);
+  if (rule === 'euclid') squares = Math.hypot(dx, dy, dz);
   else {
     const hi = Math.round(Math.max(dx, dy) * 1000) / 1000;
     const lo = Math.round(Math.min(dx, dy) * 1000) / 1000;
-    squares = rule === 'alt' ? hi + Math.floor(lo / 2) : hi;
+    const flat = rule === 'alt' ? hi + Math.floor(lo / 2) : hi;
+    if (!dz) squares = flat;
+    else {
+      const big = Math.max(flat, dz);
+      const small = Math.min(flat, dz);
+      squares = rule === 'alt' ? big + Math.floor(small / 2) : big;
+    }
   }
   return Math.round(squares * grid.ft * 10) / 10;
 }

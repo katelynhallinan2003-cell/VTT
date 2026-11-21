@@ -1,5 +1,6 @@
 import { Container, Graphics, Sprite, Text } from 'pixi.js';
 import { healthState, HEALTH_COLOR } from '../core/combat';
+import { altLabel, type Altitude } from '../core/height';
 import type { Effect, GridSettings, Token } from '../types';
 import { loadTexture, type LoadedTexture } from './textures';
 
@@ -10,6 +11,8 @@ export interface TokenCtx {
   textRes: number;
   /** how healthy this token looks to whoever is watching (null = show nothing) */
   health: { pct: number; bar: boolean } | null;
+  /** how high it is: flying, or standing on high or low ground */
+  alt: Altitude;
 }
 
 /** what has to change on screen when a token's effects change */
@@ -42,6 +45,13 @@ export class TokenView {
   /** draw as a see-through copy (shadows and other people's test moves) */
   ghostAlpha: number | null = null;
 
+  /** a shadow on the ground under a flying token, further away the higher it is */
+  private shadowG = new Graphics();
+  /** the little ↑30 / ▲10 tag in the corner */
+  private altG = new Graphics();
+  private altText: Text;
+  private hKey = '';
+  private altNow: Altitude = { alt: 0, clear: 0, ground: 0 };
   /** glow around the token (effects with the Glow look), drawn under everything */
   private fxBack = new Graphics();
   /** badges and orbiting symbols of effects, drawn above the token */
@@ -69,7 +79,9 @@ export class TokenView {
       style: { fontFamily: 'system-ui, sans-serif', fontWeight: '600', fill: 0xffffff, fontSize: 14, stroke: { color: 0x000000, width: 4, join: 'round' } },
     });
     this.label.anchor.set(0.5, 0);
-    this.container.addChild(this.fxBack, this.base, this.maskG, this.initial, this.ring, this.healthG, this.fxFront, this.label);
+    this.altText = new Text({ text: '', style: { fontFamily: 'system-ui, sans-serif', fontWeight: '700', fill: 0xffffff, fontSize: 12 } });
+    this.altText.anchor.set(0.5);
+    this.container.addChild(this.shadowG, this.fxBack, this.base, this.maskG, this.initial, this.ring, this.healthG, this.fxFront, this.altG, this.altText, this.label);
   }
 
   apply(token: Token, ctx: TokenCtx) {
@@ -103,7 +115,10 @@ export class TokenView {
     this.label.text = token.name + (token.hidden ? ' (hidden)' : '');
     this.label.visible = ctx.showLabel && token.label !== 'none' && !!token.name;
     if (this.label.resolution !== ctx.textRes) this.label.resolution = ctx.textRes;
-    this.container.zIndex = token.z;
+    this.altNow = ctx.alt;
+    this.applyHeight(ctx.grid, token);
+    // higher things are drawn over lower ones, then by stacking order
+    this.container.zIndex = token.z + Math.max(-500, Math.min(5000, ctx.alt.alt)) * 1000;
     this.container.alpha = this.ghostAlpha ?? (token.hidden ? 0.5 : 1);
     if (!this.dragging) {
       this.target = this.testPos ? { ...this.testPos } : { x: token.x, y: token.y };
@@ -265,6 +280,45 @@ export class TokenView {
     this.label.position.set(0, labelY);
   }
 
+  /** Show a new height without redrawing the whole token (used while a token is dragged across high ground). */
+  setAlt(a: Altitude, grid: GridSettings) {
+    this.altNow = a;
+    this.applyHeight(grid, this.token);
+    this.container.zIndex = this.token.z + Math.max(-500, Math.min(5000, a.alt)) * 1000;
+  }
+
+  /** The shadow under a flying token and the height tag in its corner. */
+  private applyHeight(grid: GridSettings, t: Token) {
+    const a = this.altNow;
+    const key = `${a.alt}|${a.clear}|${t.fly}|${t.size}|${t.shape}|${grid.cell}`;
+    if (key === this.hKey) return;
+    this.hKey = key;
+    const cell = grid.cell;
+    const D = t.size * cell;
+    const r = D / 2;
+    const sh = this.shadowG;
+    sh.clear();
+    if (a.clear > 0) {
+      const off = cell * (0.06 + Math.min(1, a.clear / 60) * 0.5);
+      if (t.shape === 'square') sh.rect(-r + off, -r + off, D, D).fill({ color: 0x000000, alpha: 0.32 });
+      else sh.circle(off, off, r).fill({ color: 0x000000, alpha: 0.32 });
+    }
+    const g = this.altG;
+    g.clear();
+    const label = altLabel(a, t.fly);
+    this.altText.visible = !!label;
+    if (!label) return;
+    const fs = Math.max(10, cell * 0.2);
+    this.altText.text = label;
+    this.altText.style.fontSize = fs;
+    const x = -r * 0.62;
+    const y = -r * 0.8;
+    this.altText.position.set(x, y);
+    const w = label.length * fs * 0.62 + fs * 0.6;
+    const col = a.clear > 0 ? 0x1c7ed6 : a.alt > 0 ? 0x8a5a2b : 0x4c4f9e;
+    g.roundRect(x - w / 2, y - fs * 0.62, w, fs * 1.24, fs * 0.62).fill({ color: col, alpha: 0.95 }).stroke({ width: 1.2, color: 0xffffff, alpha: 0.85 });
+  }
+
   /** Jump straight to a spot without sliding there. */
   placeAt(p: { x: number; y: number }) {
     this.display = { ...p };
@@ -278,6 +332,7 @@ export class TokenView {
 
   setTextRes(res: number) {
     if (this.label.resolution !== res) this.label.resolution = res;
+    if (this.altText.resolution !== res) this.altText.resolution = res;
     for (const c of this.fxFront.children) if (c instanceof Text && c.resolution !== res) c.resolution = res;
   }
 

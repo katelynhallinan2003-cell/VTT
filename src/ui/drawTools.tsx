@@ -3,6 +3,7 @@ import type { Board } from '../board/Board';
 import { DRAW_COLORS, DRAW_NAME, FILL_LEVEL, FONTS, LINE_H, STROKE_CELLS, fillModeOf, fontStack, isTemplate, sizeFt, withSizeFt, type FillMode } from '../core/draw';
 import type { TableClient } from '../state/client';
 import type { DrawTool, StrokeSize, TemplateKind, UiState } from '../state/ui';
+import { ZONE_PRESETS, zoneColor } from '../core/height';
 import type { Drawing } from '../types';
 import { Toggle, toast, useClient, useUi } from './common';
 
@@ -125,8 +126,38 @@ export function DrawFlyout(props: { ui: UiState; client: TableClient }) {
       {wide && !isText && <Toggle checked={d.drawDash} onChange={(v) => ui.set({ drawDash: v })} label="Dashed" />}
       <p class="hint">{tool.hint}</p>
       <div class="row wrap">
-        <button class="btn small" onClick={async () => { const n = await client.clearDrawings((x) => x.uid === client.uid && !isTemplate(x.k), 'Clear my drawings'); toast(n ? `Cleared ${n} drawing${n > 1 ? 's' : ''}` : 'Nothing of yours to clear', 'info', 1800); }}>Clear mine</button>
-        {client.isDM && <button class="btn small danger" onClick={async () => { const n = await client.clearDrawings((x) => !isTemplate(x.k), 'Clear all drawings'); toast(n ? `Cleared ${n} drawing${n > 1 ? 's' : ''}` : 'No drawings to clear', 'info', 1800); }}>Clear all</button>}
+        <button class="btn small" onClick={async () => { const n = await client.clearDrawings((x) => x.uid === client.uid && !isTemplate(x.k) && x.hz == null, 'Clear my drawings'); toast(n ? `Cleared ${n} drawing${n > 1 ? 's' : ''}` : 'Nothing of yours to clear', 'info', 1800); }}>Clear mine</button>
+        {client.isDM && <button class="btn small danger" onClick={async () => { const n = await client.clearDrawings((x) => !isTemplate(x.k) && x.hz == null, 'Clear all drawings'); toast(n ? `Cleared ${n} drawing${n > 1 ? 's' : ''}` : 'No drawings to clear', 'info', 1800); }}>Clear all</button>}
+      </div>
+    </div>
+  );
+}
+
+export function HeightFlyout(props: { ui: UiState; client: TableClient }) {
+  const { ui, client } = props;
+  const d = useUi(ui);
+  useClient(client);
+  const count = [...(client.scene?.draws.values() ?? [])].filter((x) => x.hz != null).length;
+  return (
+    <div class="flyout">
+      <div class="flyout-title">Heights</div>
+      <p class="hint">Draw the high and low ground. Anything that walks onto it is lifted to that height, and the ruler counts the climb. Flying tokens keep their own altitude.</p>
+      <div class="seg">
+        <button class={d.heightShape === 'rect' ? 'on' : ''} onClick={() => ui.set({ heightShape: 'rect' })}>Box</button>
+        <button class={d.heightShape === 'ellipse' ? 'on' : ''} onClick={() => ui.set({ heightShape: 'ellipse' })}>Circle</button>
+      </div>
+      <NumField label="Ground height" value={d.heightFt} min={-1000} max={5000} step={5} unit="ft" title="How high this ground is above the base level of the map. Negative is a pit." onCommit={(n) => ui.set({ heightFt: Math.round(n) })} />
+      <div class="chips">
+        {ZONE_PRESETS.map((h) => (
+          <button key={h} class={`chip ${d.heightFt === h ? 'on' : ''}`} style={{ borderColor: zoneColor(h) }} onClick={() => ui.set({ heightFt: h })}>{h > 0 ? `+${h}` : h}</button>
+        ))}
+      </div>
+      <Toggle checked={d.showHeights} onChange={(v) => ui.set({ showHeights: v })} label="Show heights on the map" hint="Only changes what you see. Everyone gets the same ground." />
+      <p class="hint">Drag out a box or circle. Click the edge of one to select it, move it, resize it, or change its height. Smaller ones sit on top of bigger ones, so draw a nest inside a cliff. {'] and [ raise and lower the selected tokens.'}</p>
+      <div class="row wrap">
+        <span class="hint">{count ? `${count} height area${count > 1 ? 's' : ''} on this map` : 'No height areas yet'}</span>
+        <span class="grow" />
+        {count > 0 && <button class="btn small danger" onClick={async () => { const n = await client.clearDrawings((x) => x.hz != null, 'Clear all heights'); toast(n ? `Cleared ${n} height area${n > 1 ? 's' : ''}` : 'No heights to clear', 'info', 1800); }}>Clear all heights</button>}
       </div>
     </div>
   );
@@ -266,24 +297,36 @@ export function DrawInspector(props: { ui: UiState; client: TableClient; board: 
   const allText = list.every((x) => x.k === 'text');
   const allClosed = list.every((x) => x.k === 'rect' || x.k === 'ellipse');
   const allTemplates = list.every((x) => isTemplate(x.k));
+  const allZones = list.every((x) => x.hz != null);
   const strokeKey = (['thin', 'medium', 'thick'] as StrokeSize[]).reduce((best, k) => (Math.abs(STROKE_CELLS[k] * client.grid.cell - first.w) < Math.abs(STROKE_CELLS[best] * client.grid.cell - first.w) ? k : best), 'medium' as StrokeSize);
   const size = one ? sizeFt(one, client.grid) : null;
   const ft = client.grid.ft;
   return (
     <div class="drawtag" onMouseDown={(e) => e.stopPropagation()}>
       <div class="dt-head">
-        <strong>{one ? DRAW_NAME[one.k] : `${list.length} drawings`}</strong>
+        <strong>{allZones ? (one ? 'Height area' : `${list.length} height areas`) : one ? DRAW_NAME[one.k] : `${list.length} drawings`}</strong>
         <span class="grow" />
         {one?.k === 'text' && <button class="btn small" title="Change the words (Enter)" onClick={() => board?.startTextEdit(one)}>Edit text</button>}
         <button class="btn small danger" title="Delete (Del)" onClick={() => { void client.removeDrawings(ids); ui.selectDrawings([]); }}>Delete</button>
         <button class="icon-btn" title="Deselect" onClick={() => ui.selectDrawings([])}>✕</button>
       </div>
       <div class="dt-body">
-        <div>
+        {allZones && (
+          <div>
+            <NumField label="Ground height" value={first.hz ?? 0} min={-1000} max={5000} step={5} unit="ft" title="How high this ground is above the base level of the map"
+              onCommit={(n) => { const h = Math.round(n); upd({ hz: h, color: zoneColor(h), fc: zoneColor(h) }); }} />
+            <div class="chips">
+              {ZONE_PRESETS.map((h) => (
+                <button key={h} class={`chip ${first.hz === h ? 'on' : ''}`} style={{ borderColor: zoneColor(h) }} onClick={() => upd({ hz: h, color: zoneColor(h), fc: zoneColor(h) })}>{h > 0 ? `+${h}` : h}</button>
+              ))}
+            </div>
+          </div>
+        )}
+        {!allZones && <div>
           <span class="field-label">{allText ? 'Text colour' : allClosed ? 'Outline colour' : 'Colour'}</span>
           <Colors value={first.color} small onPick={(c) => upd({ color: c })} />
-        </div>
-        {allClosed && (
+        </div>}
+        {allClosed && !allZones && (
           <div>
             <span class="field-label">Fill</span>
             <FillControls mode={fillModeOf(first.fill)} color={first.fc} outline={first.color}
@@ -294,7 +337,7 @@ export function DrawInspector(props: { ui: UiState; client: TableClient; board: 
           <label class="field"><span class="field-label">Opacity</span>
             <input type="range" min={10} max={100} value={Math.round((first.fill || 0.28) * 100)} onInput={(e) => upd({ fill: Number((e.target as HTMLInputElement).value) / 100 })} /></label>
         )}
-        {!allText && !allTemplates && (
+        {!allText && !allTemplates && !allZones && (
           <div class="row wrap">
             <div class="seg">
               {(['thin', 'medium', 'thick'] as StrokeSize[]).map((k) => <button key={k} class={strokeKey === k ? 'on' : ''} onClick={() => upd({ w: Math.max(1.5, STROKE_CELLS[k] * client.grid.cell) })}>{k === 'thin' ? 'Thin' : k === 'medium' ? 'Medium' : 'Thick'}</button>)}
@@ -305,7 +348,7 @@ export function DrawInspector(props: { ui: UiState; client: TableClient; board: 
         {one && size && 'w' in size && (
           <div class="row wrap">
             <NumField label="Width" value={size.w} min={1} max={2000} step={ft} unit="ft" title="Width in feet" onCommit={(n) => { const p = withSizeFt(one, client.grid, 'w', n); if (p.p) upd(p); }} />
-            <NumField label="Height" value={size.h} min={1} max={2000} step={ft} unit="ft" title="Height in feet" onCommit={(n) => { const p = withSizeFt(one, client.grid, 'h', n); if (p.p) upd(p); }} />
+            <NumField label={allZones ? 'Length' : 'Height'} value={size.h} min={1} max={2000} step={ft} unit="ft" title={allZones ? 'Length in feet, top to bottom on the map' : 'Height in feet'} onCommit={(n) => { const p = withSizeFt(one, client.grid, 'h', n); if (p.p) upd(p); }} />
           </div>
         )}
         {one && size && 'len' in size && (

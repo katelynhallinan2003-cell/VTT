@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'preact/hooks';
 import { healthState, HEALTH_LABEL, pctOf } from '../core/combat';
 import { TOKEN_SIZES } from '../core/model';
+import { altitudeOf, altLabel, groundAt, setAltitude, zonesOf } from '../core/height';
 import { throttle } from '../core/throttle';
 import type { Board } from '../board/Board';
 import type { TableClient } from '../state/client';
@@ -39,6 +40,7 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
   useClient(client);
   const d = useUi(ui);
   const [auraOpen, setAuraOpen] = useState(false);
+  const [heightOpen, setHeightOpen] = useState(false);
   const tokens = [...d.selection].map((id) => client.scene?.tokens.get(id)).filter((t): t is Token => !!t);
   if (!tokens.length) return null;
   const ids = tokens.map((t) => t.id);
@@ -51,10 +53,15 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
   const sub = multi ? '' : [sizeLabel, viewerSeesState ? HEALTH_LABEL[healthState(t0.hpPct)] : '', t0.hidden ? 'hidden' : '', t0.locked ? 'locked' : '', t0.fx.map((e) => e.n).join(', ')].filter(Boolean).join(' · ');
   const tracked = client.isDM ? tokens.filter((t) => t.hp != null && t.maxHp != null) : [];
   const canAura = !multi && editable;
+  const zones = zonesOf(client.scene?.draws.values() ?? []);
+  const alts = tokens.map((t) => altitudeOf(t, groundAt(zones, t)));
+  const a0 = alts[0];
+  const altText = multi ? (alts.every((a) => a.alt === a0.alt) ? altLabel(a0, t0.fly) : '') : altLabel(a0, t0.fly);
 
   return (
     <div class="tokentag" onMouseDown={(e) => e.stopPropagation()}>
       {auraOpen && canAura && <AuraPop key={t0.id} client={client} token={t0} />}
+      {heightOpen && editable && <HeightPop key={ids.join(',')} client={client} tokens={tokens} zones={zones} />}
       <div>
         <div class="tt-name">{multi ? `${tokens.length} tokens` : t0.name || 'Unnamed token'}</div>
         {sub && <div class="tt-sub">{sub}</div>}
@@ -70,8 +77,14 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
           Effects{!multi && t0.fx.length ? ` (${t0.fx.length})` : ''}
         </button>
       )}
+      {editable && (
+        <button class={`btn small ${heightOpen ? 'primary' : ''}`} title="How high it is: flying, or standing on high ground. ] and [ raise and lower it."
+          onClick={() => { setHeightOpen(!heightOpen); setAuraOpen(false); }}>
+          Height{altText ? ` ${altText}` : ''}
+        </button>
+      )}
       {canAura && (
-        <button class={`btn small ${auraOpen ? 'primary' : ''}`} title="Coloured areas that follow this token" onClick={() => setAuraOpen(!auraOpen)}>
+        <button class={`btn small ${auraOpen ? 'primary' : ''}`} title="Coloured areas that follow this token" onClick={() => { setAuraOpen(!auraOpen); setHeightOpen(false); }}>
           Aura{t0.auras.length ? ` (${t0.auras.length})` : ''}
         </button>
       )}
@@ -80,6 +93,40 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
           onClick={() => void client.updateTokens(ids, { hidden: !allHidden })}>{allHidden ? 'Show to players' : 'Hide from players'}</button>
       )}
       <button class="icon-btn" title="Deselect" onClick={() => ui.select([])}>✕</button>
+    </div>
+  );
+}
+
+/** How high the selected token(s) are: take off, land, go up or down 5 ft, or type a height. Walkers stand on whatever ground is under them. */
+function HeightPop(props: { client: TableClient; tokens: Token[]; zones: ReturnType<typeof zonesOf> }) {
+  const { client, tokens, zones } = props;
+  const alts = tokens.map((t) => altitudeOf(t, groundAt(zones, t)));
+  const ids = tokens.map((t) => t.id);
+  const flying = tokens.every((t) => t.fly);
+  const same = alts.every((a) => a.alt === alts[0].alt);
+  const move = (f: (a: ReturnType<typeof altitudeOf>) => number) => {
+    tokens.forEach((t, i) => { void client.updateTokens([t.id], setAltitude(f(alts[i]), alts[i].ground)); });
+  };
+  const groundTxt = alts.every((a) => a.ground === alts[0].ground) ? (alts[0].ground ? `The ground here is ${alts[0].ground} ft.` : 'The ground here is at the base level.') : 'The ground differs under each token.';
+  return (
+    <div class="tt-pop height-pop" onKeyDown={(e) => e.stopPropagation()}>
+      <div class="row wrap">
+        <button class={`btn small ${flying ? 'primary' : ''}`} title="Take off, or land"
+          onClick={() => { if (flying) void client.updateTokens(ids, { fly: false, elev: 0 }); else move((a) => Math.max(a.ground, 0) + 10); }}>{flying ? 'Flying: land' : 'Take off'}</button>
+        <button class="btn small" title="Down 5 feet" onClick={() => move((a) => a.alt - 5)}>−5</button>
+        <label class="numf" title="Feet above the map's base level">
+          <span>Altitude</span>
+          <input key={same ? alts[0].alt : 'x'} type="number" step={5} defaultValue={same ? alts[0].alt : ''} placeholder="Mixed" aria-label="Altitude in feet"
+            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+            onChange={(e) => { const v = (e.target as HTMLInputElement).value; if (v === '') return; const n = Number(v); if (Number.isFinite(n)) move(() => Math.max(-1000, Math.min(5000, n))); }} />
+          <span class="unit">ft</span>
+        </label>
+        <button class="btn small" title="Up 5 feet" onClick={() => move((a) => a.alt + 5)}>+5</button>
+      </div>
+      <div class="chips">
+        {[10, 20, 30, 40, 60].map((h) => <button key={h} class="chip" onClick={() => move(() => h)}>{h} ft</button>)}
+      </div>
+      <p class="hint">{groundTxt} A flying token never sinks below it, and a walking one stands on it. Drag a flyer over a cliff and it keeps its altitude.</p>
     </div>
   );
 }

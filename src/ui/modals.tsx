@@ -420,6 +420,7 @@ export function SettingsModal(props: { client: TableClient; ui: UiState; onClose
       <h3>Mouse</h3>
       <MouseSettings ui={props.ui} />
       <InitPosSetting ui={props.ui} />
+      <HeightsSetting ui={props.ui} />
 
       <h3>Keyboard &amp; mouse</h3>
       <ul class="keys">
@@ -430,7 +431,8 @@ export function SettingsModal(props: { client: TableClient; ui: UiState; onClose
         <li><kbd>Alt</kbd> while dragging — move without snapping</li>
         <li><kbd>Arrows</kbd> — nudge a square, <kbd>Del</kbd> — delete</li>
         <li><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo, <kbd>Ctrl</kbd>+<kbd>Y</kbd> redo, <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>X</kbd> / <kbd>V</kbd> copy, cut, paste tokens</li>
-        <li><kbd>V</kbd> select · <kbd>D</kbd> draw · <kbd>S</kbd> spell templates · <kbd>R</kbd> ruler · <kbd>M</kbd> test move · <kbd>I</kbd> initiative (DM)</li>
+        <li><kbd>V</kbd> select · <kbd>D</kbd> draw · <kbd>S</kbd> spell templates · <kbd>R</kbd> ruler · <kbd>M</kbd> test move · <kbd>I</kbd> initiative (DM) · <kbd>H</kbd> heights (DM)</li>
+        <li><kbd>]</kbd> raise the selected tokens 5 ft (they fly) · <kbd>[</kbd> lower them (down to the ground)</li>
         <li><kbd>G</kbd> grid · <kbd>F</kbd> fog (DM) · <kbd>Esc</kbd> back to select / put test moves back · <kbd>Enter</kbd> keep test moves</li>
         <li>While drawing: <kbd>Shift</kbd> locks angles and makes squares, <kbd>Alt</kbd> turns off snapping</li>
       </ul>
@@ -507,6 +509,14 @@ function MouseSettings(props: { ui: UiState }) {
         </div>
       </Field>
     </>
+  );
+}
+
+function HeightsSetting(props: { ui: UiState }) {
+  const d = useUi(props.ui);
+  return (
+    <Toggle checked={d.showHeights} onChange={(v) => props.ui.set({ showHeights: v })} label="Show terrain heights"
+      hint="The coloured high and low ground the DM draws. Turning it off only hides it on your screen; tokens still stand on it." />
   );
 }
 

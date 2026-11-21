@@ -8,7 +8,7 @@ import { UiState } from '../state/ui';
 import type { AuthUser, LibraryItem, Rect, Token, Vec } from '../types';
 import { Toasts, copyText, toast, useClient, useTheme, useUi } from './common';
 import { AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewSceneModal, ScenesModal, SettingsModal } from './modals';
-import { DrawFlyout, DrawInspector, RulerFlyout, TemplateFlyout, TestMoveBar, TextEditor } from './drawTools';
+import { DrawFlyout, DrawInspector, HeightFlyout, RulerFlyout, TemplateFlyout, TestMoveBar, TextEditor } from './drawTools';
 import { Dock, Rail, TokenTag } from './panels';
 import { InitPopup, InitStrip } from './initiative';
 import { EffectsModal } from './effects';
@@ -41,6 +41,7 @@ const ICONS = {
   template: 'M12 4l8 14H4zM4 18a8 3 0 0 0 16 0',
   ruler: 'M3 17L17 3l4 4L7 21zM7 13l2 2M10 10l2 2M13 7l2 2',
   init: 'M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 8l4 6H8z',
+  height: 'M2 20l6-10 4 6 3-4 7 8zM8 10l-1-2M15 12l1-3',
   test: 'M6 20a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM18 9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM8 15l8-5',
 };
 
@@ -219,6 +220,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
         <ToolBtn icon="draw" label="Draw and write" hotkey="D" on={d.tool === 'draw'} disabled={!client.canDo('draw')} onClick={() => ui.set({ tool: d.tool === 'draw' ? 'select' : 'draw' })} />
         <ToolBtn icon="template" label="Spell templates" hotkey="S" on={d.tool === 'template'} disabled={!client.canDo('draw')} onClick={() => ui.set({ tool: d.tool === 'template' ? 'select' : 'template' })} />
         <ToolBtn icon="ruler" label="Ruler" hotkey="R" on={d.tool === 'ruler'} disabled={!client.canDo('measure')} onClick={() => ui.set({ tool: d.tool === 'ruler' ? 'select' : 'ruler' })} />
+        {client.isDM && <ToolBtn icon="height" label="Heights: draw high and low ground" hotkey="H" on={d.tool === 'height'} onClick={() => ui.set({ tool: d.tool === 'height' ? 'select' : 'height' })} />}
         <ToolBtn icon="test" label="Test move: try a move without making it" hotkey="M" on={d.testMove} onClick={() => ui.set({ testMove: !d.testMove })} />
         {client.isDM && <ToolBtn icon="init" label="Initiative: roll and keep the turn order" hotkey="I" on={d.initOpen} toggle onClick={() => ui.set({ initOpen: !d.initOpen })} />}
         <div class="tool-sep" />
@@ -232,6 +234,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {d.tool === 'draw' && <DrawFlyout ui={ui} client={client} />}
       {d.tool === 'template' && <TemplateFlyout ui={ui} client={client} />}
       {d.tool === 'ruler' && <RulerFlyout ui={ui} client={client} />}
+      {d.tool === 'height' && client.isDM && <HeightFlyout ui={ui} client={client} />}
       <TestMoveBar ui={ui} board={board} />
       <TextEditor ui={ui} client={client} board={board} />
       <DrawInspector ui={ui} client={client} board={board} />

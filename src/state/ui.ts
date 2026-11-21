@@ -1,7 +1,7 @@
 import type { Unsub } from '../backend/types';
 import { FONT_KEYS, type FillMode, type SphereSnap } from '../core/draw';
 
-export type Tool = 'select' | 'grid' | 'fog' | 'draw' | 'template' | 'ruler';
+export type Tool = 'select' | 'grid' | 'fog' | 'draw' | 'template' | 'ruler' | 'height';
 export type DrawTool = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'erase';
 export type TemplateKind = 'cone' | 'cube' | 'sphere' | 'emanation' | 'beam';
 export type StrokeSize = 'thin' | 'medium' | 'thick';
@@ -57,6 +57,11 @@ export interface UiData {
   panButton: 'right' | 'middle';
   /** how pinging works: middle click, or holding the left button */
   pingMode: 'middle' | 'hold';
+  /** the Heights tool: how high the ground it draws is (feet), and whether it draws boxes or circles */
+  heightFt: number;
+  heightShape: 'rect' | 'ellipse';
+  /** show the height zones on the map (the Heights tool shows them anyway) */
+  showHeights: boolean;
   /** DM: the initiative pop-up is open */
   initOpen: boolean;
   /** where the turn order sits on screen: across the top middle, or down the right edge */
@@ -101,6 +106,9 @@ export class UiState {
     drawSel: new Set(), testMove: false, testCount: 0,
     sharePlot: readFlag('vtt-share-plot', false),
     textEdit: null, camRev: 0, initOpen: false,
+    heightFt: (() => { try { const n = Number(localStorage.getItem('vtt-height-ft')); return Number.isFinite(n) && localStorage.getItem('vtt-height-ft') !== null ? n : 10; } catch { return 10; } })(),
+    heightShape: readStr('vtt-height-shape', 'rect', ['rect', 'ellipse'] as const),
+    showHeights: readFlag('vtt-show-heights', true),
     initPos: readStr('vtt-init-pos', 'top', ['top', 'side'] as const),
     panButton: readStr('vtt-pan-button', 'right', ['right', 'middle'] as const),
     pingMode: readStr('vtt-ping-mode', 'middle', ['middle', 'hold'] as const),
@@ -133,6 +141,9 @@ export class UiState {
       if (patch.drawDash !== undefined) localStorage.setItem('vtt-draw-dash', patch.drawDash ? '1' : '0');
       if (patch.panButton !== undefined) localStorage.setItem('vtt-pan-button', patch.panButton);
       if (patch.pingMode !== undefined) localStorage.setItem('vtt-ping-mode', patch.pingMode);
+      if (patch.heightFt !== undefined) localStorage.setItem('vtt-height-ft', String(patch.heightFt));
+      if (patch.heightShape !== undefined) localStorage.setItem('vtt-height-shape', patch.heightShape);
+      if (patch.showHeights !== undefined) localStorage.setItem('vtt-show-heights', patch.showHeights ? '1' : '0');
       if (patch.initPos !== undefined) localStorage.setItem('vtt-init-pos', patch.initPos);
       if (patch.sharePlot !== undefined) localStorage.setItem('vtt-share-plot', patch.sharePlot ? '1' : '0');
     } catch { /* ignore */ }

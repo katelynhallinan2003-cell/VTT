@@ -44,8 +44,8 @@ export interface SceneState {
 }
 
 /** A drawing as the caller describes it; the text styling and the fill colour are optional. */
-export type NewDrawing = Omit<Drawing, 'id' | 'uid' | 't' | 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho'> & Partial<Pick<Drawing, 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho'>>;
-export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho'>>;
+export type NewDrawing = Omit<Drawing, 'id' | 'uid' | 't' | 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz'> & Partial<Pick<Drawing, 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz'>>;
+export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz'>>;
 
 export type ScenePatch = Partial<Omit<SceneMeta, 'grid' | 'fog'>> & {
   grid?: Partial<GridSettings>;
@@ -566,7 +566,7 @@ export class TableClient {
     if (!this.viewSceneId) throw new Error('No scene is open');
     if (!this.canDo('draw')) throw new Error('You are not allowed to draw here.');
     const id = this.backend.newKey();
-    const full: Drawing = { fc: '', font: '', b: false, i: false, u: false, ho: false, ...d, id, uid: this.uid, t: this.backend.now() };
+    const full: Drawing = { fc: '', font: '', b: false, i: false, u: false, ho: false, hz: null, ...d, id, uid: this.uid, t: this.backend.now() };
     const wrote = this.backend.set(this.drawPath(id), drawingToWire(full));
     opts.onId?.(id);
     await wrote;
@@ -624,7 +624,7 @@ export class TableClient {
     const prev = cur.map((d) => ({ id: d.id, vals: Object.fromEntries(Object.keys(patch).map((k) => [k, (d as any)[k]])) }));
     const write = (list: { id: string; vals: Record<string, unknown> }[]) => {
       const updates: Record<string, any> = {};
-      for (const d of list) for (const [k, v] of Object.entries(d.vals)) updates[`${this.drawPath(d.id)}/${k}`] = v === '' || v === false || v === 0 ? null : v;
+      for (const d of list) for (const [k, v] of Object.entries(d.vals)) updates[`${this.drawPath(d.id)}/${k}`] = k === 'hz' ? v ?? null : v === '' || v === false || v === 0 ? null : v;
       return this.backend.update(updates);
     };
     const next = cur.map((d) => ({ id: d.id, vals: patch as Record<string, unknown> }));

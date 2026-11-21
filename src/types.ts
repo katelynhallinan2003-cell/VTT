@@ -98,6 +98,10 @@ export interface Token {
   hpPct: number | null;
   /** how far this token can see, in feet (0 = it does not clear fog by itself) */
   sight: number;
+  /** off the ground: it holds `elev` feet of altitude instead of standing on whatever height the ground has there */
+  fly: boolean;
+  /** altitude in feet above the map's base level (only used while `fly` is on) */
+  elev: number;
   /** added to a d20 when this token rolls for initiative (remembered per token) */
   initBonus: number;
   /** conditions and other effects on it: poisoned, blessed, a custom one... Everyone who can see the token sees them. */
@@ -176,6 +180,8 @@ export interface Drawing {
   ho: boolean;
   /** width of a line template, in feet */
   bw: number;
+  /** a box or circle with a height set marks ground at that many feet above (or below) the map's base level */
+  hz: number | null;
   t: number;
 }
 

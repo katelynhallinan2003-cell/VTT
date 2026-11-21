@@ -4,6 +4,7 @@ import {
 } from '../core/geometry';
 import { FILL_LEVEL, STROKE_CELLS, beamWidthPx, dashSegments, fitPenPoints, handlesOf, hitDrawing, isTemplate, joinPts, resizeDrawing, setLineMeasurer, snapTemplate, templateLabel, type HandleId } from '../core/draw';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
+import { altitudeOf, groundAt, heightChangeNote, heightNote, setAltitude, zoneColor, zonesOf, type Altitude, type Zone } from '../core/height';
 import { pctOf, toPub, visionCircles } from '../core/combat';
 import type { DrawingPatch, TableClient } from '../state/client';
 import type { StrokeSize, UiState } from '../state/ui';
@@ -32,7 +33,7 @@ type Drag =
   | { kind: 'rect'; start: Vec; cur: Vec }
   | { kind: 'brush'; pts: Vec[] }
   | { kind: 'map'; start: Vec; orig: Vec; moved: boolean }
-  | { kind: 'shape'; dk: DrawKind; start: Vec; pts: Vec[] }
+  | { kind: 'shape'; dk: DrawKind; start: Vec; pts: Vec[]; /** set while drawing a height zone: its height in feet */ hz?: number }
   | { kind: 'erase'; ids: Set<string> }
   | { kind: 'ruler' }
   | { kind: 'drawmove'; ids: string[]; start: Vec; dx: number; dy: number; moved: boolean }
@@ -69,7 +70,7 @@ export class Board {
   private liveSent = false;
   private seenDrawRev = -1;
   private seenLiveRev = -1;
-  private prevUi = { testMove: false, sharePlot: false, tool: 'select' as string, rulerColor: '', cover: true };
+  private prevUi = { testMove: false, sharePlot: false, tool: 'select' as string, rulerColor: '', cover: true, heights: true };
   private distText!: Text;
 
   private cam = { zoom: 1, tx: 0, ty: 0 };
@@ -101,6 +102,9 @@ export class Board {
 
   private drag: Drag | null = null;
   private polyPts: Vec[] = [];
+  /** the boxes and circles that give the ground a height, for every token's altitude */
+  private zones: Zone[] = [];
+  private seenZoneRev = -1;
   private pointerW: Vec | null = null;
   private spaceDown = false;
   /** holding the left button on empty space for a moment sends a ping */
@@ -314,6 +318,11 @@ export class Board {
     if (c.players.size !== this.seenPlayers) { this.seenPlayers = c.players.size; this.seenTokensRev = -1; }
     if (previewNow !== this.seenPreview) { this.seenPreview = previewNow; this.seenTokensRev = -1; this.seenFogRev = -1; }
 
+    if (scene.drawRev !== this.seenZoneRev) {
+      this.seenZoneRev = scene.drawRev;
+      const next = zonesOf(scene.draws.values());
+      if (JSON.stringify(next) !== JSON.stringify(this.zones)) { this.zones = next; this.seenTokensRev = -1; }
+    }
     if (scene.tokensRev !== this.seenTokensRev) {
       this.seenTokensRev = scene.tokensRev;
       this.reconcileTokens();
@@ -358,7 +367,8 @@ export class Board {
     if (this.mapUrl) { releaseTexture(this.mapUrl, 'map'); this.mapUrl = null; }
     this.mapTex = null;
     this.cb.onMapError(null);
-    this.seenMetaRev = this.seenTokensRev = this.seenFogRev = this.seenDrawRev = this.seenLiveRev = this.seenInitRev = -1;
+    this.seenMetaRev = this.seenTokensRev = this.seenFogRev = this.seenDrawRev = this.seenLiveRev = this.seenInitRev = this.seenZoneRev = -1;
+    this.zones = [];
     this.seenGridKey = '';
     if (this.fogSprite) this.fogSprite.visible = false;
     const saved = scene ? this.cams.get(scene.id) : undefined;
@@ -436,7 +446,19 @@ export class Board {
       showLabel: t.label !== 'dm' || (c.isDM && !this.ui.data.dmPreview),
       textRes: this.textRes,
       health: this.healthFor(t),
+      alt: this.heightOf(t),
     };
+  }
+
+  /** How high a token is (at `pos`, or where it is): flying, or standing on the ground there. */
+  heightOf(t: Token, pos?: Vec): Altitude {
+    return altitudeOf(t, groundAt(this.zones, pos ?? t));
+  }
+
+  /** How high a spot on the map is: whatever token is standing or flying there, else the ground. */
+  private pointAlt(p: Vec): number {
+    const hit = this.hitToken(p);
+    return hit ? this.heightOf(hit).alt : groundAt(this.zones, p);
   }
 
   /** The DM sees real health for every token that has some; everyone else sees only what the DM allows. */
@@ -486,7 +508,7 @@ export class Board {
 
   private hitToken(p: Vec): Token | null {
     const grid = this.client.grid;
-    const list = [...this.views.values()].sort((a, b) => b.token.z - a.token.z);
+    const list = [...this.views.values()].sort((a, b) => b.container.zIndex - a.container.zIndex);
     for (const v of list) {
       if (pointInToken({ ...v.token, x: v.display.x, y: v.display.y }, grid, p)) return v.token;
     }
@@ -602,11 +624,11 @@ export class Board {
   private onUiChange() {
     const u = this.ui.data;
     const prev = this.prevUi;
-    this.prevUi = { testMove: u.testMove, sharePlot: u.sharePlot, tool: u.tool, rulerColor: u.rulerColor, cover: u.tplCover };
+    this.prevUi = { testMove: u.testMove, sharePlot: u.sharePlot, tool: u.tool, rulerColor: u.rulerColor, cover: u.tplCover, heights: u.showHeights };
     if (prev.testMove && !u.testMove && this.testMoves.size) this.resetTestMoves();
     if (u.sharePlot !== prev.sharePlot) this.publishLive(true);
     if (u.rulerColor !== prev.rulerColor) { this.publishLive(); this.invalidate(); }
-    if (u.tplCover !== prev.cover) this.refreshDraws();
+    if (u.tplCover !== prev.cover || u.showHeights !== prev.heights || (prev.tool === 'height') !== (u.tool === 'height')) this.refreshDraws();
     if (prev.tool !== u.tool) {
       this.cancelPress();
       if (this.ruler && u.tool !== 'ruler') { this.ruler = null; this.publishLive(); }
@@ -803,7 +825,9 @@ export class Board {
       if (a && o) {
         g.moveTo(o.x, o.y).lineTo(a.display.x, a.display.y).stroke({ width: 2 / z, color: 0xffffff, alpha: 0.7 });
         const ft = distanceFt(grid, o, a.display);
-        this.distText.text = `${ft} ft`;
+        // walking up onto a cliff or off a ledge: say so
+        const note = a.token.fly ? '' : heightChangeNote(this.heightOf(a.token, o).alt, this.heightOf(a.token, a.display).alt);
+        this.distText.text = note ? `${ft} ft · ${note}` : `${ft} ft`;
         this.distText.scale.set(1 / z);
         this.distText.position.set(a.display.x, a.display.y - (a.token.size * grid.cell) / 2 - 6 / z);
         this.distText.visible = true;
@@ -837,8 +861,10 @@ export class Board {
     g.moveTo(r.a.x, r.a.y).lineTo(r.b.x, r.b.y).stroke({ width: 3 / z, color, cap: 'round' });
     g.circle(r.a.x, r.a.y, 6 / z).fill(color).stroke({ width: 2 / z, color: 0xffffff });
     g.circle(r.b.x, r.b.y, 6 / z).fill(color).stroke({ width: 2 / z, color: 0xffffff });
-    const ft = distanceFt(grid, r.a, r.b);
-    this.plotLabel(li, `${name ? name + ': ' : ''}${ft} ft`, r.b.x, r.b.y - 12 / z, color);
+    const up = this.pointAlt(r.b) - this.pointAlt(r.a);
+    const flat = distanceFt(grid, r.a, r.b);
+    const ft = up ? distanceFt(grid, r.a, r.b, grid.rule, up) : flat;
+    this.plotLabel(li, `${name ? name + ': ' : ''}${ft} ft${heightNote(flat, up)}`, r.b.x, r.b.y - 12 / z, color);
   }
 
   private drawPlots(g: Graphics, z: number) {
@@ -860,7 +886,7 @@ export class Board {
       g.rect(b.x - pad + (mv?.dx ?? 0), b.y - pad + (mv?.dy ?? 0), b.w + pad * 2, b.h + pad * 2).stroke({ width: 1.5 / z, color: SELECT });
     }
     // handles to drag the edges, corners or ends of one selected drawing
-    if (u.drawSel.size === 1 && d?.kind !== 'drawmove' && (u.tool === 'select' || (u.tool === 'draw' && u.drawTool !== 'erase'))) {
+    if (u.drawSel.size === 1 && d?.kind !== 'drawmove' && (u.tool === 'select' || u.tool === 'height' || (u.tool === 'draw' && u.drawTool !== 'erase'))) {
       const dd = this.shownDrawing([...u.drawSel][0]);
       if (dd && this.client.canEditDrawing(dd)) {
         const hs = 4.5 / z;
@@ -871,7 +897,11 @@ export class Board {
     // the shape being dragged out
     if (d?.kind === 'shape') {
       const isT = isTemplate(d.dk);
-      paintShape(g, {
+      if (d.hz != null) {
+        const zc = zoneColor(d.hz);
+        paintShape(g, { k: d.dk, pts: d.pts, color: zc, w: Math.max(2, grid.cell * 0.05), fill: 0.4, fc: zc, dash: false, bw: 5 }, grid, 0.85, false);
+        if (d.pts.length >= 2) this.plotLabel(li++, `${d.hz} ft`, (d.pts[0].x + d.pts[1].x) / 2, Math.min(d.pts[0].y, d.pts[1].y) - 8 / z, num(zc));
+      } else paintShape(g, {
         k: d.dk, pts: d.pts, color: u.drawColor, w: isT ? Math.max(2, this.strokePx()) : this.strokePx(),
         fill: !isT && (d.dk === 'rect' || d.dk === 'ellipse') ? FILL_LEVEL[u.drawFillMode] : 0, fc: u.drawFillColor, dash: !isT && u.drawDash, bw: u.tplWidth,
       }, grid, 0.85, u.tplCover);
@@ -1009,13 +1039,14 @@ export class Board {
     if (e.button !== 0) return;
 
     const tool = this.ui.data.tool;
-    if (tool === 'select' || (tool === 'draw' && this.ui.data.drawTool !== 'erase')) {
+    if (tool === 'select' || tool === 'height' || (tool === 'draw' && this.ui.data.drawTool !== 'erase')) {
       const hh = this.handleAt(w);
       if (hh) { this.drag = { kind: 'drawresize', id: hh.d.id, handle: hh.h.id, orig: hh.d, patch: null }; return; }
     }
     if (tool === 'grid' && this.client.isDM) { this.drag = { kind: 'rect', start: w, cur: w }; return; }
     if (tool === 'fog' && this.client.isDM) { this.startFog(w, e); return; }
     if (tool === 'draw') { this.startDraw(w, e); return; }
+    if (tool === 'height' && this.client.isDM) { this.startHeight(w); return; }
     if (tool === 'template') { this.startTemplate(w, e); return; }
     if (tool === 'ruler') { this.startRuler(w, e); return; }
 
@@ -1105,10 +1136,13 @@ export class Board {
   }
 
   private drawingsShown(): Drawing[] {
-    const list = this.client.drawingsSorted();
+    const list = this.client.drawingsSorted().filter((d) => d.hz == null || this.zonesVisible());
     const pv = this.drawPreview;
     return pv ? list.map((d) => (d.id === pv.id ? { ...d, ...pv.patch } : d)) : list;
   }
+
+  /** height zones show when the view setting is on, or while the Heights tool is open */
+  private zonesVisible(): boolean { return this.ui.data.showHeights || this.ui.data.tool === 'height'; }
 
   private shownDrawing(id: string): Drawing | undefined {
     const d = this.client.scene?.draws.get(id);
@@ -1140,7 +1174,7 @@ export class Board {
   }
 
   private hitDrawingAt(p: Vec, solid: boolean): Drawing | null {
-    const list = this.client.drawingsSorted();
+    const list = this.client.drawingsSorted().filter((d) => d.hz == null || this.zonesVisible());
     const tol = 6 / this.cam.zoom;
     for (let i = list.length - 1; i >= 0; i--) {
       const d = list[i];
@@ -1160,6 +1194,38 @@ export class Board {
     }
     if (tool === 'erase') { this.drag = { kind: 'erase', ids: new Set() }; this.eraseAt(w); return; }
     this.drag = { kind: 'shape', dk: tool, start: w, pts: tool === 'pen' ? [w] : [w, w] };
+  }
+
+  /**
+   * Fly the selected tokens up or down by `ft` feet (] and [). From the ground, up lifts a token off it;
+   * coming down to the ground lands it. Only tokens the person may edit are touched.
+   */
+  raiseSelected(ft: number) {
+    const ids = [...this.ui.data.selection].filter((id) => { const t = this.client.scene?.tokens.get(id); return !!t && this.client.canDo('edit', t); });
+    if (!ids.length) return;
+    // each token goes up or down from where it is now, so a group keeps its spacing
+    for (const id of ids) {
+      const t = this.client.scene!.tokens.get(id)!;
+      const a = this.heightOf(t);
+      void this.client.updateTokens([id], setAltitude(a.alt + ft, a.ground));
+    }
+    const t0 = this.client.scene!.tokens.get(ids[0])!;
+    const a0 = this.heightOf(t0);
+    const to = Math.max(a0.ground, a0.alt + ft);
+    this.cb.onNotice(ids.length === 1 ? (to > a0.ground ? `${t0.name || 'Token'} flies at ${to} ft` : `${t0.name || 'Token'} lands`) : `${ids.length} tokens ${ft > 0 ? 'up' : 'down'} ${Math.abs(ft)} ft`, 'info');
+  }
+
+  /** The Heights tool: grab a zone by its edge, or drag out a new box or circle (it can sit inside another one). */
+  private startHeight(w: Vec) {
+    const edge = this.hitDrawingAt(w, false);
+    if (edge && edge.hz != null) {
+      this.ui.selectDrawings([edge.id]);
+      this.drag = { kind: 'drawmove', ids: [edge.id], start: w, dx: 0, dy: 0, moved: false };
+      return;
+    }
+    const u = this.ui.data;
+    this.ui.selectDrawings([]);
+    this.drag = { kind: 'shape', dk: u.heightShape, start: w, pts: [w, w], hz: u.heightFt };
   }
 
   private startTemplate(w: Vec, e: PointerEvent) {
@@ -1241,6 +1307,12 @@ export class Board {
     else if (len * this.cam.zoom < 4) return;
     const stroke = this.strokePx();
     const closed = k === 'rect' || k === 'ellipse';
+    if (d.hz != null) {
+      const col = zoneColor(d.hz);
+      void this.client.addDrawing({ k, p: joinPts(pts), color: col, w: Math.max(2, grid.cell * 0.05), fill: 0.4, fc: col, dash: false, txt: '', fs: 28, bw: 5, hz: d.hz },
+        { onId: (id) => this.ui.selectDrawings([id]) }).catch((err: Error) => this.cb.onNotice(err.message, 'error'));
+      return;
+    }
     void this.client.addDrawing({
       k, p: joinPts(pts), color: u.drawColor, w: isT ? Math.max(2, stroke) : stroke,
       fill: !isT && closed ? FILL_LEVEL[u.drawFillMode] : 0, fc: closed ? u.drawFillColor : '',
@@ -1418,6 +1490,7 @@ export class Board {
       v.display = { x: o.x + dx, y: o.y + dy };
       v.target = { ...v.display };
       moves.push({ id, x: v.display.x, y: v.display.y });
+      v.setAlt(this.heightOf(v.token, v.display), grid);
     }
     if (!this.ui.data.testMove) this.sendMoves(moves, this.teleportHeld);
   }
@@ -1625,6 +1698,9 @@ export class Board {
       case 'r': ui.set({ tool: ui.data.tool === 'ruler' ? 'select' : 'ruler' }); break;
       case 'm': ui.set({ testMove: !ui.data.testMove }); break;
       case 'i': if (c.isDM) ui.set({ initOpen: !ui.data.initOpen }); break;
+      case 'h': if (c.isDM) ui.set({ tool: ui.data.tool === 'height' ? 'select' : 'height' }); break;
+      case ']': this.raiseSelected(5); break;
+      case '[': this.raiseSelected(-5); break;
       case '0': this.fit(); break;
       case '+': case '=': this.zoomBy(1.25); break;
       case '-': this.zoomBy(0.8); break;

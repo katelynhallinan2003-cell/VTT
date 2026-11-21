@@ -151,6 +151,17 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
             </select>
           </Field>
 
+          <h4>Height</h4>
+          <Toggle checked={val('fly') === true} onChange={(v) => set({ fly: v, ...(v && !((val('elev') ?? 0) > 0) ? { elev: 10 } : {}) })} label="Flying" disabled={!editable}
+            hint="Off the ground. It keeps its altitude, and shows a shadow and a ↑ tag. Walking tokens stand on whatever height the ground has (see the Heights tool)." />
+          {val('fly') !== false && (
+            <Field label="Altitude (feet)" hint="Feet above the map's base level. It never sinks below the ground: over a 10 ft cliff, 5 means it is on the cliff top.">
+              <input type="number" class="num" step={5} min={-1000} max={5000} disabled={!editable || val('fly') !== true} value={(draft.elev ?? same('elev') ?? '') as number | ''}
+                placeholder={val('elev') === null ? 'Mixed' : '0'}
+                onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ elev: v === '' ? 0 : Math.round(Number(v)) }); }} />
+            </Field>
+          )}
+
           {client.isDM && (
             <>
               <Field label="Controlled by">

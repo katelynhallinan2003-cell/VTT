@@ -9,7 +9,7 @@ import { emailKey, pushKey } from '../src/core/ids';
 import type { GridSettings, Token } from '../src/types';
 
 const grid = (over: Partial<GridSettings> = {}): GridSettings => ({
-  cell: 70, ox: 0, oy: 0, visible: true, color: '#000', opacity: 0.3, ft: 5, rule: 'chebyshev', snap: true, ...over,
+  shape: 'square', cell: 70, ox: 0, oy: 0, visible: true, color: '#000', opacity: 0.3, ft: 5, rule: 'chebyshev', snap: true, ...over,
 });
 
 describe('grid snapping', () => {

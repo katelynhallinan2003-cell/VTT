@@ -4,6 +4,7 @@ import {
 } from '../core/geometry';
 import { FILL_LEVEL, STROKE_CELLS, beamWidthPx, dashSegments, fitPenPoints, handlesOf, hitDrawing, isTemplate, joinPts, resizeDrawing, setLineMeasurer, snapTemplate, templateLabel, type HandleId } from '../core/draw';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
+import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
 import { altitudeOf, groundAt, heightChangeNote, heightNote, setAltitude, zoneColor, zonesOf, type Altitude, type Zone } from '../core/height';
 import { pctOf, toPub, visionCircles } from '../core/combat';
 import type { DrawingPatch, TableClient } from '../state/client';
@@ -307,7 +308,7 @@ export class Board {
       this.seenMetaRev = scene.metaRev;
       this.onMeta();
     }
-    const gridKey = scene.meta ? `${scene.meta.grid.cell}` : '';
+    const gridKey = scene.meta ? `${scene.meta.grid.cell}|${scene.meta.grid.shape}` : '';
     const previewNow = this.ui.data.dmPreview;
     if (gridKey !== this.seenGridKey) {
       this.seenGridKey = gridKey;
@@ -704,6 +705,17 @@ export class Board {
     const y0 = Math.max(area.y, vis.y);
     const y1 = Math.min(area.y + area.h, vis.y + vis.h);
     if (x1 <= x0 || y1 <= y0) return;
+    if (isHex(meta.grid)) {
+      // every hex draws three of its six sides, so a side shared by two hexes is drawn once (a see-through line stays an even colour)
+      const pad = cell;
+      for (const c of hexCentersIn(meta.grid, { x: x0 - pad, y: y0 - pad, w: x1 - x0 + pad * 2, h: y1 - y0 + pad * 2 })) {
+        if (c.x < area.x || c.x > area.x + area.w || c.y < area.y || c.y > area.y + area.h) continue;
+        const k = hexCorners(meta.grid, c);
+        g.moveTo(k[0].x, k[0].y).lineTo(k[1].x, k[1].y).lineTo(k[2].x, k[2].y).lineTo(k[3].x, k[3].y);
+      }
+      g.stroke({ width: 1.25 / this.cam.zoom, color: num(color), alpha: opacity });
+      return;
+    }
     for (let i = Math.ceil((x0 - ox) / cell); ox + i * cell <= x1; i++) g.moveTo(ox + i * cell, y0).lineTo(ox + i * cell, y1);
     for (let j = Math.ceil((y0 - oy) / cell); oy + j * cell <= y1; j++) g.moveTo(x0, oy + j * cell).lineTo(x1, oy + j * cell);
     g.stroke({ width: 1.25 / this.cam.zoom, color: num(color), alpha: opacity });
@@ -1200,6 +1212,12 @@ export class Board {
    * Fly the selected tokens up or down by `ft` feet (] and [). From the ground, up lifts a token off it;
    * coming down to the ground lands it. Only tokens the person may edit are touched.
    */
+  /** Where an arrow-key step ends. On hexes it is put on the exact hex, so repeated steps never drift off the grid. */
+  private nudged(_t: unknown, size: number, to: Vec): Vec {
+    const g = this.client.grid;
+    return g.snap && isHex(g) ? snapTokenCenter(g, size, to) : to;
+  }
+
   raiseSelected(ft: number) {
     const ids = [...this.ui.data.selection].filter((id) => { const t = this.client.scene?.tokens.get(id); return !!t && this.client.canDo('edit', t); });
     if (!ids.length) return;
@@ -1668,18 +1686,19 @@ export class Board {
     }
     if (e.key.startsWith('Arrow') && ui.data.selection.size) {
       e.preventDefault();
-      const step = c.grid.cell * (e.shiftKey ? 1 : 1);
-      const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
-      const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+      const step = c.grid.cell;
+      const dir = e.key === 'ArrowLeft' ? 'left' : e.key === 'ArrowRight' ? 'right' : e.key === 'ArrowUp' ? 'up' : 'down';
+      // a square grid steps one square; on hexes the step follows the staggering so up and down stay in line
+      const delta = (at: Vec): Vec => (isHex(c.grid) ? hexNudge(c.grid, at, dir) : { x: dir === 'left' ? -step : dir === 'right' ? step : 0, y: dir === 'up' ? -step : dir === 'down' ? step : 0 });
       const moves = [...ui.data.selection]
         .map((id) => c.scene?.tokens.get(id))
         .filter((t): t is Token => !!t && c.canDo('move', t))
-        .map((t) => ({ id: t.id, x: t.x + dx, y: t.y + dy }));
+        .map((t) => { const d = delta(t); return { id: t.id, ...this.nudged(t, t.size, { x: t.x + d.x, y: t.y + d.y }) }; });
       if (moves.length && ui.data.testMove) {
         for (const m of moves) {
           const v = this.views.get(m.id);
           const cur = this.testMoves.get(m.id)?.to ?? (v ? { x: v.token.x, y: v.token.y } : null);
-          if (cur) this.setTest(m.id, { x: cur.x + dx, y: cur.y + dy });
+          if (cur) { const d = delta(cur); this.setTest(m.id, this.nudged(m, this.views.get(m.id)?.token.size ?? 1, { x: cur.x + d.x, y: cur.y + d.y })); }
         }
         this.afterTestChange();
       } else if (moves.length) {

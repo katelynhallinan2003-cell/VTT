@@ -346,10 +346,10 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {modal?.kind === 'editToken' && <TokenEditorModal client={client} ids={modal.ids} onClose={() => setModal(null)} />}
       {modal?.kind === 'claim' && <ClaimModal client={client} onClose={() => setModal(null)} onNewToken={() => openAddToken()} />}
       {modal?.kind === 'grid' && (
-        <GridDialog onCancel={() => { setModal(null); ui.set({ tool: 'select' }); }}
+        <GridDialog shape={client.grid.shape} onCancel={() => { setModal(null); ui.set({ tool: 'select' }); }}
           onApply={(cols, rows) => {
             const { gridFromRect } = geometry;
-            const g = gridFromRect(modal.rect, cols, rows);
+            const g = gridFromRect(modal.rect, cols, rows, client.grid.shape);
             void client.updateScene({ grid: { cell: Math.round(g.cell * 100) / 100, ox: Math.round(g.ox * 100) / 100, oy: Math.round(g.oy * 100) / 100, visible: true } });
             setModal(null);
             ui.set({ tool: 'select' });

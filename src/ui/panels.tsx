@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'preact/hooks';
 import { healthState, HEALTH_LABEL, pctOf } from '../core/combat';
 import { TOKEN_SIZES } from '../core/model';
+import { gridPeriod, isHex } from '../core/hex';
 import { altitudeOf, altLabel, groundAt, setAltitude, zonesOf } from '../core/height';
 import { throttle } from '../core/throttle';
 import type { Board } from '../board/Board';
@@ -193,6 +194,14 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
   }
   const g = meta.grid;
   const setGrid = (p: Partial<GridSettings>) => { void client.updateScene({ grid: p }); };
+  const hex = isHex(g);
+  const per = gridPeriod(g);
+  /** Changing the shape keeps the size, and puts the offsets back inside what the new shape repeats over. */
+  const switchShape = (shape: GridSettings['shape']) => {
+    if (shape === g.shape) return;
+    const np = gridPeriod({ cell: g.cell, shape });
+    setGrid({ shape, ox: Math.round(((g.ox % np.x) + np.x) % np.x * 100) / 100, oy: Math.round(((g.oy % np.y) + np.y) % np.y * 100) / 100 });
+  };
 
   async function replaceMap(f: File) {
     try {
@@ -221,26 +230,33 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
       </Section>
 
       <Section id="grid" title="Grid">
+        <Field label="Grid type" hint={hex ? 'Hexes count every step the same, with no diagonals. Move a token with the arrow keys and it follows the hexes. Draw a box over the hexes again to line the grid up with your map.' : undefined}>
+          <div class="seg">
+            <button class={g.shape === 'square' ? 'on' : ''} onClick={() => switchShape('square')}>Squares</button>
+            <button class={g.shape === 'pointy' ? 'on' : ''} title="Hexes with a point at the top: rows run straight across" onClick={() => switchShape('pointy')}>Hex, point up</button>
+            <button class={g.shape === 'flat' ? 'on' : ''} title="Hexes with a flat top: columns run straight up and down" onClick={() => switchShape('flat')}>Hex, flat top</button>
+          </div>
+        </Field>
         <Toggle checked={g.visible} onChange={(v) => setGrid({ visible: v })} label="Show grid" />
         <Toggle checked={g.snap} onChange={(v) => setGrid({ snap: v })} label="Snap tokens to grid" hint="Hold Alt while dragging to skip snapping." />
         <button class={`btn ${d.tool === 'grid' ? 'primary' : ''}`} onClick={() => ui.set({ tool: d.tool === 'grid' ? 'select' : 'grid' })}>
-          {d.tool === 'grid' ? 'Drag a box over the grid squares…' : 'Draw a box to set the grid'}
+          {d.tool === 'grid' ? (hex ? 'Drag a box around some hexes…' : 'Drag a box over the grid squares…') : 'Draw a box to set the grid'}
         </button>
         <Field label="Grid colour"><input type="color" value={g.color} onInput={(e) => gridT({ color: (e.target as HTMLInputElement).value })} /></Field>
 
         <Section id="grid-fine" title="Fine tune grid" defaultOpen={false}>
-          <SliderField label="Square size" value={g.cell} min={10} max={300} step={0.1} unit="px" onInput={(v) => gridT({ cell: v })} />
-          <SliderField label="Offset left / right" value={g.ox} min={0} max={Math.max(1, g.cell)} step={0.1} unit="px" onInput={(v) => gridT({ ox: v })} />
-          <SliderField label="Offset up / down" value={g.oy} min={0} max={Math.max(1, g.cell)} step={0.1} unit="px" onInput={(v) => gridT({ oy: v })} />
+          <SliderField label={hex ? 'Hex size (side to side)' : 'Square size'} value={g.cell} min={10} max={300} step={0.1} unit="px" onInput={(v) => gridT({ cell: v })} />
+          <SliderField label="Offset left / right" value={g.ox} min={0} max={Math.max(1, per.x)} step={0.1} unit="px" onInput={(v) => gridT({ ox: v })} />
+          <SliderField label="Offset up / down" value={g.oy} min={0} max={Math.max(1, per.y)} step={0.1} unit="px" onInput={(v) => gridT({ oy: v })} />
           <SliderField label="Grid opacity" value={Math.round(g.opacity * 100)} min={0} max={100} unit="%" onInput={(v) => gridT({ opacity: v / 100 })} />
         </Section>
         <Section id="grid-rules" title="Distance rules" defaultOpen={false}>
           <div class="row">
-            <Field label="Feet per square"><input type="number" min={1} value={g.ft} onChange={(e) => setGrid({ ft: Math.max(1, Number((e.target as HTMLInputElement).value) || 5) })} /></Field>
-            <Field label="Diagonals">
-              <select value={g.rule} onChange={(e) => setGrid({ rule: (e.target as HTMLSelectElement).value as GridSettings['rule'] })}>
-                <option value="chebyshev">Every square 5 ft (5e)</option>
-                <option value="alt">5 / 10 / 5</option>
+            <Field label={hex ? 'Feet per hex' : 'Feet per square'}><input type="number" min={1} value={g.ft} onChange={(e) => setGrid({ ft: Math.max(1, Number((e.target as HTMLInputElement).value) || 5) })} /></Field>
+            <Field label={hex ? 'Counting' : 'Diagonals'}>
+              <select value={hex && g.rule === 'alt' ? 'chebyshev' : g.rule} onChange={(e) => setGrid({ rule: (e.target as HTMLSelectElement).value as GridSettings['rule'] })}>
+                <option value="chebyshev">{hex ? 'Count hexes' : 'Every square 5 ft (5e)'}</option>
+                {!hex && <option value="alt">5 / 10 / 5</option>}
                 <option value="euclid">True distance</option>
               </select>
             </Field>

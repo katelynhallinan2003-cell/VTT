@@ -7,7 +7,7 @@ import { FONT_KEYS } from './draw';
 import { fxToWire, normalizeFx } from './effects';
 
 export const DEFAULT_GRID: GridSettings = {
-  cell: 70, ox: 0, oy: 0, visible: true, color: '#000000', opacity: 0.35,
+  shape: 'square', cell: 70, ox: 0, oy: 0, visible: true, color: '#000000', opacity: 0.35,
   ft: 5, rule: 'chebyshev', snap: true,
 };
 
@@ -36,6 +36,7 @@ const bool = (v: unknown, d: boolean): boolean => (typeof v === 'boolean' ? v : 
 export function normalizeGrid(raw: any): GridSettings {
   const g = raw ?? {};
   return {
+    shape: g.shape === 'pointy' || g.shape === 'flat' ? g.shape : 'square',
     cell: Math.max(4, num(g.cell, DEFAULT_GRID.cell)),
     ox: num(g.ox, 0),
     oy: num(g.oy, 0),

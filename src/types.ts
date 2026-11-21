@@ -18,8 +18,12 @@ export type Role = 'dm' | 'player';
 /** chebyshev = every diagonal is 5 ft (5e default). alt = 5-10-5. euclid = true distance. */
 export type DistanceRule = 'chebyshev' | 'alt' | 'euclid';
 
+/** square cells, or hexes with a point at the top ('pointy') or a flat top ('flat') */
+export type GridShape = 'square' | 'pointy' | 'flat';
+
 export interface GridSettings {
-  /** world pixels per square */
+  shape: GridShape;
+  /** world pixels per square (for hexes: between the centres of two neighbouring hexes) */
   cell: number;
   /** world position of a vertical / horizontal grid line */
   ox: number;

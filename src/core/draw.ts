@@ -1,6 +1,7 @@
 // Geometry for drawings, shapes and spell templates. Pure functions, no rendering.
 import type { Drawing, DrawKind, GridSettings, Rect, Vec } from '../types';
 import { snapToCellCenter, snapToCorner } from './geometry';
+import { hexAxes, hexEdgeMid, isHex } from './hex';
 
 /** Where a sphere's centre sits: the middle of a square, a grid corner, or wherever you put it. */
 export type SphereSnap = 'center' | 'corner' | 'off';
@@ -178,6 +179,7 @@ export function templateLabel(kind: DrawKind, grid: GridSettings, a: Vec, b: Vec
 
 /** The middle of the nearest square edge (a point halfway along a grid line). */
 export function snapToEdgeMid(grid: GridSettings, p: Vec): Vec {
+  if (isHex(grid)) return hexEdgeMid(grid, p);
   const u = (p.x - grid.ox) / grid.cell;
   const v = (p.y - grid.oy) / grid.cell;
   const a = { u: Math.round(u), v: Math.floor(v) + 0.5 }; // on a vertical grid line
@@ -214,16 +216,20 @@ export function snapTemplate(grid: GridSettings, a: Vec, b: Vec, opts: { origin:
   let L = Math.hypot(b.x - A.x, b.y - A.y);
   if (opts.angleStep) ang = Math.round(ang / opts.angleStep) * opts.angleStep;
   // is it meant to run along a row or column? (judged from where the drag really started, not the snapped origin)
+  // on hexes the straight lines are the six directions to the neighbours
+  const hex = isHex(grid);
+  const ax = hex ? hexAxes(grid) : { base: 0, step: Math.PI / 2 };
   let raw = Math.atan2(b.y - a.y, b.x - a.x);
   if (opts.angleStep) raw = Math.round(raw / opts.angleStep) * opts.angleStep;
-  const axis = Math.round(raw / (Math.PI / 2)) * (Math.PI / 2);
-  const alongRow = kind === 'cube' ? Math.abs(raw - axis) < Math.PI / 6 : kind === 'beam' ? Math.abs(raw - axis) < 0.1 : false;
+  const axis = ax.base + Math.round((raw - ax.base) / ax.step) * ax.step;
+  const near = hex ? Math.PI / 12 : Math.PI / 6;
+  const alongRow = kind === 'cube' ? Math.abs(raw - axis) < near : kind === 'beam' ? Math.abs(raw - axis) < 0.1 : false;
   if (opts.origin && alongRow) ang = axis;
   if (opts.length) {
     if (kind === 'emanation') L = (Math.max(1, Math.round(L / cell - 0.5)) + 0.5) * cell;
     else L = Math.max(cell, Math.round(L / cell) * cell);
   }
-  if (opts.origin && opts.length && alongRow) {
+  if (!hex && opts.origin && opts.length && alongRow) {
     // the face of a cube (or the start of a line) sits on a grid line, and is centred so that it covers whole squares
     const span = Math.max(1, Math.round((kind === 'cube' ? L : opts.widthPx ?? cell) / cell));
     const horizontal = Math.abs(Math.cos(axis)) > 0.5;

@@ -8,7 +8,7 @@ import { makeSampleMap } from '../core/sample';
 import { addLibraryItem, removeLibraryItem, watchLibrary } from '../state/account';
 import type { TableClient } from '../state/client';
 import type { UiState } from '../state/ui';
-import type { LibraryItem, Permissions, TokenShape, Vec } from '../types';
+import type { GridShape, LibraryItem, Permissions, TokenShape, Vec } from '../types';
 import { Field, Modal, SliderField, Toggle, copyText, toast, useClient, useTheme, useUi } from './common';
 import { THEMES, getAccent, getTheme, setAccent, setTheme } from './theme';
 import { TokenCropper, NO_FRAMING, type Framing, type PaintApi } from './tokenCropper';
@@ -429,7 +429,7 @@ export function SettingsModal(props: { client: TableClient; ui: UiState; onClose
         <li><kbd>Middle-click</kbd> or hold <kbd>left mouse</kbd> for a moment (your choice above) — ping</li>
         <li><kbd>Shift</kbd>+click — multi-select, drag on empty space — box select</li>
         <li><kbd>Alt</kbd> while dragging — move without snapping</li>
-        <li><kbd>Arrows</kbd> — nudge a square, <kbd>Del</kbd> — delete</li>
+        <li><kbd>Arrows</kbd> — nudge one square (or hex), <kbd>Del</kbd> — delete</li>
         <li><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo, <kbd>Ctrl</kbd>+<kbd>Y</kbd> redo, <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>X</kbd> / <kbd>V</kbd> copy, cut, paste tokens</li>
         <li><kbd>V</kbd> select · <kbd>D</kbd> draw · <kbd>S</kbd> spell templates · <kbd>R</kbd> ruler · <kbd>M</kbd> test move · <kbd>I</kbd> initiative (DM) · <kbd>H</kbd> heights (DM)</li>
         <li><kbd>]</kbd> raise the selected tokens 5 ft (they fly) · <kbd>[</kbd> lower them (down to the ground)</li>
@@ -443,17 +443,37 @@ export function SettingsModal(props: { client: TableClient; ui: UiState; onClose
 }
 
 // ================================================================== grid calibration dialog
-export function GridDialog(props: { onApply: (cols: number, rows: number) => void; onCancel: () => void }) {
+export function GridDialog(props: { shape?: GridShape; onApply: (cols: number, rows: number) => void; onCancel: () => void }) {
   const [cols, setCols] = useState(1);
   const [rows, setRows] = useState(1);
+  const shape = props.shape ?? 'square';
+  const hexes = shape !== 'square';
   return (
-    <Modal title="Set the grid from this area" onClose={props.onCancel} width={420}
+    <Modal title={hexes ? 'Set the grid from these hexes' : 'Set the grid from this area'} onClose={props.onCancel} width={420}
       footer={<><button class="btn" onClick={props.onCancel}>Cancel</button><button class="btn primary" onClick={() => props.onApply(cols, rows)}>Apply</button></>}>
-      <p class="muted">How many grid squares does the box you drew cover? For best accuracy, draw over several squares and enter the count.</p>
-      <div class="row">
-        <Field label="Squares wide"><input type="number" min={1} step={1} value={cols} onInput={(e) => setCols(Math.max(1, Number((e.target as HTMLInputElement).value) || 1))} autoFocus /></Field>
-        <Field label="Squares tall"><input type="number" min={1} step={1} value={rows} onInput={(e) => setRows(Math.max(1, Number((e.target as HTMLInputElement).value) || 1))} /></Field>
-      </div>
+      {hexes ? (
+        <>
+          <p class="muted">
+            {shape === 'pointy'
+              ? 'Draw the box from the left side of the first hex to the right side of the last one in a row, starting at the top point of the first hex. How many hexes wide is it?'
+              : 'Draw the box from the top of the first hex down to the bottom of the last one in a column, starting at the left point of the first hex. How many hexes tall is it?'}
+            {' '}The more hexes you cover, the more exact it is.
+          </p>
+          <div class="row">
+            {shape === 'pointy'
+              ? <Field label="Hexes wide"><input type="number" min={1} step={1} value={cols} onInput={(e) => setCols(Math.max(1, Number((e.target as HTMLInputElement).value) || 1))} autoFocus /></Field>
+              : <Field label="Hexes tall"><input type="number" min={1} step={1} value={rows} onInput={(e) => setRows(Math.max(1, Number((e.target as HTMLInputElement).value) || 1))} autoFocus /></Field>}
+          </div>
+        </>
+      ) : (
+        <>
+          <p class="muted">How many grid squares does the box you drew cover? For best accuracy, draw over several squares and enter the count.</p>
+          <div class="row">
+            <Field label="Squares wide"><input type="number" min={1} step={1} value={cols} onInput={(e) => setCols(Math.max(1, Number((e.target as HTMLInputElement).value) || 1))} autoFocus /></Field>
+            <Field label="Squares tall"><input type="number" min={1} step={1} value={rows} onInput={(e) => setRows(Math.max(1, Number((e.target as HTMLInputElement).value) || 1))} /></Field>
+          </div>
+        </>
+      )}
     </Modal>
   );
 }

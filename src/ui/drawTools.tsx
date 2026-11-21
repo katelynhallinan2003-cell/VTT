@@ -4,6 +4,7 @@ import { DRAW_COLORS, DRAW_NAME, FILL_LEVEL, FONTS, LINE_H, STROKE_CELLS, fillMo
 import type { TableClient } from '../state/client';
 import type { DrawTool, StrokeSize, TemplateKind, UiState } from '../state/ui';
 import { ZONE_PRESETS, zoneColor } from '../core/height';
+import { isHex } from '../core/hex';
 import type { Drawing } from '../types';
 import { Toggle, toast, useClient, useUi } from './common';
 
@@ -167,6 +168,9 @@ export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
   const { ui, client } = props;
   const d = useUi(ui);
   const t = TEMPLATES.find((x) => x.id === d.tplKind) ?? TEMPLATES[0];
+  const hex = isHex(client.grid);
+  // on a hex grid "square" becomes "hex", and a cube or line lines up with the six directions between hexes
+  const say = (x: string) => (hex ? x.replace(/\bsquares\b/g, 'hexes').replace(/\ba square\b/g, 'a hex').replace(/\bsquare\b/g, 'hex') : x);
   return (
     <div class="flyout">
       <div class="flyout-title">Spell templates</div>
@@ -186,14 +190,14 @@ export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
         <>
           <span class="field-label">Snap the centre to</span>
           <div class="seg wrap">
-            {([['center', 'Middle of a square'], ['corner', 'Corner'], ['off', 'Nothing']] as const).map(([k, label]) => (
+            {([['center', hex ? 'Middle of a hex' : 'Middle of a square'], ['corner', 'Corner'], ['off', 'Nothing']] as const).map(([k, label]) => (
               <button key={k} class={d.tplSphereSnap === k ? 'on' : ''} onClick={() => ui.set({ tplSphereSnap: k })}>{label}</button>
             ))}
           </div>
         </>
       )}
-      <Toggle checked={d.tplCover} onChange={(v) => ui.set({ tplCover: v })} label="Show the squares it covers" hint="A square counts when its middle is inside the area." />
-      <p class="hint">{t.hint} Sizes snap to whole squares (hold Alt to turn that off, Shift to lock the angle).</p>
+      <Toggle checked={d.tplCover} onChange={(v) => ui.set({ tplCover: v })} label={hex ? 'Show the hexes it covers' : 'Show the squares it covers'} hint={hex ? 'A hex counts when its middle is inside the area.' : 'A square counts when its middle is inside the area.'} />
+      <p class="hint">{say(t.hint)} {say('Sizes snap to whole squares')} (hold Alt to turn that off, Shift to lock the angle).</p>
       <div class="row wrap">
         <button class="btn small" onClick={async () => { const n = await client.clearDrawings((x) => isTemplate(x.k), 'Clear templates'); toast(n ? `Cleared ${n} template${n > 1 ? 's' : ''}` : 'No templates to clear', 'info', 1800); }}>
           {client.isDM ? 'Clear all templates' : 'Clear my templates'}
@@ -211,7 +215,7 @@ export function RulerFlyout(props: { ui: UiState; client: TableClient }) {
     <div class="flyout">
       <div class="flyout-title">Ruler</div>
       {!client.canDo('measure') && <p class="hint">The ruler is turned off for players.</p>}
-      <p class="hint">Drag to measure. Hold Alt to measure freely instead of from square to square. Esc clears it.</p>
+      <p class="hint">Drag to measure. Hold Alt to measure freely instead of from square to square (or hex to hex). Esc clears it.</p>
       <span class="field-label">Colour</span>
       <Colors value={d.rulerColor} fallback={mine} sameLabel="Use my player colour" onPick={(c) => ui.set({ rulerColor: c })} />
       <Toggle checked={d.sharePlot} onChange={(v) => ui.set({ sharePlot: v })} label="Show my ruler to everyone" hint="Off by default so planning doesn't distract the table." />

@@ -11,6 +11,7 @@ import { lineOp } from '../core/fog';
 import { addFx, fxToWire, tickFx } from '../core/effects';
 import { can, detectPreset, PRESETS, type Action } from '../core/permissions';
 import { mapRect, snapTokenCenter } from '../core/geometry';
+import { isHex } from '../core/hex';
 import { isTemplate, movedPoints } from '../core/draw';
 import { throttle } from '../core/throttle';
 import type {
@@ -509,7 +510,11 @@ export class TableClient {
       const baseName = t.name.replace(/\s+\d+$/, '');
       const siblings = [...(this.scene?.tokens.values() ?? [])].filter((o) => o.name.replace(/\s+\d+$/, '') === baseName && baseName);
       const name = baseName ? `${baseName} ${siblings.length + 1}` : '';
-      const nid = await this.addToken({ ...rest, name, x: t.x + offsetPx, y: t.y + offsetPx, ownerUid: this.isDM ? null : this.uid }, { record: false });
+      let x = t.x + offsetPx;
+      let y = t.y + offsetPx;
+      // a diagonal step of one square lands between hexes, so put it on the nearest one
+      if (this.grid.snap && isHex(this.grid)) ({ x, y } = snapTokenCenter(this.grid, t.size, { x, y }));
+      const nid = await this.addToken({ ...rest, name, x, y, ownerUid: this.isDM ? null : this.uid }, { record: false });
       out.push(nid);
       const made1 = this.scene?.tokens.get(nid);
       if (made1) made.push(made1);

@@ -1,9 +1,15 @@
 import type { DistanceRule, GridSettings, Rect, Token, Vec } from '../types';
+import { gridPeriod, hexCenter, hexCorner, hexDistance, isHex } from './hex';
 
 export const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 /** Snap a token's centre so its top-left corner lands on a grid line (tiny tokens snap to half squares). */
 export function snapTokenCenter(grid: GridSettings, size: number, p: Vec): Vec {
+  if (isHex(grid)) {
+    // odd sizes sit on the middle of a hex; even ones (a Large creature takes three hexes) on the corner where they meet
+    const n = Math.round(size);
+    return n >= 2 && n % 2 === 0 ? hexCorner(grid, p) : hexCenter(grid, p);
+  }
   const step = size < 1 ? grid.cell / 2 : grid.cell;
   const half = (size * grid.cell) / 2;
   const tlx = p.x - half;
@@ -16,6 +22,7 @@ export function snapTokenCenter(grid: GridSettings, size: number, p: Vec): Vec {
 
 /** Snap a free point to the nearest grid intersection. */
 export function snapToCorner(grid: GridSettings, p: Vec): Vec {
+  if (isHex(grid)) return hexCorner(grid, p);
   return {
     x: Math.round((p.x - grid.ox) / grid.cell) * grid.cell + grid.ox,
     y: Math.round((p.y - grid.oy) / grid.cell) * grid.cell + grid.oy,
@@ -24,6 +31,7 @@ export function snapToCorner(grid: GridSettings, p: Vec): Vec {
 
 /** Snap a free point to the centre of the square it is in. */
 export function snapToCellCenter(grid: GridSettings, p: Vec): Vec {
+  if (isHex(grid)) return hexCenter(grid, p);
   return {
     x: Math.floor((p.x - grid.ox) / grid.cell) * grid.cell + grid.ox + grid.cell / 2,
     y: Math.floor((p.y - grid.oy) / grid.cell) * grid.cell + grid.oy + grid.cell / 2,
@@ -36,15 +44,17 @@ export function snapToCellCenter(grid: GridSettings, p: Vec): Vec {
  * flying 30 feet up and 30 across costs 30 (or 45 on the 5-10-5 rule, 42.4 with straight lines).
  */
 export function distanceFt(grid: GridSettings, a: Vec, b: Vec, rule: DistanceRule = grid.rule, dzFt = 0): number {
+  const hex = isHex(grid);
   const dx = Math.abs(b.x - a.x) / grid.cell;
   const dy = Math.abs(b.y - a.y) / grid.cell;
   const dz = Math.abs(dzFt) / grid.ft;
   let squares: number;
   if (rule === 'euclid') squares = Math.hypot(dx, dy, dz);
   else {
+    // on hexes every step is the same length, so there is no diagonal to argue about
     const hi = Math.round(Math.max(dx, dy) * 1000) / 1000;
     const lo = Math.round(Math.min(dx, dy) * 1000) / 1000;
-    const flat = rule === 'alt' ? hi + Math.floor(lo / 2) : hi;
+    const flat = hex ? hexDistance(grid, a, b) : rule === 'alt' ? hi + Math.floor(lo / 2) : hi;
     if (!dz) squares = flat;
     else {
       const big = Math.max(flat, dz);
@@ -59,13 +69,19 @@ export function distanceFt(grid: GridSettings, a: Vec, b: Vec, rule: DistanceRul
  * Derive grid settings from a rectangle the DM dragged over a block of squares.
  * `cols` x `rows` is how many squares the rectangle covers (1x1 by default).
  */
-export function gridFromRect(rect: Rect, cols = 1, rows = 1): { cell: number; ox: number; oy: number } {
+export function gridFromRect(rect: Rect, cols = 1, rows = 1, shape: GridSettings['shape'] = 'square'): { cell: number; ox: number; oy: number } {
   const w = Math.abs(rect.w);
   const h = Math.abs(rect.h);
-  const cell = (w / Math.max(1, cols) + h / Math.max(1, rows)) / 2;
   const x = rect.w < 0 ? rect.x + rect.w : rect.x;
   const y = rect.h < 0 ? rect.y + rect.h : rect.y;
   const mod = (a: number, m: number) => ((a % m) + m) % m;
+  if (shape === 'pointy' || shape === 'flat') {
+    // the box goes around hexes: along one row of pointy hexes (a width of `cols` hexes), or down one column of flat ones
+    const cell = shape === 'pointy' ? w / Math.max(1, cols) : h / Math.max(1, rows);
+    const per = gridPeriod({ cell, shape });
+    return { cell, ox: mod(x, per.x), oy: mod(y, per.y) };
+  }
+  const cell = (w / Math.max(1, cols) + h / Math.max(1, rows)) / 2;
   return { cell, ox: mod(x, cell), oy: mod(y, cell) };
 }
 

@@ -2,9 +2,11 @@
 // Everything that depends on the shape of the grid lives here, so a hex grid only has to change this file.
 import type { DrawKind, GridSettings, Rect, Vec } from '../types';
 import { boundsOf, distToSegment, pointInPoly, templateGeom } from './draw';
+import { hexCentersIn, hexCorners, isHex } from './hex';
 
 /** Centres of every cell whose centre lies inside `r`. */
 export function cellCentersIn(grid: GridSettings, r: Rect): Vec[] {
+  if (isHex(grid)) return hexCentersIn(grid, r);
   const c = grid.cell;
   const out: Vec[] = [];
   const i0 = Math.floor((r.x - grid.ox) / c) - 1, i1 = Math.ceil((r.x + r.w - grid.ox) / c) + 1;
@@ -20,6 +22,7 @@ export function cellCentersIn(grid: GridSettings, r: Rect): Vec[] {
 
 /** The corners of the cell centred at `c`. */
 export function cellPoly(grid: GridSettings, c: Vec): Vec[] {
+  if (isHex(grid)) return hexCorners(grid, c);
   const h = grid.cell / 2;
   return [{ x: c.x - h, y: c.y - h }, { x: c.x + h, y: c.y - h }, { x: c.x + h, y: c.y + h }, { x: c.x - h, y: c.y + h }];
 }

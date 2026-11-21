@@ -421,6 +421,7 @@ export function SettingsModal(props: { client: TableClient; ui: UiState; onClose
       <MouseSettings ui={props.ui} />
       <InitPosSetting ui={props.ui} />
       <HeightsSetting ui={props.ui} />
+      <EffectsViewSetting ui={props.ui} />
 
       <h3>Keyboard &amp; mouse</h3>
       <ul class="keys">
@@ -537,6 +538,18 @@ function HeightsSetting(props: { ui: UiState }) {
   return (
     <Toggle checked={d.showHeights} onChange={(v) => props.ui.set({ showHeights: v })} label="Show terrain heights"
       hint="The coloured high and low ground the DM draws. Turning it off only hides it on your screen; tokens still stand on it." />
+  );
+}
+
+function EffectsViewSetting(props: { ui: UiState }) {
+  const d = useUi(props.ui);
+  return (
+    <Field label="When the Effects window opens" hint="Jumping puts the token on the left of the screen and the window on the right, so you can watch the effect on it. Staying leaves the view and the window exactly where they were. Only changes your own screen.">
+      <div class="seg">
+        <button class={d.fxJump ? 'on' : ''} onClick={() => props.ui.set({ fxJump: true })}>Jump to the token</button>
+        <button class={!d.fxJump ? 'on' : ''} onClick={() => props.ui.set({ fxJump: false })}>Stay where I was</button>
+      </div>
+    </Field>
   );
 }
 

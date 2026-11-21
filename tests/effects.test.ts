@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MockBackend } from '../src/backend/mock';
-import { addFx, fxDuration, fxToWire, makeEffect, normalizeFx, tickFx } from '../src/core/effects';
+import { addFx, FX_EMOJI, FX_GROUPS, FX_PRESETS, fxDuration, fxToWire, makeEffect, normalizeFx, searchFx, tickFx } from '../src/core/effects';
 import { normalizeToken, tokenToWire } from '../src/core/model';
 import { createTable } from '../src/state/account';
 import { TableClient } from '../src/state/client';
@@ -168,5 +168,53 @@ describe('effects and the turn order', () => {
     const lair = dm.scene!.init.entries.find((x) => !x.tk)!;
     expect(lair.h).toBe(true);
     expect(dm.scene!.init.entries[0].id).toBe(lair.id); // 20 beats 12
+  });
+});
+
+describe('ready-made effects and searching them', () => {
+  const names = (q: string) => searchFx(FX_PRESETS, q).map((p) => p.n);
+
+  it('has a decent list, every entry well formed, in known groups with no repeats', () => {
+    expect(FX_PRESETS.length).toBeGreaterThanOrEqual(45);
+    const groups = new Set(FX_GROUPS.map((g) => g.id));
+    for (const p of FX_PRESETS) {
+      expect(groups.has(p.group), p.n).toBe(true);
+      expect(p.c).toMatch(/^#[0-9a-f]{6}$/);
+      expect(p.ic.length).toBeGreaterThan(0);
+    }
+    expect(new Set(FX_PRESETS.map((p) => p.n.toLowerCase())).size).toBe(FX_PRESETS.length);
+    for (const c of ['Blinded', 'Charmed', 'Deafened', 'Exhaustion', 'Frightened', 'Grappled', 'Incapacitated', 'Invisible', 'Paralyzed', 'Petrified', 'Poisoned', 'Prone', 'Restrained', 'Stunned', 'Unconscious']) {
+      expect(FX_PRESETS.find((p) => p.n === c)?.group, c).toBe('condition');
+    }
+  });
+
+  it('an empty search gives everything, untouched', () => {
+    expect(searchFx(FX_PRESETS, '')).toBe(FX_PRESETS);
+    expect(searchFx(FX_PRESETS, '   ')).toBe(FX_PRESETS);
+  });
+
+  it('matches names that start with the text first, then words, then anywhere inside', () => {
+    const r = names('mar');
+    expect(r[0]).toBe('Marked');
+    expect(r).toContain("Hunter's Mark");
+    expect(names('mark')).toEqual(['Marked', "Hunter's Mark"]);
+    expect(names('cover')).toEqual(['Half cover', 'Three-quarters cover']);
+    const inside = names('ison');
+    expect(inside).toEqual(['Poisoned']);
+    expect(names('HEX')).toEqual(['Hex']);
+  });
+
+  it('finds nothing for nonsense, and does not care about case or spare spaces', () => {
+    expect(names('zzzz')).toEqual([]);
+    expect(names('  poisoned ')).toEqual(['Poisoned']);
+  });
+
+  it('works on any list with names (including the ones you made yourself)', () => {
+    expect(searchFx([{ n: 'Hexed by the hag' }, { n: 'Wet' }], 'hag').map((x) => x.n)).toEqual(['Hexed by the hag']);
+  });
+
+  it('has pictures to choose from, with no repeats inside a group', () => {
+    expect(FX_EMOJI.length).toBeGreaterThanOrEqual(4);
+    for (const g of FX_EMOJI) expect(new Set(g.list).size, g.label).toBe(g.list.length);
   });
 });

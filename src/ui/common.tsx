@@ -1,5 +1,5 @@
 import type { ComponentChildren } from 'preact';
-import { useEffect, useReducer, useState } from 'preact/hooks';
+import { useEffect, useReducer, useRef, useState } from 'preact/hooks';
 import { onThemeChange } from './theme';
 import type { Unsub } from '../backend/types';
 import type { TableClient } from '../state/client';
@@ -73,6 +73,51 @@ export function Modal(props: { title: string; onClose: () => void; width?: numbe
         <div class="modal-body">{props.children}</div>
         {props.footer && <div class="modal-foot">{props.footer}</div>}
       </div>
+    </div>
+  );
+}
+
+/**
+ * A window that floats over the board without blocking it: drag it by its title bar, and the board behind stays usable.
+ * It remembers nothing itself; the owner keeps the position (`pos`, `onMove`) so it can decide when to reset it.
+ * Esc closes it (unless something inside, like an open menu, handled the key first).
+ */
+export function FloatWin(props: { title: ComponentChildren; label: string; onClose: () => void; width: number; pos: { x: number; y: number }; onMove: (p: { x: number; y: number }) => void; onReset?: () => void; children: ComponentChildren; footer?: ComponentChildren }) {
+  const [pos, setPos] = useState(props.pos);
+  const drag = useRef<{ dx: number; dy: number } | null>(null);
+  const clampPos = (p: { x: number; y: number }) => ({
+    x: Math.min(window.innerWidth - 96, Math.max(96 - props.width, p.x)),
+    y: Math.min(window.innerHeight - 48, Math.max(0, p.y)),
+  });
+  // the owner can move it (reset to its default place)
+  useEffect(() => { setPos(clampPos(props.pos)); }, [props.pos.x, props.pos.y]);
+  useEffect(() => {
+    const onResize = () => setPos((p) => clampPos(p));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  const down = (e: PointerEvent) => {
+    if ((e.target as HTMLElement).closest('button,input,select,a')) return;
+    drag.current = { dx: e.clientX - pos.x, dy: e.clientY - pos.y };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    e.preventDefault();
+  };
+  const move = (e: PointerEvent) => { if (drag.current) setPos(clampPos({ x: e.clientX - drag.current.dx, y: e.clientY - drag.current.dy })); };
+  const up = (e: PointerEvent) => {
+    if (!drag.current) return;
+    drag.current = null;
+    try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* already released */ }
+    props.onMove(pos);
+  };
+  return (
+    <div class="fwin" style={{ left: `${pos.x}px`, top: `${pos.y}px`, width: `${props.width}px` }} role="dialog" aria-label={props.label}
+      onKeyDown={(e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.stopPropagation(); e.preventDefault(); props.onClose(); } }}>
+      <div class="fwin-head" onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onDblClick={(e) => { if (!(e.target as HTMLElement).closest('button,input,select,a')) props.onReset?.(); }} title="Drag to move. Double-click to put it back.">
+        <h2>{props.title}</h2>
+        <button class="icon-btn" onClick={props.onClose} aria-label="Close">✕</button>
+      </div>
+      <div class="fwin-body">{props.children}</div>
+      {props.footer && <div class="fwin-foot">{props.footer}</div>}
     </div>
   );
 }

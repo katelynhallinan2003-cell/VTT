@@ -1,13 +1,23 @@
 // Conditions and other effects on tokens: the ready-made ones, how they are stored and how they count down.
 import type { Effect, FxLook, FxTick } from '../types';
 
-export interface FxPreset { n: string; ic: string; c: string; group: 'condition' | 'other' }
+export type FxGroup = 'condition' | 'combat' | 'spell' | 'other';
+export interface FxPreset { n: string; ic: string; c: string; group: FxGroup }
 
-/** The 5e conditions first, then a few things tables track all the time. */
+/** How the ready-made effects are grouped in the picker, in order. */
+export const FX_GROUPS: { id: FxGroup; label: string }[] = [
+  { id: 'condition', label: 'Conditions' },
+  { id: 'combat', label: 'In combat' },
+  { id: 'spell', label: 'Spells and buffs' },
+  { id: 'other', label: 'Other' },
+];
+
+/** The 5e conditions first, then the things tables track all the time. */
 export const FX_PRESETS: FxPreset[] = [
   { n: 'Blinded', ic: '🕶️', c: '#868e96', group: 'condition' },
   { n: 'Charmed', ic: '💖', c: '#f06595', group: 'condition' },
   { n: 'Deafened', ic: '🔇', c: '#adb5bd', group: 'condition' },
+  { n: 'Exhaustion', ic: '🥱', c: '#a9806a', group: 'condition' },
   { n: 'Frightened', ic: '😱', c: '#9775fa', group: 'condition' },
   { n: 'Grappled', ic: '✊', c: '#f59f00', group: 'condition' },
   { n: 'Incapacitated', ic: '💫', c: '#fab005', group: 'condition' },
@@ -19,17 +29,58 @@ export const FX_PRESETS: FxPreset[] = [
   { n: 'Restrained', ic: '⛓️', c: '#868e96', group: 'condition' },
   { n: 'Stunned', ic: '😵', c: '#ffa94d', group: 'condition' },
   { n: 'Unconscious', ic: '💤', c: '#4dabf7', group: 'condition' },
-  { n: 'Exhaustion', ic: '🥱', c: '#a9806a', group: 'condition' },
-  { n: 'Concentrating', ic: '🧠', c: '#38d9a9', group: 'other' },
-  { n: 'Blessed', ic: '✨', c: '#ffe066', group: 'other' },
-  { n: 'Hasted', ic: '💨', c: '#66d9e8', group: 'other' },
-  { n: 'Slowed', ic: '🐌', c: '#b197fc', group: 'other' },
+
+  { n: 'Raging', ic: '😤', c: '#e03131', group: 'combat' },
+  { n: 'Dodging', ic: '🌀', c: '#4dabf7', group: 'combat' },
+  { n: 'Dashing', ic: '🏃', c: '#66d9e8', group: 'combat' },
+  { n: 'Readied action', ic: '⏳', c: '#fab005', group: 'combat' },
+  { n: 'Reaction used', ic: '↩️', c: '#868e96', group: 'combat' },
+  { n: 'Hidden', ic: '🫥', c: '#74c0fc', group: 'combat' },
+  { n: 'Surprised', ic: '❗', c: '#ffa94d', group: 'combat' },
+  { n: 'Half cover', ic: '🧱', c: '#a9806a', group: 'combat' },
+  { n: 'Three-quarters cover', ic: '🧱', c: '#868e96', group: 'combat' },
+
+  { n: 'Concentrating', ic: '🧠', c: '#38d9a9', group: 'spell' },
+  { n: 'Blessed', ic: '✨', c: '#ffe066', group: 'spell' },
+  { n: 'Bane', ic: '🌑', c: '#7048e8', group: 'spell' },
+  { n: 'Hasted', ic: '💨', c: '#66d9e8', group: 'spell' },
+  { n: 'Slowed', ic: '🐌', c: '#b197fc', group: 'spell' },
+  { n: 'Hex', ic: '🔮', c: '#9c36b5', group: 'spell' },
+  { n: "Hunter's Mark", ic: '🏹', c: '#51cf66', group: 'spell' },
+  { n: 'Faerie Fire', ic: '🧚', c: '#faa2c1', group: 'spell' },
+  { n: 'Mage Armor', ic: '🔰', c: '#4dabf7', group: 'spell' },
+  { n: 'Shield of Faith', ic: '🛡️', c: '#ffd43b', group: 'spell' },
+  { n: 'Flying', ic: '🕊️', c: '#a5d8ff', group: 'spell' },
+  { n: 'Silenced', ic: '🤐', c: '#adb5bd', group: 'spell' },
+  { n: 'Entangled', ic: '🌿', c: '#40c057', group: 'spell' },
+  { n: 'Enlarged', ic: '🔼', c: '#f59f00', group: 'spell' },
+  { n: 'Reduced', ic: '🔽', c: '#74c0fc', group: 'spell' },
+
   { n: 'Burning', ic: '🔥', c: '#ff6b6b', group: 'other' },
   { n: 'Bleeding', ic: '🩸', c: '#e03131', group: 'other' },
+  { n: 'Frozen', ic: '🧊', c: '#99e9f2', group: 'other' },
+  { n: 'Wet', ic: '💧', c: '#4dabf7', group: 'other' },
   { n: 'Marked', ic: '🎯', c: '#ff8787', group: 'other' },
   { n: 'Shielded', ic: '🛡️', c: '#4dabf7', group: 'other' },
+  { n: 'Stable', ic: '🩹', c: '#8ce99a', group: 'other' },
   { n: 'Dying', ic: '💀', c: '#e03131', group: 'other' },
 ];
+
+/**
+ * The ready-made effects that match what was typed, best matches first: names that start with it, then words that start with it, then
+ * names that contain it. An empty search gives everything in its usual order.
+ */
+export function searchFx<T extends { n: string }>(list: T[], query: string): T[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return list;
+  const rank = (name: string): number => {
+    const n = name.toLowerCase();
+    if (n.startsWith(q)) return 0;
+    if (n.split(/[\s'-]+/).some((w) => w.startsWith(q))) return 1;
+    return n.includes(q) ? 2 : -1;
+  };
+  return list.map((x, i) => ({ x, i, r: rank(x.n) })).filter((o) => o.r >= 0).sort((a, b) => a.r - b.r || a.i - b.i).map((o) => o.x);
+}
 
 export const FX_LOOKS: { id: FxLook; label: string; hint: string }[] = [
   { id: 'badge', label: 'Badge', hint: 'A round coloured badge with the picture, above the token.' },
@@ -44,8 +95,15 @@ export const FX_TICKS: { id: FxTick; label: string; hint: string }[] = [
   { id: 'round', label: 'Every round', hint: 'Counts down once at the start of each new round.' },
 ];
 
-/** A handful of pictures to choose from for a made-up effect. */
-export const FX_ICONS = ['☠️', '🔥', '❄️', '⚡', '💧', '🌿', '🩸', '💀', '👁️', '🎯', '🛡️', '⚔️', '✨', '🌀', '💤', '❤️', '⭐', '🔒', '🕸️', '☁️'];
+/** Pictures to choose from for a made-up effect, in groups. (Any other emoji can be typed or pasted in.) */
+export const FX_EMOJI: { label: string; list: string[] }[] = [
+  { label: 'Status', list: ['☠️', '💀', '😵', '💤', '😱', '🤢', '🥱', '😤', '🥶', '🥵', '😈', '🤕', '😴', '🤪', '😡', '🥴', '🫥', '👁️', '🕶️', '🔇', '🤐', '🫠'] },
+  { label: 'Elements', list: ['🔥', '❄️', '⚡', '💧', '🌿', '🌀', '☁️', '🌑', '☀️', '🌪️', '🪨', '🧊', '🌊', '☣️', '☢️', '🍄', '💨'] },
+  { label: 'Combat', list: ['⚔️', '🗡️', '🏹', '🛡️', '🎯', '💥', '🩸', '🩹', '⛓️', '🕸️', '🔒', '🪤', '🔔', '🚫', '❗', '❓'] },
+  { label: 'Magic', list: ['✨', '🔮', '🧠', '💫', '⭐', '🌟', '🪄', '📿', '🧿', '👻', '🧚', '🕊️', '🐉', '🦇', '🕯️', '🔰'] },
+  { label: 'Other', list: ['❤️', '💖', '💔', '⏳', '⬆️', '⬇️', '🔼', '🔽', '🎲', '🍺', '🧪', '🪙', '👑', '🎭', '🔑', '📌'] },
+];
+export const FX_ICONS = FX_EMOJI.flatMap((g) => g.list);
 
 export const MAX_FX = 8;
 

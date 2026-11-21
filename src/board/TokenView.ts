@@ -1,7 +1,7 @@
 import { Container, Graphics, Sprite, Text } from 'pixi.js';
 import { healthState, HEALTH_COLOR } from '../core/combat';
 import { altLabel, type Altitude } from '../core/height';
-import { tintColor } from '../core/effects';
+import { addFx, tintColor } from '../core/effects';
 import type { Effect, GridSettings, Token } from '../types';
 import { loadTexture, type LoadedTexture } from './textures';
 
@@ -17,7 +17,7 @@ export interface TokenCtx {
 }
 
 /** what has to change on screen when a token's effects change */
-const fxKey = (fx: Effect[]): string => fx.map((e) => `${e.id}${e.ic}${e.c}${e.look}${e.tint ? 't' + e.tc : ''}${e.left ?? ''}`).join(',');
+const fxKey = (fx: Effect[]): string => fx.map((e) => `${e.id}${e.n}${e.ic}${e.c}${e.look}${e.tint ? 't' + e.tc : ''}${e.left ?? ''}`).join(',');
 
 const hex = (c: string) => parseInt(c.replace('#', '').padEnd(6, '0').slice(0, 6), 16) || 0xffffff;
 
@@ -45,6 +45,8 @@ export class TokenView {
   testPos: { x: number; y: number } | null = null;
   /** draw as a see-through copy (shadows and other people's test moves) */
   ghostAlpha: number | null = null;
+  /** an effect being tried out in the Effects window: shown as if it were already on the token, but not saved */
+  preview: Effect | null = null;
 
   /** a shadow on the ground under a flying token, further away the higher it is */
   private shadowG = new Graphics();
@@ -86,12 +88,15 @@ export class TokenView {
     this.container.addChild(this.shadowG, this.fxBack, this.base, this.maskG, this.initial, this.tintG, this.ring, this.healthG, this.fxFront, this.altG, this.altText, this.label);
   }
 
+  /** the effects to draw: the real ones, plus the one being previewed (which replaces a real one of the same name, like adding it would) */
+  private fxList(t: Token): Effect[] { return this.preview ? addFx(t.fx, this.preview) : t.fx; }
+
   apply(token: Token, ctx: TokenCtx) {
     this.token = token;
     const g = ctx.grid;
     this.health = ctx.health;
     const key = [token.size, token.shape, token.ring, token.ringW, token.imgScale, token.imgX, token.imgY, token.imgBg, token.name ? token.name[0] : '?', g.cell,
-      ctx.health ? `${ctx.health.pct}/${ctx.health.bar}` : '', fxKey(token.fx)].join('|');
+      ctx.health ? `${ctx.health.pct}/${ctx.health.bar}` : '', fxKey(this.fxList(token))].join('|');
     if (key !== this.key) {
       this.key = key;
       this.redraw(token, ctx);
@@ -167,26 +172,26 @@ export class TokenView {
 
     this.label.style.fontSize = Math.max(11, ctx.grid.cell * 0.22);
     this.drawHealth(t, ctx);
-    this.drawFx(t, ctx);
+    this.drawFx(t, ctx, this.fxList(t));
   }
 
   /**
    * Effects on the token: a soft glow around it, a row of round badges above it, and symbols orbiting it.
    * Each effect picks its own look. Nothing here animates: the board only redraws when something changes.
    */
-  private drawFx(t: Token, ctx: TokenCtx) {
+  private drawFx(t: Token, ctx: TokenCtx, fx: Effect[]) {
     const g = this.fxBack;
     g.clear();
     this.tintG.clear();
     for (const c of this.fxFront.removeChildren()) c.destroy();
-    if (!t.fx.length) { if (this.sprite) this.sprite.tint = 0xffffff; return; }
+    if (!fx.length) { if (this.sprite) this.sprite.tint = 0xffffff; return; }
     const cell = ctx.grid.cell;
     const D = t.size * cell;
     const r = D / 2;
     const square = t.shape === 'square';
 
     // a wash of colour over the whole token for effects that ask for it (a few at once still leave the picture readable)
-    const tints = t.fx.filter((e) => e.tint).slice(0, 3);
+    const tints = fx.filter((e) => e.tint).slice(0, 3);
     if (this.sprite) {
       // frameless tokens have no shape to fill, so the picture itself is coloured (multiplied by a light version of the colour)
       let tt = 0xffffff;
@@ -208,7 +213,7 @@ export class TokenView {
     const bs = Math.max(13, Math.min(cell * 0.3, D * 0.6 + 6));
 
     // glow: stacked translucent strokes, strongest at the token's edge
-    const halos = t.fx.filter((e) => e.look === 'halo');
+    const halos = fx.filter((e) => e.look === 'halo');
     const w = Math.max(3, cell * 0.07);
     halos.forEach((e, i) => {
       const rad = r + w * 0.25 + i * w * 1.3;
@@ -237,7 +242,7 @@ export class TokenView {
     };
 
     // orbit: the symbol repeated around the token, several effects interleaved
-    const orbits = t.fx.filter((e) => e.look === 'orbit');
+    const orbits = fx.filter((e) => e.look === 'orbit');
     const n = 8;
     const orad = r + bs * 0.42;
     orbits.forEach((e, j) => {
@@ -252,7 +257,7 @@ export class TokenView {
     });
 
     // badges above the token (the Glow look has one too)
-    const badges = t.fx.filter((e) => e.look !== 'orbit');
+    const badges = fx.filter((e) => e.look !== 'orbit');
     const show = badges.slice(0, 6);
     const step = bs * 1.12;
     const y0 = -r - bs * 0.55 - Math.max(0, halos.length - 0) * w * 1.3 - 2;

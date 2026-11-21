@@ -920,6 +920,11 @@ export class TableClient {
     await this.changeFx(ids, (cur) => addFx(cur, e), `Add ${e.n}`);
   }
 
+  /** Swap one effect on a token for a changed version of itself (keeps its place in the list). */
+  async replaceEffect(id: string, fxId: string, e: Effect): Promise<void> {
+    await this.changeFx([id], (cur) => cur.map((x) => (x.id === fxId ? { ...e, id: fxId } : x)), `Change ${e.n}`);
+  }
+
   async removeEffect(ids: string[], fxId: string): Promise<void> {
     await this.changeFx(ids, (cur) => cur.filter((x) => x.id !== fxId), 'Remove effect');
   }

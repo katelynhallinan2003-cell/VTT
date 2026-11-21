@@ -73,7 +73,7 @@ export class Board {
   private liveSent = false;
   private seenDrawRev = -1;
   private seenLiveRev = -1;
-  private prevUi = { testMove: false, sharePlot: false, tool: 'select' as string, rulerColor: '', cover: true, heights: true };
+  private prevUi = { testMove: false, sharePlot: false, tool: 'select' as string, rulerColor: '', cover: true, heights: true, draft: null as unknown };
   private distText!: Text;
 
   private cam = { zoom: 1, tx: 0, ty: 0 };
@@ -248,6 +248,39 @@ export class Board {
   zoomBy(factor: number) {
     this.cam = zoomAt(this.cam, this.host.clientWidth / 2, this.host.clientHeight / 2, factor);
     this.applyCamera();
+  }
+
+  /**
+   * Glide the view so these tokens sit in the middle of the free space to the left of something that covers the right-hand side of the screen
+   * (`rightPx` wide), and zoom in if they would otherwise be too small to see properly. Never zooms out.
+   */
+  showLeftOf(ids: string[], rightPx: number) {
+    const sc = this.client.scene;
+    if (!sc) return;
+    const ts = ids.map((i) => sc.tokens.get(i)).filter((t): t is Token => !!t);
+    if (!ts.length) return;
+    const cell = this.client.grid.cell;
+    const cx = ts.reduce((a, t) => a + t.x, 0) / ts.length;
+    const cy = ts.reduce((a, t) => a + t.y, 0) / ts.length;
+    const W = this.host.clientWidth, H = this.host.clientHeight;
+    const left = 76; // the toolbar
+    const freeW = Math.max(160, W - rightPx - left);
+    // one token is shown big enough to judge its look; several are only brought into view
+    const want = ts.length === 1 ? Math.min(freeW * 0.5, 110) / (ts[0].size * cell) : 0;
+    const zoom = Math.min(8, Math.max(this.cam.zoom, want));
+    const to = { zoom, tx: left + freeW / 2 - cx * zoom, ty: H * 0.46 - cy * zoom };
+    const from = { ...this.cam };
+    const t0 = performance.now();
+    const run = (now: number) => {
+      const k = Math.min(1, (now - t0) / 260);
+      const e = 1 - Math.pow(1 - k, 3);
+      this.cam.zoom = from.zoom + (to.zoom - from.zoom) * e;
+      this.cam.tx = from.tx + (to.tx - from.tx) * e;
+      this.cam.ty = from.ty + (to.ty - from.ty) * e;
+      this.applyCamera();
+      if (k < 1) requestAnimationFrame(run);
+    };
+    requestAnimationFrame(run);
   }
 
   centerOn(p: Vec) {
@@ -487,6 +520,8 @@ export class Board {
         this.views.set(t.id, v);
         this.tokenLayer.addChild(v.container);
       }
+      const dr = this.ui.data.fxDraft;
+      v.preview = dr && dr.ids.includes(t.id) ? dr.fx : null;
       v.apply(t, this.tokenCtx(t));
     }
     for (const [id, v] of this.views) {
@@ -627,7 +662,8 @@ export class Board {
   private onUiChange() {
     const u = this.ui.data;
     const prev = this.prevUi;
-    this.prevUi = { testMove: u.testMove, sharePlot: u.sharePlot, tool: u.tool, rulerColor: u.rulerColor, cover: u.tplCover, heights: u.showHeights };
+    this.prevUi = { testMove: u.testMove, sharePlot: u.sharePlot, tool: u.tool, rulerColor: u.rulerColor, cover: u.tplCover, heights: u.showHeights, draft: u.fxDraft };
+    if (u.fxDraft !== prev.draft && this.client.scene) this.reconcileTokens();
     if (prev.testMove && !u.testMove && this.testMoves.size) this.resetTestMoves();
     if (u.sharePlot !== prev.sharePlot) this.publishLive(true);
     if (u.rulerColor !== prev.rulerColor) { this.publishLive(); this.invalidate(); }

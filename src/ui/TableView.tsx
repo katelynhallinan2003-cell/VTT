@@ -11,7 +11,7 @@ import { AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewSceneModal, Sce
 import { DrawFlyout, DrawInspector, HeightFlyout, RulerFlyout, TemplateFlyout, TestMoveBar, TextEditor } from './drawTools';
 import { Dock, Rail, TokenTag } from './panels';
 import { InitPopup, InitStrip } from './initiative';
-import { EffectsModal } from './effects';
+import { EffectsWindow } from './effects';
 import { TokenEditorModal } from './tokenEditor';
 
 type ModalState =
@@ -23,7 +23,6 @@ type ModalState =
   | { kind: 'settings' }
   | { kind: 'claim' }
   | { kind: 'editToken'; ids: string[] }
-  | { kind: 'effects'; ids: string[] }
   | { kind: 'grid'; rect: Rect; derived: { cell: number; ox: number; oy: number } };
 
 const Icon = (props: { d: string; size?: number }) => (
@@ -64,6 +63,8 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
   const boardRef = useRef<Board | null>(null);
   const [modal, setModal] = useState<ModalState>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; tokenId: string | null; world: Vec } | null>(null);
+  /** the tokens whose Effects window is open (it floats over the board, so it is not a modal) */
+  const [fxWin, setFxWin] = useState<string[] | null>(null);
   const [mapError, setMapError] = useState<string | null>(null);
   const claimOffered = useRef(false);
   const modalRef = useRef<ModalState>(null);
@@ -178,7 +179,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       const ids = selectedIds.length && d.selection.has(menuToken.id) ? selectedIds : [menuToken.id];
       const toks = ids.map((i) => scene?.tokens.get(i)).filter((t): t is Token => !!t);
       if (toks.every((t) => client.canDo('edit', t))) menuItems.push({ label: 'Edit token…', onClick: () => setModal({ kind: 'editToken', ids }) });
-      if (toks.every((t) => client.canDo('edit', t))) menuItems.push({ label: 'Effects…', onClick: () => setModal({ kind: 'effects', ids }) });
+      if (toks.every((t) => client.canDo('edit', t))) menuItems.push({ label: 'Effects…', onClick: () => setFxWin(ids) });
       if (client.canDo('create')) menuItems.push({ label: 'Duplicate', onClick: () => void client.duplicateTokens(ids, client.grid.cell).then((n) => ui.select(n)) });
       if (toks.every((t) => client.canDo('edit', t))) {
         menuItems.push({ label: 'Bring to front', onClick: () => void client.bringToFront(ids) });
@@ -309,8 +310,8 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       <Rail client={client} ui={ui} />
       <Dock client={client} ui={ui} board={board} onNewScene={() => setModal({ kind: 'newScene' })} onEdit={(ids) => setModal({ kind: 'editToken', ids })} />
       <InitStrip client={client} ui={ui} board={board} />
-      <InitPopup client={client} ui={ui} board={board} onEdit={(ids) => setModal({ kind: 'editToken', ids })} onEffects={(ids) => setModal({ kind: 'effects', ids })} />
-      {mySel && <TokenTag client={client} ui={ui} onEdit={(ids) => setModal({ kind: 'editToken', ids })} onEffects={(ids) => setModal({ kind: 'effects', ids })} />}
+      <InitPopup client={client} ui={ui} board={board} onEdit={(ids) => setModal({ kind: 'editToken', ids })} onEffects={(ids) => setFxWin(ids)} />
+      {mySel && <TokenTag client={client} ui={ui} onEdit={(ids) => setModal({ kind: 'editToken', ids })} onEffects={(ids) => setFxWin(ids)} />}
 
       {/* ---------------- overlays */}
       {d.status && <div class="status">{d.status}</div>}
@@ -344,13 +345,14 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
         </div>
       )}
 
+      {fxWin && <EffectsWindow key={fxWin.join(',')} client={client} ui={ui} board={board} ids={fxWin} onClose={() => setFxWin(null)} />}
+
       {/* ---------------- modals */}
       {modal?.kind === 'addToken' && <AddTokenModal client={client} at={modal.at} initialFile={modal.file} onClose={() => setModal(null)} onCreated={(id) => ui.select([id])} />}
       {modal?.kind === 'newScene' && <NewSceneModal client={client} onClose={() => setModal(null)} onCreated={() => ui.set({ dockTab: 'scene' })} />}
       {modal?.kind === 'scenes' && <ScenesModal client={client} onClose={() => setModal(null)} onNew={() => setModal({ kind: 'newScene' })} />}
       {modal?.kind === 'library' && <LibraryModal client={client} onClose={() => setModal(null)} onUseMap={useLibraryMap} onAddToken={addLibraryToken} />}
       {modal?.kind === 'settings' && <SettingsModal client={client} ui={ui} onClose={() => setModal(null)} onSignOut={client.isDM ? props.onSignOut : undefined} />}
-      {modal?.kind === 'effects' && <EffectsModal client={client} ids={modal.ids} onClose={() => setModal(null)} />}
       {modal?.kind === 'editToken' && <TokenEditorModal client={client} ids={modal.ids} onClose={() => setModal(null)} />}
       {modal?.kind === 'claim' && <ClaimModal client={client} onClose={() => setModal(null)} onNewToken={() => openAddToken()} />}
       {modal?.kind === 'grid' && (

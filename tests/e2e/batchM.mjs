@@ -1,0 +1,229 @@
+// Round 5c: the Effects window. Searchable list, picture pop-up, live preview, tint, dragging, and the jump / stay setting.
+import { launch, watch, sleep } from './lib.mjs';
+import { mkdirSync } from 'node:fs';
+const BASE = (process.env.BASE || 'http://127.0.0.1:4174/') + '?demo';
+const errors = [];
+const results = [];
+const check = (name, ok, extra = '') => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? '  ' + extra : ''}`); };
+mkdirSync('/tmp/shots', { recursive: true });
+const { browser, context } = await launch();
+const dm = await context.newPage();
+watch(dm, 'dm', errors);
+await dm.goto(BASE);
+await dm.evaluate(() => localStorage.clear());
+await dm.reload();
+await dm.getByRole('button', { name: /Start as the DM/ }).click();
+await dm.getByPlaceholder('New table name').fill('M');
+await dm.getByRole('button', { name: 'Create table' }).click();
+await dm.waitForSelector('.board-host canvas');
+await dm.getByRole('button', { name: '+ New scene' }).first().click();
+await dm.getByRole('button', { name: 'Use sample dungeon' }).click();
+await dm.locator('.modal .muted', { hasText: 'Sample dungeon.png' }).waitFor();
+await dm.getByRole('button', { name: 'Create scene' }).click();
+await dm.waitForFunction(() => window.__vtt?.board?.mapSprite);
+await sleep(400);
+
+const cell = await dm.evaluate(() => window.__vtt.client.grid.cell);
+const gob = await dm.evaluate(([x, y]) => window.__vtt.client.addToken({ x, y, name: 'Goblin', hp: 7, maxHp: 7 }), [5.5 * cell, 4.5 * cell]);
+const orc = await dm.evaluate(([x, y]) => window.__vtt.client.addToken({ x, y, name: 'Orc', hp: 15, maxHp: 15 }), [9.5 * cell, 6.5 * cell]);
+await sleep(500);
+const tok = (id) => dm.evaluate((i) => ({ ...window.__vtt.client.scene.tokens.get(i) }), id);
+const win = dm.locator('.fwin');
+const camNow = () => dm.evaluate(() => ({ ...window.__vtt.board.cam }));
+const tokenScreen = (id) => dm.evaluate((i) => { const t = window.__vtt.client.scene.tokens.get(i); const r = document.querySelector('.board-host').getBoundingClientRect(); const c = window.__vtt.board.cam; return { x: r.left + c.tx + t.x * c.zoom, y: r.top + c.ty + t.y * c.zoom, px: t.size * window.__vtt.client.grid.cell * c.zoom }; }, id);
+
+// ---- opens as a window, not a blocking dialog
+await dm.evaluate((i) => window.__vtt.ui.select([i]), gob);
+const cam0 = await camNow();
+await dm.locator('.tokentag .btn', { hasText: 'Effects' }).click();
+await win.waitFor();
+await sleep(500);
+check('Effects opens as a floating window', (await dm.locator('.fwin').count()) === 1 && (await dm.locator('.modal-back').count()) === 0);
+const wb = await win.boundingBox();
+const vw = await dm.evaluate(() => window.innerWidth);
+check('it sits on the right of the screen', wb.x > vw / 2, `x=${Math.round(wb.x)}`);
+const ts = await tokenScreen(gob);
+check('and the view jumped so the token is on the left', ts.x < wb.x - 40 && ts.x > 76, `token x=${Math.round(ts.x)} window x=${Math.round(wb.x)}`);
+check('the token is big enough to judge', ts.px >= 60, `${Math.round(ts.px)}px`);
+check('the board behind is still clickable (no backdrop)', (await dm.evaluate(([x, y]) => { const el = document.elementFromPoint(x, y); return !!el && !el.closest('.fwin') && !el.closest('.modal-back'); }, [200, 400])));
+await dm.screenshot({ path: '/tmp/shots/m1-open.png' });
+
+// ---- search the ready-made list
+const search = dm.locator('.fx-search');
+await search.click();
+check('clicking the search box opens the list', (await dm.locator('.fx-list').count()) === 1);
+check('the list is grouped', (await dm.locator('.fx-gh').count()) >= 3);
+check('lots of ready-made effects', (await dm.locator('.fx-opt').count()) >= 45, String(await dm.locator('.fx-opt').count()));
+await dm.screenshot({ path: '/tmp/shots/m2-list.png' });
+await search.fill('hex');
+const names = await dm.locator('.fx-opt .fx-opt-n').allTextContents();
+check('typing narrows it down (hex)', names.includes('Hex') && !names.includes('Blinded'), JSON.stringify(names));
+await search.fill('mark');
+const n2 = await dm.locator('.fx-opt .fx-opt-n').allTextContents();
+check("searching matches inside names (mark → Hunter's Mark, Marked)", n2.includes("Hunter's Mark") && n2.includes('Marked'), JSON.stringify(n2));
+await search.fill('pois');
+await sleep(200);
+const prev1 = await dm.evaluate((i) => { const v = window.__vtt.board.views.get(i); return v.preview ? v.preview.n : null; }, gob);
+check('the first match is already shown on the token while you type', prev1 === 'Poisoned', String(prev1));
+await search.fill('s');
+await dm.keyboard.press('ArrowDown');
+await sleep(200);
+const prev1b = await dm.evaluate((i) => { const v = window.__vtt.board.views.get(i); return v.preview ? v.preview.n : null; }, gob);
+const act = await dm.locator('.fx-opt.act .fx-opt-n').textContent();
+check('arrowing down onto an entry previews that one', prev1b === act, `${prev1b} / ${act}`);
+await search.fill('poi');
+await sleep(200);
+await dm.locator('.fx-opt', { hasText: 'Poisoned' }).first().hover();
+await sleep(200);
+const prev2 = await dm.evaluate((i) => { const v = window.__vtt.board.views.get(i); return v.preview ? v.preview.n : null; }, gob);
+check('hovering an entry previews it on the token', prev2 === 'Poisoned', String(prev2));
+check('and nothing is saved yet', (await tok(gob)).fx.length === 0);
+await dm.locator('.fx-opt', { hasText: 'Poisoned' }).first().click();
+await sleep(200);
+check('picking closes the list and fills the box', (await dm.locator('.fx-list').count()) === 0 && (await search.inputValue()) === 'Poisoned');
+check('the picked effect stays previewed on the token', (await dm.evaluate((i) => window.__vtt.board.views.get(i).preview?.n, gob)) === 'Poisoned');
+await dm.screenshot({ path: '/tmp/shots/m3-picked.png' });
+
+// ---- tint
+const tintBox = dm.locator('.fx-colrow input[type=checkbox]');
+check('tint is off to begin with', !(await tintBox.isChecked()));
+await tintBox.check();
+await sleep(250);
+check('ticking Tint shows its colour box', (await dm.locator('.fx-tintcol input[type=color]').count()) === 1);
+const tintShown = await dm.evaluate((i) => { const v = window.__vtt.board.views.get(i); return Math.round(v.tintG.getLocalBounds().width); }, gob);
+check('and the token is tinted in the preview', tintShown > 20, String(tintShown));
+await dm.locator('.fx-tintcol input[type=color]').evaluate((el) => { el.value = '#ff00ff'; el.dispatchEvent(new Event('input', { bubbles: true })); });
+await sleep(150);
+check('the tint colour can differ from the effect colour', (await dm.evaluate((i) => window.__vtt.board.views.get(i).preview.tc, gob)) === '#ff00ff');
+await dm.locator('.fx-tintcol .btn', { hasText: 'Match' }).click();
+await sleep(100);
+check('Match puts it back to the effect colour', (await dm.evaluate((i) => window.__vtt.board.views.get(i).preview.tc, gob)) === '');
+
+// ---- adding it
+await dm.locator('.fwin-foot .btn.primary').click();
+await sleep(400);
+const t1 = await tok(gob);
+check('Add puts it on the token', t1.fx.length === 1 && t1.fx[0].n === 'Poisoned' && t1.fx[0].tint === true, JSON.stringify(t1.fx));
+check('the preview is cleared once it is real', (await dm.evaluate((i) => window.__vtt.board.views.get(i).preview, gob)) === null);
+check('the box is empty again for the next one', (await search.inputValue()) === '');
+check('the effect shows in the "On this token" list', (await dm.locator('.fx-line', { hasText: 'Poisoned' }).count()) === 1);
+const quick = dm.locator('.fx-line .tintbtn');
+await quick.click();
+await sleep(300);
+check('the little tint button on an applied effect turns the tint off', (await tok(gob)).fx[0].tint === false);
+await quick.click();
+await sleep(300);
+check('and on again', (await tok(gob)).fx[0].tint === true);
+
+// ---- custom effect with the picture pop-up
+await dm.locator('.fx-tabs button', { hasText: 'Make your own' }).click();
+await dm.locator('.fx-form input[type=text]').fill('Hexed by the hag');
+check('the picture pop-up is not hanging around', (await dm.locator('.fx-pop').count()) === 0 && (await dm.locator('.fx-pic').count()) === 0);
+await dm.locator('.fx-pic-btn').click();
+check('clicking the picture button opens it', (await dm.locator('.fx-pop').count()) === 1 && (await dm.locator('.fx-pop .fx-pic').count()) > 60, String(await dm.locator('.fx-pop .fx-pic').count()));
+await dm.screenshot({ path: '/tmp/shots/m4-emoji.png' });
+await dm.locator('.fx-pop .fx-pic', { hasText: '🔮' }).first().click();
+check('picking one closes it', (await dm.locator('.fx-pop').count()) === 0);
+check('and the button shows it', (await dm.locator('.fx-pic-btn').textContent()) === '🔮');
+await dm.locator('.fx-pic-btn').click();
+await dm.keyboard.press('Escape');
+check('Esc closes the pop-up without closing the window', (await dm.locator('.fx-pop').count()) === 0 && (await win.count()) === 1);
+await dm.locator('.fx-pic-btn').click();
+await dm.locator('.fx-pop-type input').fill('🐙');
+await dm.keyboard.press('Enter');
+check('any emoji can be typed in too', (await dm.locator('.fx-pic-btn').textContent()) === '🐙');
+await dm.locator('.fx-looks button', { hasText: 'Glow' }).click();
+await dm.locator('.fx-looks button', { hasText: 'A number of rounds' }).click();
+await dm.locator('.fwin-foot .btn.primary').click();
+await sleep(400);
+const t2 = await tok(gob);
+const hag = t2.fx.find((e) => e.n === 'Hexed by the hag');
+check('the custom effect is added with its picture, look and timer', !!hag && hag.ic === '🐙' && hag.look === 'halo' && hag.left === 1, JSON.stringify(hag));
+await dm.locator('.fx-tabs button', { hasText: 'Ready-made' }).click();
+await search.click();
+check('and is kept in the list under "Yours"', (await dm.locator('.fx-gh', { hasText: 'Yours' }).count()) === 1 && (await dm.locator('.fx-opt', { hasText: 'Hexed by the hag' }).count()) === 1);
+await dm.keyboard.press('Escape');
+check('Esc closes the list first', (await dm.locator('.fx-list').count()) === 0 && (await win.count()) === 1);
+
+// ---- change an applied effect
+await dm.locator('.fx-line', { hasText: 'Poisoned' }).locator('button[aria-label^="Change"]').click();
+await sleep(150);
+check('the pencil loads it back into the form', (await search.inputValue()) === 'Poisoned' && /Update/.test(await dm.locator('.fwin-foot .btn.primary').textContent()));
+await dm.locator('.fx-looks button', { hasText: 'Orbit' }).click();
+await dm.locator('.fwin-foot .btn.primary').click();
+await sleep(400);
+const t3 = await tok(gob);
+check('Update changes it in place (one Poisoned, now orbiting)', t3.fx.filter((e) => e.n === 'Poisoned').length === 1 && t3.fx.find((e) => e.n === 'Poisoned').look === 'orbit');
+await dm.screenshot({ path: '/tmp/shots/m5-after.png' });
+
+// ---- dragging the window
+const head = await dm.locator('.fwin-head').boundingBox();
+await dm.mouse.move(head.x + 120, head.y + 18);
+await dm.mouse.down();
+await dm.mouse.move(head.x - 200, head.y + 130, { steps: 8 });
+await dm.mouse.up();
+await sleep(150);
+const wb2 = await win.boundingBox();
+check('the window can be dragged around', Math.abs(wb2.x - (wb.x - 320)) < 6 && Math.abs(wb2.y - (wb.y + 112)) < 6, `${Math.round(wb2.x)},${Math.round(wb2.y)}`);
+await dm.mouse.move(wb2.x + 120, wb2.y + 18);
+await dm.mouse.down();
+await dm.mouse.move(-500, -500, { steps: 4 });
+await dm.mouse.up();
+const wb3 = await win.boundingBox();
+check('but cannot be lost off the edge of the screen', wb3.x + wb3.width > 60 && wb3.y >= 0, `${Math.round(wb3.x)},${Math.round(wb3.y)}`);
+
+// ---- the setting
+await dm.locator('.fwin-head .icon-btn').click();
+await sleep(200);
+check('✕ closes it', (await win.count()) === 0);
+check('and takes the preview off', (await dm.evaluate((i) => window.__vtt.board.views.get(i).preview, gob)) === null);
+await dm.locator('.fwin').count();
+await dm.locator('.tokentag .btn', { hasText: 'Effects' }).click();
+await win.waitFor();
+await sleep(100);
+await dm.locator('.fx-viewset .seg button', { hasText: 'Stay where I was' }).click();
+await dm.locator('.fwin-head .icon-btn').click();
+// move the view somewhere else, then reopen
+await dm.evaluate(([x, y]) => window.__vtt.board.centerOn({ x, y }), [12 * cell, 3 * cell]);
+await sleep(200);
+const camA = await camNow();
+await dm.evaluate((i) => window.__vtt.ui.select([i]), orc);
+await dm.locator('.tokentag .btn', { hasText: 'Effects' }).click();
+await win.waitFor();
+await sleep(500);
+const camB = await camNow();
+check('with "stay where I was" the view does not move', Math.abs(camA.tx - camB.tx) < 1 && Math.abs(camA.ty - camB.ty) < 1 && Math.abs(camA.zoom - camB.zoom) < 1e-6);
+check('the setting is remembered', (await dm.evaluate(() => localStorage.getItem('vtt-fx-jump'))) === '0');
+await dm.locator('.fwin-head .icon-btn').click();
+await dm.getByRole('button', { name: 'Settings' }).click();
+await dm.locator('.modal').waitFor();
+check('it is also in Settings', (await dm.locator('.modal .field', { hasText: 'When the Effects window opens' }).count()) === 1);
+await dm.locator('.modal .seg button', { hasText: 'Jump to the token' }).click();
+check('and changes the same switch', (await dm.evaluate(() => window.__vtt.ui.data.fxJump)) === true);
+await dm.keyboard.press('Escape');
+await sleep(150);
+await dm.locator('.tokentag .btn', { hasText: 'Effects' }).click();
+await win.waitFor();
+await sleep(500);
+const ts2 = await tokenScreen(orc);
+const wb4 = await win.boundingBox();
+check('with "jump" the Orc is brought to the left and the window to the right', ts2.x < wb4.x - 40 && wb4.x > vw / 2, `orc x=${Math.round(ts2.x)} win x=${Math.round(wb4.x)}`);
+
+// ---- several tokens at once
+await dm.locator('.fwin-head .icon-btn').click();
+await dm.evaluate((a) => window.__vtt.ui.select(a), [gob, orc]);
+await dm.locator('.tokentag .btn', { hasText: 'Effects' }).click();
+await win.waitFor();
+check('with two tokens selected it says so', /2 tokens/.test(await dm.locator('.fwin-head h2').textContent()));
+await dm.locator('.fx-search').click();
+await dm.locator('.fx-opt', { hasText: 'Dodging' }).first().click();
+await dm.locator('.fwin-foot .btn.primary').click();
+await sleep(400);
+check('Add goes on both', (await tok(gob)).fx.some((e) => e.n === 'Dodging') && (await tok(orc)).fx.some((e) => e.n === 'Dodging'));
+check('undo takes it off both', await (async () => { await dm.evaluate(() => window.__vtt.client.history.undo()); await sleep(300); return !(await tok(gob)).fx.some((e) => e.n === 'Dodging') && !(await tok(orc)).fx.some((e) => e.n === 'Dodging'); })());
+
+console.log(errors.length ? errors.join('\n') : 'no console problems');
+await browser.close();
+const bad = results.filter((r) => !r).length;
+console.log(`${results.length - bad}/${results.length} checks passed`);
+process.exit(errors.some((e) => !/GPU stall|ReadPixels|willReadFrequently/.test(e)) || bad ? 1 : 0);

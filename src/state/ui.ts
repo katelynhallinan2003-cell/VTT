@@ -1,5 +1,6 @@
 import type { Unsub } from '../backend/types';
 import { FONT_KEYS, type FillMode, type SphereSnap } from '../core/draw';
+import type { Effect } from '../types';
 
 export type Tool = 'select' | 'grid' | 'fog' | 'draw' | 'template' | 'ruler' | 'height';
 export type DrawTool = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'erase';
@@ -70,6 +71,10 @@ export interface UiData {
   textEdit: { id: string | null; x: number; y: number } | null;
   /** bumps whenever the view moves while the text editor is open, so it follows the map */
   camRev: number;
+  /** opening the Effects window moves the view so the token is on the left and the window on the right (otherwise the view stays put) */
+  fxJump: boolean;
+  /** an effect being tried out in the Effects window: drawn on these tokens but not saved */
+  fxDraft: { ids: string[]; fx: Effect } | null;
 }
 
 function readFlag(key: string, dflt: boolean): boolean {
@@ -106,6 +111,7 @@ export class UiState {
     drawSel: new Set(), testMove: false, testCount: 0,
     sharePlot: readFlag('vtt-share-plot', false),
     textEdit: null, camRev: 0, initOpen: false,
+    fxJump: readFlag('vtt-fx-jump', true), fxDraft: null,
     heightFt: (() => { try { const n = Number(localStorage.getItem('vtt-height-ft')); return Number.isFinite(n) && localStorage.getItem('vtt-height-ft') !== null ? n : 10; } catch { return 10; } })(),
     heightShape: readStr('vtt-height-shape', 'rect', ['rect', 'ellipse'] as const),
     showHeights: readFlag('vtt-show-heights', true),
@@ -146,6 +152,7 @@ export class UiState {
       if (patch.showHeights !== undefined) localStorage.setItem('vtt-show-heights', patch.showHeights ? '1' : '0');
       if (patch.initPos !== undefined) localStorage.setItem('vtt-init-pos', patch.initPos);
       if (patch.sharePlot !== undefined) localStorage.setItem('vtt-share-plot', patch.sharePlot ? '1' : '0');
+      if (patch.fxJump !== undefined) localStorage.setItem('vtt-fx-jump', patch.fxJump ? '1' : '0');
     } catch { /* ignore */ }
     this.data = { ...this.data, ...patch };
     if (this.queued) return;

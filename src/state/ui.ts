@@ -6,7 +6,8 @@ export type DrawTool = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 
 export type TemplateKind = 'cone' | 'cube' | 'sphere' | 'emanation' | 'beam';
 export type StrokeSize = 'thin' | 'medium' | 'thick';
 export type FogShape = 'rect' | 'poly' | 'brush';
-export type DockTab = 'scene' | 'tokens' | 'init' | 'players';
+export type DockTab = 'scene' | 'tokens' | 'players';
+export type InitPos = 'top' | 'side';
 
 export interface UiData {
   tool: Tool;
@@ -56,6 +57,10 @@ export interface UiData {
   panButton: 'right' | 'middle';
   /** how pinging works: middle click, or holding the left button */
   pingMode: 'middle' | 'hold';
+  /** DM: the initiative pop-up is open */
+  initOpen: boolean;
+  /** where the turn order sits on screen: across the top middle, or down the right edge */
+  initPos: InitPos;
   /** the text being typed (id null = a new one) and where it sits in the world, while the editor is open */
   textEdit: { id: string | null; x: number; y: number } | null;
   /** bumps whenever the view moves while the text editor is open, so it follows the map */
@@ -95,7 +100,8 @@ export class UiState {
     tplCover: readFlag('vtt-tpl-cover', true),
     drawSel: new Set(), testMove: false, testCount: 0,
     sharePlot: readFlag('vtt-share-plot', false),
-    textEdit: null, camRev: 0,
+    textEdit: null, camRev: 0, initOpen: false,
+    initPos: readStr('vtt-init-pos', 'top', ['top', 'side'] as const),
     panButton: readStr('vtt-pan-button', 'right', ['right', 'middle'] as const),
     pingMode: readStr('vtt-ping-mode', 'middle', ['middle', 'hold'] as const),
   };
@@ -127,6 +133,7 @@ export class UiState {
       if (patch.drawDash !== undefined) localStorage.setItem('vtt-draw-dash', patch.drawDash ? '1' : '0');
       if (patch.panButton !== undefined) localStorage.setItem('vtt-pan-button', patch.panButton);
       if (patch.pingMode !== undefined) localStorage.setItem('vtt-ping-mode', patch.pingMode);
+      if (patch.initPos !== undefined) localStorage.setItem('vtt-init-pos', patch.initPos);
       if (patch.sharePlot !== undefined) localStorage.setItem('vtt-share-plot', patch.sharePlot ? '1' : '0');
     } catch { /* ignore */ }
     this.data = { ...this.data, ...patch };

@@ -8,12 +8,13 @@ import {
   applyDamage, cleanHp, EXPLORE_MIN_CELLS, EXPLORE_JUMP_CELLS, EXPLORE_TELEPORT_CELLS, EXPLORE_TELEPORT_MS, emptyInit, moveEntry, nextTurn, orderOf, pctOf, prevTurn, sightRadiusPx, sortByInit, toPub,
 } from '../core/combat';
 import { lineOp } from '../core/fog';
+import { addFx, fxToWire, tickFx } from '../core/effects';
 import { can, detectPreset, PRESETS, type Action } from '../core/permissions';
 import { mapRect, snapTokenCenter } from '../core/geometry';
 import { isTemplate, movedPoints } from '../core/draw';
 import { throttle } from '../core/throttle';
 import type {
-  Drawing, FogOp, InitEntry, InitPub, InitState, LivePlot, GridSettings, Permissions, PermPreset, Ping, Player, Role, SceneIndexEntry,
+  Drawing, Effect, FogOp, InitEntry, InitPub, InitState, LivePlot, GridSettings, Permissions, PermPreset, Ping, Player, Role, SceneIndexEntry,
   SceneMeta, TableMeta, TableSettings, Token, Vec,
 } from '../types';
 import { History } from './history';
@@ -419,7 +420,7 @@ export class TableClient {
     const updates: Record<string, any> = {};
     for (const [k, v] of Object.entries(patch)) {
       if (k === 'id' || k === 'hidden' || k === 'hp' || k === 'maxHp' || k === 'tempHp' || k === 'hpPct') continue;
-      updates[`${base}/${k}`] = v === undefined ? null : v;
+      updates[`${base}/${k}`] = k === 'fx' ? fxToWire((v as Effect[] | undefined) ?? []) : k === 'initBonus' ? (v ? v : null) : v === undefined ? null : v;
     }
     // hit points live in the DM-only part of the database; players only ever see a percentage
     if (this.isDM && ('hp' in patch || 'maxHp' in patch || 'tempHp' in patch || 'hpShow' in patch)) {
@@ -771,8 +772,8 @@ export class TableClient {
     await this.saveInit({ ...s.init, entries, turn, round: entries.length ? Math.max(1, s.init.round) : 0 });
   }
 
-  async initAddFree(name: string, i: number): Promise<void> {
-    await this.initApply([{ tk: null, n: name.trim() || 'Something', i }]);
+  async initAddFree(name: string, i: number, hidden = false): Promise<void> {
+    await this.initApply([{ tk: null, n: name.trim() || 'Something', i, h: hidden }]);
   }
 
   /** Change one line: its number (re-sorts), name, or whether players may see it. */
@@ -808,11 +809,60 @@ export class TableClient {
     await this.saveInit({ ...s.init, entries: sortByInit(s.init.entries) });
   }
 
+  /** What the last "next turn" changed, so "previous turn" can put the effects back as they were. */
+  private stepSnap: { sid: string; before: { turn: string | null; round: number }; after: { turn: string | null; round: number }; fx: { id: string; before: Effect[] }[] } | null = null;
+  /** Called with a sentence for each effect that ran out as the turns moved on (the DM's screen shows them). */
+  onFxEnded: ((lines: string[]) => void) | null = null;
+
+  /**
+   * Work out which effects count down when the turn moves from the current entry to `to`:
+   * the end of the turn that finishes, the start of a new round for everyone, then the start of the turn that begins.
+   * Tokens that are not in the order at all count down once per round, whatever their timers say.
+   */
+  private stepEffects(s: SceneState, to: { turn: string | null; round: number }): { changes: { id: string; before: Effect[]; after: Effect[] }[]; ended: string[] } {
+    const tokens = s.tokens;
+    const inOrder = new Set(s.init.entries.filter((e) => e.tk).map((e) => e.tk!));
+    const work = new Map<string, Effect[]>();
+    const ended: string[] = [];
+    const tick = (id: string, moment: 'start' | 'end' | 'round', all = false) => {
+      const t = tokens.get(id);
+      if (!t) return;
+      const r = tickFx(work.get(id) ?? t.fx, moment, all);
+      if (!r.changed) return;
+      work.set(id, r.fx);
+      for (const e of r.ended) ended.push(`${e.n} ended on ${t.name || 'a token'}`);
+    };
+    const leaving = s.init.entries.find((e) => e.id === s.init.turn);
+    if (leaving?.tk) tick(leaving.tk, 'end');
+    if (to.round > Math.max(1, s.init.round)) for (const t of tokens.values()) tick(t.id, 'round', !inOrder.has(t.id));
+    const arriving = s.init.entries.find((e) => e.id === to.turn);
+    if (arriving?.tk) tick(arriving.tk, 'start');
+    return { changes: [...work].map(([id, after]) => ({ id, before: tokens.get(id)!.fx, after })), ended };
+  }
+
   async initStep(dir: 1 | -1): Promise<void> {
     const s = this.scene;
-    if (!s || !this.isDM || !s.init.entries.length) return;
-    const r = dir === 1 ? nextTurn(s.init) : prevTurn(s.init);
+    const sid = this.viewSceneId;
+    if (!s || !sid || !this.isDM || !s.init.entries.length) return;
+    if (dir === -1) {
+      const snap = this.stepSnap;
+      this.stepSnap = null;
+      if (snap && snap.sid === sid && snap.after.turn === s.init.turn && snap.after.round === s.init.round) {
+        // straight after a step forward: undo it completely, effect timers included
+        await this.saveInit({ ...s.init, turn: snap.before.turn, round: snap.before.round });
+        await Promise.all(snap.fx.map((f) => this.updateToken(f.id, { fx: f.before })));
+        return;
+      }
+      const r = prevTurn(s.init);
+      await this.saveInit({ ...s.init, turn: r.turn, round: r.round });
+      return;
+    }
+    const r = nextTurn(s.init);
+    const fx = this.stepEffects(s, r);
+    this.stepSnap = { sid, before: { turn: s.init.turn, round: s.init.round }, after: r, fx: fx.changes.map((c) => ({ id: c.id, before: c.before })) };
     await this.saveInit({ ...s.init, turn: r.turn, round: r.round });
+    await Promise.all(fx.changes.map((c) => this.updateToken(c.id, { fx: c.after })));
+    if (fx.ended.length) this.onFxEnded?.(fx.ended);
   }
 
   /** Let players see the order (hidden lines stay hidden), or hide it from them again. */
@@ -822,10 +872,56 @@ export class TableClient {
     await this.saveInit({ ...s.init, shown });
   }
 
-  /** Clear the whole order (end of combat). */
+  /** Clear the whole order (end of combat). Undo brings it back. */
   async initEnd(): Promise<void> {
-    if (!this.isDM || !this.scene) return;
+    const s = this.scene;
+    const sid = this.viewSceneId;
+    if (!this.isDM || !s || !sid) return;
+    const prev = s.init;
+    if (!prev.entries.length && !prev.round) return;
+    this.stepSnap = null;
     await this.saveInit(emptyInit());
+    this.history.push({
+      label: 'End combat',
+      undo: async () => { if (this.viewSceneId === sid) await this.saveInit(prev); },
+      redo: async () => { if (this.viewSceneId === sid) await this.saveInit(emptyInit()); },
+    });
+  }
+
+  // ---------------------------------------------------------------- effects on tokens
+  /** Change the effects of several tokens at once. `change` gets each token's current list and returns the new one. */
+  async changeFx(ids: string[], change: (cur: Effect[], t: Token) => Effect[], label = 'Change effects', key?: string): Promise<void> {
+    const before: { id: string; fx: Effect[] }[] = [];
+    const after: { id: string; fx: Effect[] }[] = [];
+    for (const id of ids) {
+      const t = this.scene?.tokens.get(id);
+      if (!t || !this.canDo('edit', t)) continue;
+      const next = change(t.fx, t);
+      if (JSON.stringify(fxToWire(next)) === JSON.stringify(fxToWire(t.fx))) continue;
+      before.push({ id, fx: t.fx });
+      after.push({ id, fx: next });
+    }
+    if (!after.length) return;
+    const apply = (list: { id: string; fx: Effect[] }[]) => Promise.all(list.map((x) => this.updateToken(x.id, { fx: x.fx }))).then(() => undefined);
+    await apply(after);
+    this.history.push({ label, key, undo: () => apply(before), redo: () => apply(after) });
+  }
+
+  async addEffect(ids: string[], e: Effect): Promise<void> {
+    await this.changeFx(ids, (cur) => addFx(cur, e), `Add ${e.n}`);
+  }
+
+  async removeEffect(ids: string[], fxId: string): Promise<void> {
+    await this.changeFx(ids, (cur) => cur.filter((x) => x.id !== fxId), 'Remove effect');
+  }
+
+  /** Give a timed effect more (or fewer) rounds. Taking the last one away ends it. */
+  async nudgeEffect(id: string, fxId: string, delta: number): Promise<void> {
+    await this.changeFx([id], (cur) => cur.flatMap((x) => {
+      if (x.id !== fxId || x.left == null) return [x];
+      const left = x.left + delta;
+      return left <= 0 ? [] : [{ ...x, left }];
+    }), 'Change effect', `fxn:${id}:${fxId}`);
   }
 
   // ---------------------------------------------------------------- explored ground (DM)

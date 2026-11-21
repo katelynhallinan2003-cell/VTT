@@ -4,6 +4,7 @@ import type {
 } from '../types';
 import { cleanHp, emptyInit, orderOf } from './combat';
 import { FONT_KEYS } from './draw';
+import { fxToWire, normalizeFx } from './effects';
 
 export const DEFAULT_GRID: GridSettings = {
   cell: 70, ox: 0, oy: 0, visible: true, color: '#000000', opacity: 0.35,
@@ -92,6 +93,8 @@ export function normalizeToken(id: string, raw: any, hidden: boolean): Token {
     hpShow: hpShowOf(t.hpShow, typeof t.ownerUid === 'string'),
     hpPct: typeof t.hpPct === 'number' && Number.isFinite(t.hpPct) ? Math.min(100, Math.max(0, Math.round(t.hpPct))) : null,
     sight: Math.min(1000, Math.max(0, num(t.sight, 0))),
+    initBonus: Math.min(99, Math.max(-99, Math.round(num(t.initBonus, 0)))),
+    fx: normalizeFx(t.fx),
     ownerUid: typeof t.ownerUid === 'string' ? t.ownerUid : null,
     hidden,
     locked: bool(t.locked, false),
@@ -188,6 +191,8 @@ export function tokenToWire(t: Token): Record<string, unknown> {
     auras: t.auras.length ? t.auras : undefined,
     hpPct: t.hpPct ?? undefined,
     sight: t.sight > 0 ? t.sight : undefined,
+    initBonus: t.initBonus ? t.initBonus : undefined,
+    fx: fxToWire(t.fx) ?? undefined,
   });
 }
 

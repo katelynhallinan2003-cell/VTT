@@ -19,7 +19,7 @@ const TOOLS: { id: DrawTool; label: string; hint: string }[] = [
 const TEMPLATES: { id: TemplateKind; label: string; hint: string }[] = [
   { id: 'cone', label: 'Cone', hint: 'Click the middle of the edge of the caster\'s square and drag out. It is as wide at the far end as it is long.' },
   { id: 'cube', label: 'Cube', hint: 'Click on one face and drag out. The distance is the side length, and it lines up with the squares.' },
-  { id: 'sphere', label: 'Sphere', hint: 'Click the centre (a grid corner) and drag out the radius.' },
+  { id: 'sphere', label: 'Sphere', hint: 'Click the centre and drag out the radius. The centre snaps to the middle of a square, a corner, or nowhere: your choice below.' },
   { id: 'emanation', label: 'Emanation', hint: 'Click the square it comes out of and drag out. Its size is counted from the edge of that square, and the square itself is left out.' },
   { id: 'beam', label: 'Line', hint: 'Click where it starts and drag out the length. Pick its width below.' },
 ];

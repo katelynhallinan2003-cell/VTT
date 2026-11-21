@@ -1624,6 +1624,7 @@ export class Board {
       case 's': ui.set({ tool: ui.data.tool === 'template' ? 'select' : 'template' }); break;
       case 'r': ui.set({ tool: ui.data.tool === 'ruler' ? 'select' : 'ruler' }); break;
       case 'm': ui.set({ testMove: !ui.data.testMove }); break;
+      case 'i': if (c.isDM) ui.set({ initOpen: !ui.data.initOpen }); break;
       case '0': this.fit(); break;
       case '+': case '=': this.zoomBy(1.25); break;
       case '-': this.zoomBy(0.8); break;

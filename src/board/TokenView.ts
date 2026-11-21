@@ -1,6 +1,6 @@
 import { Container, Graphics, Sprite, Text } from 'pixi.js';
 import { healthState, HEALTH_COLOR } from '../core/combat';
-import type { GridSettings, Token } from '../types';
+import type { Effect, GridSettings, Token } from '../types';
 import { loadTexture, type LoadedTexture } from './textures';
 
 export interface TokenCtx {
@@ -11,6 +11,9 @@ export interface TokenCtx {
   /** how healthy this token looks to whoever is watching (null = show nothing) */
   health: { pct: number; bar: boolean } | null;
 }
+
+/** what has to change on screen when a token's effects change */
+const fxKey = (fx: Effect[]): string => fx.map((e) => `${e.id}${e.ic}${e.c}${e.look}${e.left ?? ''}`).join(',');
 
 const hex = (c: string) => parseInt(c.replace('#', '').padEnd(6, '0').slice(0, 6), 16) || 0xffffff;
 
@@ -39,6 +42,10 @@ export class TokenView {
   /** draw as a see-through copy (shadows and other people's test moves) */
   ghostAlpha: number | null = null;
 
+  /** glow around the token (effects with the Glow look), drawn under everything */
+  private fxBack = new Graphics();
+  /** badges and orbiting symbols of effects, drawn above the token */
+  private fxFront = new Container();
   private base = new Graphics();
   private sprite: Sprite | null = null;
   private maskG = new Graphics();
@@ -62,7 +69,7 @@ export class TokenView {
       style: { fontFamily: 'system-ui, sans-serif', fontWeight: '600', fill: 0xffffff, fontSize: 14, stroke: { color: 0x000000, width: 4, join: 'round' } },
     });
     this.label.anchor.set(0.5, 0);
-    this.container.addChild(this.base, this.maskG, this.initial, this.ring, this.healthG, this.label);
+    this.container.addChild(this.fxBack, this.base, this.maskG, this.initial, this.ring, this.healthG, this.fxFront, this.label);
   }
 
   apply(token: Token, ctx: TokenCtx) {
@@ -70,7 +77,7 @@ export class TokenView {
     const g = ctx.grid;
     this.health = ctx.health;
     const key = [token.size, token.shape, token.ring, token.ringW, token.imgScale, token.imgX, token.imgY, token.imgBg, token.name ? token.name[0] : '?', g.cell,
-      ctx.health ? `${ctx.health.pct}/${ctx.health.bar}` : ''].join('|');
+      ctx.health ? `${ctx.health.pct}/${ctx.health.bar}` : '', fxKey(token.fx)].join('|');
     if (key !== this.key) {
       this.key = key;
       this.redraw(token, ctx);
@@ -87,7 +94,7 @@ export class TokenView {
           this.tex = t;
           this.sprite = new Sprite(t.texture);
           this.sprite.anchor.set(0.5);
-          this.container.addChildAt(this.sprite, 2); // above base + clip shape, below ring
+          this.container.addChildAt(this.sprite, this.container.getChildIndex(this.initial)); // above base + clip shape, below ring
           this.redraw(this.token, ctx);
           this.onDirty();
         });
@@ -143,6 +150,87 @@ export class TokenView {
 
     this.label.style.fontSize = Math.max(11, ctx.grid.cell * 0.22);
     this.drawHealth(t, ctx);
+    this.drawFx(t, ctx);
+  }
+
+  /**
+   * Effects on the token: a soft glow around it, a row of round badges above it, and symbols orbiting it.
+   * Each effect picks its own look. Nothing here animates: the board only redraws when something changes.
+   */
+  private drawFx(t: Token, ctx: TokenCtx) {
+    const g = this.fxBack;
+    g.clear();
+    for (const c of this.fxFront.removeChildren()) c.destroy();
+    if (!t.fx.length) return;
+    const cell = ctx.grid.cell;
+    const D = t.size * cell;
+    const r = D / 2;
+    const square = t.shape === 'square';
+    const bs = Math.max(13, Math.min(cell * 0.3, D * 0.6 + 6));
+
+    // glow: stacked translucent strokes, strongest at the token's edge
+    const halos = t.fx.filter((e) => e.look === 'halo');
+    const w = Math.max(3, cell * 0.07);
+    halos.forEach((e, i) => {
+      const rad = r + w * 0.25 + i * w * 1.3;
+      const col = hex(e.c);
+      const layers: [number, number][] = [[4.6, 0.1], [3.4, 0.14], [2.2, 0.2], [1, 0.6]];
+      for (const [k, a] of layers) {
+        if (square) g.roundRect(-rad, -rad, rad * 2, rad * 2, w).stroke({ width: w * k, color: col, alpha: a });
+        else g.circle(0, 0, rad).stroke({ width: w * k, color: col, alpha: a });
+      }
+    });
+
+    const front = this.fxFront;
+    const marks = new Graphics();
+    front.addChild(marks);
+    const glyph = (e: Effect) => e.ic || e.n.charAt(0).toUpperCase();
+    const addText = (txt: string, size: number, x: number, y: number, o: { fill?: number; stroke?: boolean } = {}) => {
+      const tx = new Text({
+        text: txt,
+        style: { fontFamily: '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", system-ui, sans-serif', fontWeight: '700', fontSize: size, fill: o.fill ?? 0xffffff,
+          ...(o.stroke ? { stroke: { color: 0x000000, width: Math.max(2, size * 0.25), join: 'round' as const } } : {}) },
+      });
+      tx.anchor.set(0.5);
+      tx.position.set(x, y);
+      tx.resolution = ctx.textRes;
+      front.addChild(tx);
+    };
+
+    // orbit: the symbol repeated around the token, several effects interleaved
+    const orbits = t.fx.filter((e) => e.look === 'orbit');
+    const n = 8;
+    const orad = r + bs * 0.42;
+    orbits.forEach((e, j) => {
+      for (let k = 0; k < n; k++) {
+        const ang = ((k + j / orbits.length) / n) * Math.PI * 2 - Math.PI / 2;
+        const x = Math.cos(ang) * orad;
+        const y = Math.sin(ang) * orad;
+        marks.circle(x, y, bs * 0.34).fill({ color: 0x000000, alpha: 0.4 });
+        marks.circle(x, y, bs * 0.34).stroke({ width: 1.2, color: hex(e.c), alpha: 0.95 });
+        addText(glyph(e), bs * 0.46, x, y);
+      }
+    });
+
+    // badges above the token (the Glow look has one too)
+    const badges = t.fx.filter((e) => e.look !== 'orbit');
+    const show = badges.slice(0, 6);
+    const step = bs * 1.12;
+    const y0 = -r - bs * 0.55 - Math.max(0, halos.length - 0) * w * 1.3 - 2;
+    show.forEach((e, i) => {
+      const x = (i - (show.length - 1) / 2) * step;
+      if (e.look === 'dot') {
+        marks.circle(x, y0, bs * 0.3).fill({ color: hex(e.c), alpha: 0.95 });
+        marks.circle(x, y0, bs * 0.3).stroke({ width: 1.5, color: 0xffffff, alpha: 0.9 });
+      } else {
+        marks.circle(x, y0, bs * 0.5 + 1.5).fill({ color: 0x000000, alpha: 0.55 });
+        marks.circle(x, y0, bs * 0.5).fill({ color: hex(e.c), alpha: 0.95 });
+        marks.circle(x, y0, bs * 0.5).stroke({ width: 1.5, color: 0xffffff, alpha: 0.9 });
+        addText(glyph(e), bs * 0.62, x, y0);
+      }
+      if (e.left != null) addText(String(e.left), Math.max(9, bs * 0.4), x + bs * 0.38, y0 + bs * 0.4, { stroke: true });
+    });
+    if (badges.length > show.length) addText(`+${badges.length - show.length}`, Math.max(10, bs * 0.45), ((show.length - 1) / 2) * step + bs * 0.9, y0, { stroke: true });
   }
 
   /** Coloured edge for bloodied / near death / down, and a small bar under the token. */
@@ -188,7 +276,10 @@ export class TokenView {
   /** Force a redraw next apply (e.g. when the grid size changed). */
   invalidate() { this.key = ''; }
 
-  setTextRes(res: number) { if (this.label.resolution !== res) this.label.resolution = res; }
+  setTextRes(res: number) {
+    if (this.label.resolution !== res) this.label.resolution = res;
+    for (const c of this.fxFront.children) if (c instanceof Text && c.resolution !== res) c.resolution = res;
+  }
 
   tick(dt: number): boolean {
     if (this.dragging) { this.container.position.set(this.display.x, this.display.y); return false; }

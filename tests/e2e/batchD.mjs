@@ -25,11 +25,11 @@ await dm.waitForFunction(() => window.__vtt?.board?.mapSprite);
 await sleep(500);
 
 check('Scene panel opens by itself after the first scene is created', (await dm.locator('.dock.dock-scene').count()) === 1);
-check('rail has Scene, Tokens, Initiative, Players tabs', (await dm.locator('.rail-tab').allTextContents()).map((t) => t.replace(/\d+$/, '')).join(',') === 'Scene,Tokens,Initiative,Players');
+check('rail has Scene, Tokens, Players tabs', (await dm.locator('.rail-tab').allTextContents()).map((t) => t.replace(/\d+$/, '')).join(',') === 'Scene,Tokens,Players');
 await dm.screenshot({ path: '/tmp/shots/60-layout-scene-open.png' });
 await dm.locator('.rail-tab', { hasText: 'Scene' }).click();
 check('clicking the open tab folds the panel', (await dm.locator('.dock').count()) === 0);
-check('only the little tabs remain on the right', (await dm.locator('.rail-tab').count()) === 4);
+check('only the little tabs remain on the right', (await dm.locator('.rail-tab').count()) === 3);
 await dm.screenshot({ path: '/tmp/shots/61-layout-collapsed.png' });
 
 // no "Scenes" button, no live text anywhere in the bar

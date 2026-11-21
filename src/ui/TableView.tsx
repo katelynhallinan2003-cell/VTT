@@ -10,7 +10,8 @@ import { Toasts, copyText, toast, useClient, useTheme, useUi } from './common';
 import { AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewSceneModal, ScenesModal, SettingsModal } from './modals';
 import { DrawFlyout, DrawInspector, RulerFlyout, TemplateFlyout, TestMoveBar, TextEditor } from './drawTools';
 import { Dock, Rail, TokenTag } from './panels';
-import { InitRollModal, InitStrip } from './initiative';
+import { InitPopup, InitStrip } from './initiative';
+import { EffectsModal } from './effects';
 import { TokenEditorModal } from './tokenEditor';
 
 type ModalState =
@@ -22,7 +23,7 @@ type ModalState =
   | { kind: 'settings' }
   | { kind: 'claim' }
   | { kind: 'editToken'; ids: string[] }
-  | { kind: 'initRoll' }
+  | { kind: 'effects'; ids: string[] }
   | { kind: 'grid'; rect: Rect; derived: { cell: number; ox: number; oy: number } };
 
 const Icon = (props: { d: string; size?: number }) => (
@@ -39,6 +40,7 @@ const ICONS = {
   draw: 'M4 20l1-4L16 5l3 3L8 19zM14 7l3 3',
   template: 'M12 4l8 14H4zM4 18a8 3 0 0 0 16 0',
   ruler: 'M3 17L17 3l4 4L7 21zM7 13l2 2M10 10l2 2M13 7l2 2',
+  init: 'M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 8l4 6H8z',
   test: 'M6 20a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM18 9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM8 15l8-5',
 };
 
@@ -80,6 +82,13 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
     void b.init().then(() => { if (!dead) { boardRef.current = b; setBoard(b); (window as any).__vtt = { client, ui, board: b }; } });
     return () => { dead = true; boardRef.current = null; b.destroy(); };
   }, [client, ui]);
+
+  // ---- tell the DM when an effect runs out as the turns move on
+  useEffect(() => {
+    if (!client.isDM) return;
+    client.onFxEnded = (lines) => { for (const l of lines) toast(l, 'info', 3200); };
+    return () => { client.onFxEnded = null; };
+  }, [client]);
 
   // ---- offer to claim a token the first time a player sees unclaimed tokens
   const scene = client.scene;
@@ -160,6 +169,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       const ids = selectedIds.length && d.selection.has(menuToken.id) ? selectedIds : [menuToken.id];
       const toks = ids.map((i) => scene?.tokens.get(i)).filter((t): t is Token => !!t);
       if (toks.every((t) => client.canDo('edit', t))) menuItems.push({ label: 'Edit token…', onClick: () => setModal({ kind: 'editToken', ids }) });
+      if (toks.every((t) => client.canDo('edit', t))) menuItems.push({ label: 'Effects…', onClick: () => setModal({ kind: 'effects', ids }) });
       if (client.canDo('create')) menuItems.push({ label: 'Duplicate', onClick: () => void client.duplicateTokens(ids, client.grid.cell).then((n) => ui.select(n)) });
       if (toks.every((t) => client.canDo('edit', t))) {
         menuItems.push({ label: 'Bring to front', onClick: () => void client.bringToFront(ids) });
@@ -210,6 +220,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
         <ToolBtn icon="template" label="Spell templates" hotkey="S" on={d.tool === 'template'} disabled={!client.canDo('draw')} onClick={() => ui.set({ tool: d.tool === 'template' ? 'select' : 'template' })} />
         <ToolBtn icon="ruler" label="Ruler" hotkey="R" on={d.tool === 'ruler'} disabled={!client.canDo('measure')} onClick={() => ui.set({ tool: d.tool === 'ruler' ? 'select' : 'ruler' })} />
         <ToolBtn icon="test" label="Test move: try a move without making it" hotkey="M" on={d.testMove} onClick={() => ui.set({ testMove: !d.testMove })} />
+        {client.isDM && <ToolBtn icon="init" label="Initiative: roll and keep the turn order" hotkey="I" on={d.initOpen} toggle onClick={() => ui.set({ initOpen: !d.initOpen })} />}
         <div class="tool-sep" />
         <ToolBtn icon="undo" label={client.history.undoLabel ? `Undo: ${client.history.undoLabel}` : 'Undo'} hotkey="Ctrl+Z" disabled={!client.history.canUndo} onClick={() => void board?.runHistory('undo')} />
         <ToolBtn icon="redo" label={client.history.redoLabel ? `Redo: ${client.history.redoLabel}` : 'Redo'} hotkey="Ctrl+Y" disabled={!client.history.canRedo} onClick={() => void board?.runHistory('redo')} />
@@ -285,9 +296,10 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
 
       {/* ---------------- right side: little tabs, and the panel that opens beside them */}
       <Rail client={client} ui={ui} />
-      <Dock client={client} ui={ui} board={board} onNewScene={() => setModal({ kind: 'newScene' })} onEdit={(ids) => setModal({ kind: 'editToken', ids })} onRoll={() => setModal({ kind: 'initRoll' })} />
+      <Dock client={client} ui={ui} board={board} onNewScene={() => setModal({ kind: 'newScene' })} onEdit={(ids) => setModal({ kind: 'editToken', ids })} />
       <InitStrip client={client} ui={ui} board={board} />
-      {mySel && <TokenTag client={client} ui={ui} onEdit={(ids) => setModal({ kind: 'editToken', ids })} />}
+      <InitPopup client={client} ui={ui} board={board} onEdit={(ids) => setModal({ kind: 'editToken', ids })} onEffects={(ids) => setModal({ kind: 'effects', ids })} />
+      {mySel && <TokenTag client={client} ui={ui} onEdit={(ids) => setModal({ kind: 'editToken', ids })} onEffects={(ids) => setModal({ kind: 'effects', ids })} />}
 
       {/* ---------------- overlays */}
       {d.status && <div class="status">{d.status}</div>}
@@ -327,7 +339,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {modal?.kind === 'scenes' && <ScenesModal client={client} onClose={() => setModal(null)} onNew={() => setModal({ kind: 'newScene' })} />}
       {modal?.kind === 'library' && <LibraryModal client={client} onClose={() => setModal(null)} onUseMap={useLibraryMap} onAddToken={addLibraryToken} />}
       {modal?.kind === 'settings' && <SettingsModal client={client} ui={ui} onClose={() => setModal(null)} onSignOut={client.isDM ? props.onSignOut : undefined} />}
-      {modal?.kind === 'initRoll' && <InitRollModal client={client} onClose={() => setModal(null)} />}
+      {modal?.kind === 'effects' && <EffectsModal client={client} ids={modal.ids} onClose={() => setModal(null)} />}
       {modal?.kind === 'editToken' && <TokenEditorModal client={client} ids={modal.ids} onClose={() => setModal(null)} />}
       {modal?.kind === 'claim' && <ClaimModal client={client} onClose={() => setModal(null)} onNewToken={() => openAddToken()} />}
       {modal?.kind === 'grid' && (

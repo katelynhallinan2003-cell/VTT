@@ -8,7 +8,8 @@ import type { DockTab, UiState } from '../state/ui';
 import type { Aura, GridSettings, LabelMode, Token, TokenShape } from '../types';
 import { Field, Section, SliderField, Toggle, toast, useClient, useUi } from './common';
 import { uploadImage } from './uploads';
-import { HpBar, InitiativePanel, parseDamage, tempPct } from './initiative';
+import { HpBar, parseDamage, tempPct } from './initiative';
+import { FxIcons } from './effects';
 import { AuraEditor } from './auraEditor';
 import { PlayersPanel } from './modals';
 
@@ -33,7 +34,7 @@ function FileButton(props: { label: string; accept?: string; onFile: (f: File) =
 
 // ================================================================== token tag
 /** A small box at the bottom of the screen naming what is selected. Everything else lives in the token editor. */
-export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids: string[]) => void }) {
+export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids: string[]) => void; onEffects: (ids: string[]) => void }) {
   const { client, ui } = props;
   useClient(client);
   const d = useUi(ui);
@@ -47,7 +48,7 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
   const allHidden = tokens.every((t) => t.hidden);
   const sizeLabel = TOKEN_SIZES.find((s) => s.size === t0.size)?.label ?? `${t0.size} squares`;
   const viewerSeesState = !client.isDM && !multi && t0.hpShow !== 'off' && t0.hpPct != null && healthState(t0.hpPct) !== 'ok';
-  const sub = multi ? '' : [sizeLabel, viewerSeesState ? HEALTH_LABEL[healthState(t0.hpPct)] : '', t0.hidden ? 'hidden' : '', t0.locked ? 'locked' : ''].filter(Boolean).join(' · ');
+  const sub = multi ? '' : [sizeLabel, viewerSeesState ? HEALTH_LABEL[healthState(t0.hpPct)] : '', t0.hidden ? 'hidden' : '', t0.locked ? 'locked' : '', t0.fx.map((e) => e.n).join(', ')].filter(Boolean).join(' · ');
   const tracked = client.isDM ? tokens.filter((t) => t.hp != null && t.maxHp != null) : [];
   const canAura = !multi && editable;
 
@@ -58,10 +59,16 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
         <div class="tt-name">{multi ? `${tokens.length} tokens` : t0.name || 'Unnamed token'}</div>
         {sub && <div class="tt-sub">{sub}</div>}
       </div>
+      {!multi && t0.fx.length > 0 && <FxIcons fx={t0.fx} max={6} />}
       {tracked.length > 0 && <HpControl client={client} tokens={tracked} />}
       <button class="btn small primary" disabled={!editable} title="Edit token (E)" onClick={() => props.onEdit(ids)}>Edit</button>
       {!client.isDM && !multi && client.canDo('claim', t0) && (
         <button class="btn small" onClick={() => void client.updateToken(t0.id, { ownerUid: client.uid })}>Take control</button>
+      )}
+      {editable && (
+        <button class="btn small" title="Poisoned, blessed, or anything you make up: with or without a timer" onClick={() => props.onEffects(ids)}>
+          Effects{!multi && t0.fx.length ? ` (${t0.fx.length})` : ''}
+        </button>
       )}
       {canAura && (
         <button class={`btn small ${auraOpen ? 'primary' : ''}`} title="Coloured areas that follow this token" onClick={() => setAuraOpen(!auraOpen)}>
@@ -277,7 +284,7 @@ export function Rail(props: { client: TableClient; ui: UiState }) {
   const d = useUi(ui);
   const online = [...client.players.values()].filter((p) => p.online).length;
   const tabs: { id: DockTab; label: string; extra?: string }[] = client.isDM
-    ? [{ id: 'scene', label: 'Scene' }, { id: 'tokens', label: 'Tokens' }, { id: 'init', label: 'Initiative' }, { id: 'players', label: 'Players', extra: online ? String(online) : undefined }]
+    ? [{ id: 'scene', label: 'Scene' }, { id: 'tokens', label: 'Tokens' }, { id: 'players', label: 'Players', extra: online ? String(online) : undefined }]
     : [{ id: 'players', label: 'Players', extra: online ? String(online) : undefined }];
   return (
     <div class={`rail ${d.dockTab ? 'open' : ''}`}>
@@ -292,10 +299,10 @@ export function Rail(props: { client: TableClient; ui: UiState }) {
   );
 }
 
-const DOCK_TITLES: Record<DockTab, string> = { scene: 'Scene', tokens: 'Tokens', init: 'Initiative', players: 'Players' };
+const DOCK_TITLES: Record<DockTab, string> = { scene: 'Scene', tokens: 'Tokens', players: 'Players' };
 
 /** The panel that opens beside the tabs. */
-export function Dock(props: { client: TableClient; ui: UiState; board: Board | null; onNewScene: () => void; onEdit: (ids: string[]) => void; onRoll: () => void }) {
+export function Dock(props: { client: TableClient; ui: UiState; board: Board | null; onNewScene: () => void; onEdit: (ids: string[]) => void }) {
   const { client, ui } = props;
   useClient(client);
   const d = useUi(ui);
@@ -310,7 +317,6 @@ export function Dock(props: { client: TableClient; ui: UiState; board: Board | n
       </div>
       {tab === 'scene' && <ScenePanel client={client} ui={ui} board={props.board} onNewScene={props.onNewScene} />}
       {tab === 'tokens' && <TokenList client={client} ui={ui} board={props.board} onEdit={props.onEdit} />}
-      {tab === 'init' && <InitiativePanel client={client} ui={ui} board={props.board} onRoll={props.onRoll} onEdit={props.onEdit} />}
       {tab === 'players' && <PlayersPanel client={client} />}
     </aside>
   );

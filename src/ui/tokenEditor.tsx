@@ -191,6 +191,12 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
                   <option value="bar">Colour and a health bar (no numbers)</option>
                 </select>
               </Field>
+              <h4>Initiative</h4>
+              <Field label="Bonus added to its initiative roll" hint="Remembered for this token. The initiative roller adds it to the d20 for you.">
+                <input type="number" class="num" min={-99} max={99} disabled={!editable} value={(draft.initBonus ?? same('initBonus') ?? '') as number | ''}
+                  placeholder={val('initBonus') === null ? 'Mixed' : '0'}
+                  onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ initBonus: v === '' ? 0 : Math.max(-99, Math.min(99, Math.round(Number(v)))) }); }} />
+              </Field>
               <h4>Sight</h4>
               <Field label="Sees as far as (feet)" hint="0: it does not clear fog by itself. Turn on “Tokens clear the fog around them” in the Scene panel.">
                 <div class="row wrap" style={{ marginBottom: 0 }}>

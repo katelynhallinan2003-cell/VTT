@@ -78,7 +78,7 @@ await dm.locator('.sect-head', { hasText: /^.\s*Grid$/ }).click();
 check('a section can be collapsed', (await dm.locator('.dock >> text=Show grid').count()) === 0);
 await dm.screenshot({ path: '/tmp/shots/44-dock-collapsed.png' });
 await dm.locator('.dock .icon-btn[aria-label="Hide panel"]').click();
-check('the dock can be hidden', (await dm.locator('.dock').count()) === 0 && (await dm.locator('.rail-tab').count()) === 4);
+check('the dock can be hidden', (await dm.locator('.dock').count()) === 0 && (await dm.locator('.rail-tab').count()) === 3);
 await dm.locator('.rail-tab', { hasText: 'Scene' }).click();
 check('and shown again', (await dm.locator('.dock').count()) === 1);
 await dm.locator('.sect-head', { hasText: /^.\s*Grid$/ }).click();

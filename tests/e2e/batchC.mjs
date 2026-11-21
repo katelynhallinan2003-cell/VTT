@@ -97,10 +97,10 @@ await dm.evaluate((i) => window.__vtt.client.updateTokens([i], { hp: 12, hpShow:
 await sleep(300);
 
 // ---- initiative
-await dm.locator('.rail-tab', { hasText: 'Initiative' }).click();
-check('the Initiative tab starts empty', (await dm.locator('.init-row').count()) === 0);
-await dm.getByRole('button', { name: /Roll for initiative/ }).first().click();
-await dm.waitForSelector('.roll-list');
+await dm.locator('button[aria-label^="Initiative"]').click();
+await dm.waitForSelector('.initpop .roll-list');
+check('the initiative pop-up opens on the roll list when there is no combat', (await dm.locator('.init-row').count()) === 0 && (await dm.locator('.initpop-tabs .on').innerText()) === 'Roll');
+check('and the rail has no Initiative tab any more', !(await dm.locator('.rail-tab').allTextContents()).some((t) => /Initiative/.test(t)));
 check('the roll popup lists every token, party first', (await dm.locator('.roll-row').count()) === 4 && (await dm.locator('.roll-row').first().innerText()).includes('Aria'));
 const rollIn = (name) => dm.locator('.roll-row', { hasText: name }).locator('.roll-in');
 await rollIn('Aria').fill('14');
@@ -112,26 +112,26 @@ await dm.locator('.roll-row', { hasText: 'Assassin' }).locator('button[title^="R
 const rolled = Number(await dm.locator('.roll-row', { hasText: 'Assassin' }).locator('.roll-in').inputValue());
 check('the dice button fills in a d20 roll', rolled >= 1 && rolled <= 20, String(rolled));
 await dm.screenshot({ path: '/tmp/shots/73-roll-popup.png' });
-await dm.locator('.modal-foot .btn.primary').click();
+await dm.locator('.initpop .btn.primary', { hasText: /Add \d+ to the order/ }).click();
 await sleep(500);
 const order = async () => dm.evaluate(() => window.__vtt.client.scene.init.entries.map((e) => e.n));
 const sorted = (await order());
 check('the order is sorted, highest first', sorted.length === 4 && sorted.join() !== '' && (await dm.evaluate(() => { const e = window.__vtt.client.scene.init.entries; return e.every((x, i) => i === 0 || e[i - 1].i >= x.i); })), sorted.join(' > '));
-check('the Initiative tab lists them', (await dm.locator('.init-row').count()) === 4);
+check('the Order tab lists them', (await dm.locator('.init-row').count()) === 4);
 check('the first one has the turn', (await dm.locator('.init-row.turn').count()) === 1);
 check('hidden tokens start as secret lines', await dm.evaluate(() => window.__vtt.client.scene.init.entries.find((e) => e.n === 'Assassin').h === true));
 check('players see nothing yet', (await pl.locator('.initstrip').count()) === 0);
 
-await dm.locator('.toggle', { hasText: 'Show the order to players' }).locator('input').check();
+await dm.locator('.initpop .toggle', { hasText: 'Show to players' }).locator('input').check();
 await sleep(500);
 check('after revealing, players see the strip', (await pl.locator('.initstrip').count()) === 1);
-const names = await pl.locator('.initstrip li .init-name > span:first-child').allInnerTexts();
+const names = await pl.locator('.initstrip li .ibox-name').allInnerTexts();
 check('without the secret line', names.length === 3 && !names.includes('Assassin'), names.join(', '));
 await dm.screenshot({ path: '/tmp/shots/74-initiative-dm.png' });
 await pl.screenshot({ path: '/tmp/shots/75-initiative-player.png' });
 
 // turns
-const turnName = (page) => page.locator('.initstrip li.turn .init-name > span:first-child').allInnerTexts();
+const turnName = (page) => page.locator('.initstrip li.turn .ibox-name').allInnerTexts();
 const firstTurn = await dm.evaluate(() => { const s = window.__vtt.client.scene.init; return s.entries.find((e) => e.id === s.turn).n; });
 await dm.getByRole('button', { name: /Next turn/ }).click();
 await sleep(400);
@@ -180,14 +180,16 @@ check('and so does the heal button', (await dm.evaluate((i) => window.__vtt.clie
 const goblinRow = dm.locator('.init-row', { hasText: 'Goblin' });
 await goblinRow.locator('.icon-btn[title^="Players can see"]').click();
 await sleep(400);
-check('hiding a line removes it from the players\' list', !(await pl.locator('.initstrip li .init-name > span:first-child').allInnerTexts()).includes('Goblin'));
-dm.once('dialog', (d) => d.accept());
+check('hiding a line removes it from the players\' list', !(await pl.locator('.initstrip li .ibox-name').allInnerTexts()).includes('Goblin'));
+let sawDialog = false;
+dm.once('dialog', (d) => { sawDialog = true; void d.accept(); });
 await dm.getByRole('button', { name: 'End combat' }).click();
 await sleep(500);
-check('ending combat clears the order for everyone', (await dm.locator('.init-row').count()) === 0 && (await pl.locator('.initstrip').count()) === 0);
+check('ending combat clears the order for everyone, with no "are you sure" box', !sawDialog && (await dm.locator('.init-row').count()) === 0 && (await pl.locator('.initstrip').count()) === 0);
+await dm.locator('.initpop button[aria-label="Close initiative"]').click();
 
 // ---- fog sight
-await dm.locator('.rail-tab', { hasText: 'Scene' }).click();
+if (!(await dm.locator('.dock-scene').count())) await dm.locator('.rail-tab', { hasText: 'Scene' }).click();
 await dm.evaluate(() => window.__vtt.client.resetFog('hidden'));
 await sleep(500);
 const lum = async (page, sx, sy) => {

@@ -98,12 +98,36 @@ export interface Token {
   hpPct: number | null;
   /** how far this token can see, in feet (0 = it does not clear fog by itself) */
   sight: number;
+  /** added to a d20 when this token rolls for initiative (remembered per token) */
+  initBonus: number;
+  /** conditions and other effects on it: poisoned, blessed, a custom one... Everyone who can see the token sees them. */
+  fx: Effect[];
   ownerUid: string | null;
   /** DM-only token (stored in the DM-only subtree, invisible to players) */
   hidden: boolean;
   locked: boolean;
   z: number;
   label: LabelMode;
+}
+
+/** How an effect shows on its token. */
+export type FxLook = 'badge' | 'halo' | 'orbit' | 'dot';
+/** When an effect with a duration counts down: at the end of its token's turn, at the start of it, or at the start of every round. */
+export type FxTick = 'end' | 'start' | 'round';
+
+/** A condition or other effect on a token (poisoned, blessed, a made-up one). */
+export interface Effect {
+  id: string;
+  /** what it is called */
+  n: string;
+  /** the picture shown on the token (an emoji or a letter); may be empty */
+  ic: string;
+  /** colour */
+  c: string;
+  look: FxLook;
+  /** rounds left, or null when it lasts until someone removes it */
+  left: number | null;
+  tick: FxTick;
 }
 
 /** An area around a token, measured in feet. */

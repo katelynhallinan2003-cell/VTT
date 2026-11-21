@@ -152,6 +152,7 @@ export function normalizeDrawing(id: string, raw: any): Drawing | null {
     u: bool(raw.u, false),
     ho: bool(raw.ho, false),
     bw: Math.min(200, Math.max(1, num(raw.bw, 5))),
+    of: Math.min(400, Math.max(0, num(raw.of, 0))),
     hz: typeof raw.hz === 'number' && Number.isFinite(raw.hz) && (raw.k === 'rect' || raw.k === 'ellipse') ? Math.min(5000, Math.max(-1000, Math.round(raw.hz))) : null,
     t: num(raw.t, 0),
   };
@@ -163,6 +164,7 @@ export function drawingToWire(d: Omit<Drawing, 'id'> | Drawing): Record<string, 
     ...rest, txt: rest.txt || undefined, dash: rest.dash || undefined, fill: rest.fill || undefined,
     fc: rest.fc || undefined, font: rest.font || undefined, b: rest.b || undefined, i: rest.i || undefined, u: rest.u || undefined, ho: rest.ho || undefined,
     hz: rest.hz ?? undefined,
+    of: rest.of || undefined,
   });
 }
 

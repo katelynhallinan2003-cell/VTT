@@ -1,5 +1,5 @@
 import { Container, Graphics, Text } from 'pixi.js';
-import { LINE_H, beamWidthPx, boundsOf, dashSegments, drawingBounds, fontStack, isTemplate, parsePts, templateGeom, textMetrics } from '../core/draw';
+import { LINE_H, beamWidthPx, templateWidthPx, footprintPoly, boundsOf, dashSegments, drawingBounds, fontStack, isTemplate, parsePts, templateGeom, textMetrics } from '../core/draw';
 import { cellPoly, coveredCells } from '../core/cells';
 import { isHex } from '../core/hex';
 import type { DrawKind, Drawing, GridSettings, Vec } from '../types';
@@ -17,9 +17,11 @@ export interface Shape {
   fc?: string;
   dash: boolean;
   bw: number;
+  /** width of the creature an emanation comes out of, in feet */
+  of?: number;
 }
 
-export const shapeOf = (d: Drawing): Shape => ({ k: d.k, pts: parsePts(d.p), color: d.color, w: d.w, fill: d.fill, fc: d.fc, dash: d.dash, bw: d.bw });
+export const shapeOf = (d: Drawing): Shape => ({ k: d.k, pts: parsePts(d.p), color: d.color, w: d.w, fill: d.fill, fc: d.fc, dash: d.dash, bw: d.bw, of: d.of });
 
 /** Default opacity of a spell template's area. */
 export const TEMPLATE_FILL = 0.28;
@@ -50,30 +52,23 @@ export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1,
 
   if (isTemplate(s.k)) {
     if (pts.length < 2) return;
-    const geom = templateGeom(s.k, pts[0], pts[1], beamWidthPx(grid, s.bw));
+    const hexShape = grid.shape === 'square' ? undefined : grid.shape;
+    const widthPx = templateWidthPx(grid, { k: s.k, bw: s.bw, of: s.of });
+    const geom = templateGeom(s.k, pts[0], pts[1], widthPx, hexShape);
     const fillA = (s.fill > 0 ? s.fill : TEMPLATE_FILL) * alpha;
     if (cover) {
       // light up the squares the area covers (the area itself is left unfilled so the squares read clearly)
-      for (const c of coveredCells(grid, s.k, pts[0], pts[1], beamWidthPx(grid, s.bw))) g.poly(cellPoly(grid, c).flatMap((p) => [p.x, p.y])).fill({ color: fcol, alpha: Math.max(0.5, fillA) * alpha });
+      for (const c of coveredCells(grid, s.k, pts[0], pts[1], widthPx)) g.poly(cellPoly(grid, c).flatMap((p) => [p.x, p.y])).fill({ color: fcol, alpha: Math.max(0.5, fillA) * alpha });
     } else {
       if (geom.type === 'circle') g.circle(geom.c.x, geom.c.y, Math.max(0.5, geom.r)).fill({ color: fcol, alpha: fillA });
       else g.poly(geom.pts.flatMap((p) => [p.x, p.y])).fill({ color: fcol, alpha: fillA });
-      // an emanation does not include the square it comes out of
-      if (s.k === 'emanation' && geom.type === 'circle') {
-        if (isHex(grid)) g.poly(cellPoly(grid, geom.c).flatMap((p) => [p.x, p.y])).cut();
-        else {
-          const h = grid.cell / 2;
-          g.rect(geom.c.x - h, geom.c.y - h, grid.cell, grid.cell).cut();
-        }
-      }
+      // an emanation does not include the space of the creature it comes out of
+      if (s.k === 'emanation') g.poly(footprintPoly(pts[0], widthPx, hexShape).flatMap((p) => [p.x, p.y])).cut();
     }
     if (geom.type === 'circle') g.circle(geom.c.x, geom.c.y, Math.max(0.5, geom.r)).stroke({ ...stroke, width: Math.max(2, s.w) });
     else g.poly(geom.pts.flatMap((p) => [p.x, p.y]), true).stroke({ ...stroke, width: Math.max(2, s.w) });
     // a dot on the point the template starts from (an emanation shows its square instead)
-    if (s.k === 'emanation') {
-      if (isHex(grid)) g.poly(cellPoly(grid, pts[0]).flatMap((p) => [p.x, p.y]), true).stroke({ ...stroke, width: Math.max(1.5, s.w * 0.6) });
-      else g.rect(pts[0].x - grid.cell / 2, pts[0].y - grid.cell / 2, grid.cell, grid.cell).stroke({ ...stroke, width: Math.max(1.5, s.w * 0.6) });
-    }
+    if (s.k === 'emanation') g.poly(footprintPoly(pts[0], widthPx, hexShape).flatMap((p) => [p.x, p.y]), true).stroke({ ...stroke, width: Math.max(1.5, s.w * 0.6) });
     else g.circle(pts[0].x, pts[0].y, Math.max(3, s.w * 1.2)).fill({ color: col, alpha });
     return;
   }
@@ -249,6 +244,6 @@ export class DrawLayer {
 
   /** Bounds of a drawing for selection outlines. */
   boundsOf(d: Drawing, grid: GridSettings) {
-    return drawingBounds(d, beamWidthPx(grid, d.bw));
+    return drawingBounds(d, templateWidthPx(grid, d), grid.shape === 'square' ? undefined : grid.shape);
   }
 }

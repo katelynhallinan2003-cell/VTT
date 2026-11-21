@@ -128,26 +128,74 @@ export type TemplateGeom =
   | { type: 'circle'; c: Vec; r: number }
   | { type: 'poly'; pts: Vec[] };
 
+/** The outline of the space a creature takes up: a square, or a hexagon on a hex grid. `width` is its size across the flat sides. */
+export function footprintPoly(c: Vec, width: number, hex?: 'pointy' | 'flat'): Vec[] {
+  const h = width / 2;
+  if (!hex) return [{ x: c.x - h, y: c.y - h }, { x: c.x + h, y: c.y - h }, { x: c.x + h, y: c.y + h }, { x: c.x - h, y: c.y + h }];
+  const R = h / (Math.sqrt(3) / 2);
+  const a0 = hex === 'pointy' ? Math.PI / 6 : 0;
+  return Array.from({ length: 6 }, (_, i) => ({ x: c.x + R * Math.cos(a0 + (i * Math.PI) / 3), y: c.y + R * Math.sin(a0 + (i * Math.PI) / 3) }));
+}
+
+/** A convex shape pushed out by `r` in every direction, with round corners (every point of it is within `r` of the original). */
+export function expandPoly(poly: Vec[], r: number): Vec[] {
+  const n = poly.length;
+  const out: Vec[] = [];
+  const area = poly.reduce((a, p, i) => a + (p.x * poly[(i + 1) % n].y - poly[(i + 1) % n].x * p.y), 0);
+  const sgn = area >= 0 ? 1 : -1; // y points down, so this tells which way the corners run
+  for (let i = 0; i < n; i++) {
+    const p = poly[i];
+    const prev = poly[(i + n - 1) % n];
+    const next = poly[(i + 1) % n];
+    const nrm = (a: Vec, b: Vec) => { const L = Math.hypot(b.x - a.x, b.y - a.y) || 1; return Math.atan2(-sgn * (b.x - a.x) / L, sgn * (b.y - a.y) / L); };
+    let a0 = nrm(prev, p);
+    let a1 = nrm(p, next);
+    // turn the short way round from one edge's outward direction to the next
+    let d = a1 - a0;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    const steps = Math.max(2, Math.ceil(Math.abs(d) / (Math.PI / 12)));
+    for (let k = 0; k <= steps; k++) {
+      const a = a0 + (d * k) / steps;
+      out.push({ x: p.x + Math.cos(a) * r, y: p.y + Math.sin(a) * r });
+    }
+  }
+  return out;
+}
+
+/** How wide the origin of an emanation is: the space of the creature it comes from, at least one square. */
+export const footprintPx = (grid: GridSettings, ofFt = 0): number => Math.max(grid.cell, (Math.max(0, ofFt) / grid.ft) * grid.cell);
+
+/** The width a template is built with: a line's own width, or for an emanation the space of the creature it comes out of. */
+export const templateWidthPx = (grid: GridSettings, d: { k: DrawKind; bw: number; of?: number }): number =>
+  d.k === 'emanation' ? footprintPx(grid, d.of ?? 0) : beamWidthPx(grid, d.bw);
+
 /** Length in feet of a template (radius for spheres), measured along the drag. */
-export function templateFt(grid: GridSettings, a: Vec, b: Vec, kind?: DrawKind): number {
-  const squares = Math.hypot(b.x - a.x, b.y - a.y) / grid.cell;
-  // an emanation is measured from the edge of the square it comes out of, not from its centre
-  return Math.max(0, Math.round((kind === 'emanation' ? squares - 0.5 : squares) * grid.ft * 10) / 10);
+export function templateFt(grid: GridSettings, a: Vec, b: Vec, kind?: DrawKind, footprint = grid.cell): number {
+  const px = Math.hypot(b.x - a.x, b.y - a.y);
+  // an emanation is measured from the edge of the creature's space it comes out of, not from its centre
+  const edge = kind === 'emanation' ? footprint / 2 : 0;
+  return Math.max(0, Math.round(((px - edge) / grid.cell) * grid.ft * 10) / 10);
 }
 
 /**
  * The area a template covers, from its origin `a` and the dragged end point `b`.
  * - sphere: radius = distance, centred on a
- * - emanation: a circle centred on a (the middle of a square); its size is measured from the edge of that square
+ * - emanation: the space of the creature at a (`widthPx` across) pushed out by the distance; its size is measured from the edge of that space
  * - cone: apex at a, as wide at its far end as it is long (5e)
  * - cube: side = distance, one face centred on a
  * - beam (line): length = distance, `widthPx` wide
  */
-export function templateGeom(kind: DrawKind, a: Vec, b: Vec, widthPx: number): TemplateGeom {
+export function templateGeom(kind: DrawKind, a: Vec, b: Vec, widthPx: number, hex?: 'pointy' | 'flat'): TemplateGeom {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
   const L = Math.hypot(dx, dy);
-  if (kind === 'sphere' || kind === 'emanation') return { type: 'circle', c: a, r: L };
+  if (kind === 'sphere') return { type: 'circle', c: a, r: L };
+  if (kind === 'emanation') {
+    // everything within the distance of the creature's space (not of its middle)
+    const half = Math.max(1, widthPx) / 2;
+    return { type: 'poly', pts: expandPoly(footprintPoly(a, half * 2, hex), Math.max(0.5, L - half)) };
+  }
   const ux = L > 0 ? dx / L : 1;
   const uy = L > 0 ? dy / L : 0;
   const nx = -uy;
@@ -170,8 +218,8 @@ export function templateGeom(kind: DrawKind, a: Vec, b: Vec, widthPx: number): T
 export const beamWidthPx = (grid: GridSettings, bwFt: number) => (Math.max(1, bwFt) / grid.ft) * grid.cell;
 
 /** Text such as "20 ft sphere" for a template while it is being placed. */
-export function templateLabel(kind: DrawKind, grid: GridSettings, a: Vec, b: Vec, bwFt: number): string {
-  const ft = templateFt(grid, a, b, kind);
+export function templateLabel(kind: DrawKind, grid: GridSettings, a: Vec, b: Vec, bwFt: number, footprint = grid.cell): string {
+  const ft = templateFt(grid, a, b, kind, footprint);
   if (kind === 'sphere') return `${ft} ft radius`;
   if (kind === 'beam') return `${ft} ft × ${bwFt} ft line`;
   return `${ft} ft ${kind}`;
@@ -200,21 +248,35 @@ export function snapTemplateOrigin(grid: GridSettings, kind: DrawKind | undefine
   return snapToEdgeMid(grid, p);
 }
 
+/** What the last snap decided. Passing it back in makes the next one "sticky", so a pointer hovering on a boundary does not make the area flicker. */
+export interface TemplateSnapState { steps: number | null; lock: boolean; ang: number | null }
+
 /**
  * Place a template on the grid from where the drag started (`a`) to where the pointer is now (`b`).
- * - `origin`: the start sticks to the grid (which point depends on `kind`, see snapTemplateOrigin)
- * - `length`: the size is a whole number of squares (an emanation counts squares out from its square's edge)
+ * - `origin`: the start sticks to the grid (which point depends on `kind`, see snapTemplateOrigin); `fixedOrigin` overrides it
+ * - `length`: the size is a whole number of squares (an emanation counts squares out from the edge of its creature's space, `widthPx` across)
  * - `angleStep` (radians) also locks the direction, e.g. Math.PI / 12 for 15 degrees
  * A cube leans square onto the grid when it points roughly along a row or column, and so does a straight line,
- * so the squares they cover are whole ones.
+ * so the squares they cover are whole ones. Directions close to a multiple of 15 degrees are pulled onto it.
+ * With `prev` (the state from the last call) a value only changes once the pointer is clearly past the boundary.
  */
-export function snapTemplate(grid: GridSettings, a: Vec, b: Vec, opts: { origin: boolean; length: boolean; angleStep?: number; kind?: DrawKind; widthPx?: number; sphereAt?: SphereSnap }): { a: Vec; b: Vec } {
+export function snapTemplate(grid: GridSettings, a: Vec, b: Vec, opts: { origin: boolean; length: boolean; angleStep?: number; kind?: DrawKind; widthPx?: number; sphereAt?: SphereSnap; fixedOrigin?: Vec; prev?: TemplateSnapState }): { a: Vec; b: Vec; st: TemplateSnapState } {
   const kind = opts.kind;
   const cell = grid.cell;
-  let A = opts.origin ? snapTemplateOrigin(grid, kind, a, opts.sphereAt) : a;
+  const prev = opts.prev;
+  let A = opts.fixedOrigin ?? (opts.origin ? snapTemplateOrigin(grid, kind, a, opts.sphereAt) : a);
   let ang = Math.atan2(b.y - A.y, b.x - A.x);
   let L = Math.hypot(b.x - A.x, b.y - A.y);
+  const diff = (x: number, y: number) => { let d = x - y; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; return d; };
   if (opts.angleStep) ang = Math.round(ang / opts.angleStep) * opts.angleStep;
+  // a direction that is nearly a multiple of 15 degrees is taken to be exactly that, and stays so until the pointer clearly leaves it
+  let lockedAng: number | null = null;
+  if (opts.length && !opts.angleStep && (kind === 'cone' || kind === 'cube' || kind === 'beam')) {
+    const step = Math.PI / 12;
+    const cand = Math.round(ang / step) * step;
+    if (prev?.ang != null && Math.abs(diff(ang, prev.ang)) < 0.1) { ang = prev.ang; lockedAng = ang; }
+    else if (Math.abs(ang - cand) < 0.05) { ang = cand; lockedAng = cand; }
+  }
   // is it meant to run along a row or column? (judged from where the drag really started, not the snapped origin)
   // on hexes the straight lines are the six directions to the neighbours
   const hex = isHex(grid);
@@ -222,12 +284,18 @@ export function snapTemplate(grid: GridSettings, a: Vec, b: Vec, opts: { origin:
   let raw = Math.atan2(b.y - a.y, b.x - a.x);
   if (opts.angleStep) raw = Math.round(raw / opts.angleStep) * opts.angleStep;
   const axis = ax.base + Math.round((raw - ax.base) / ax.step) * ax.step;
-  const near = hex ? Math.PI / 12 : Math.PI / 6;
-  const alongRow = kind === 'cube' ? Math.abs(raw - axis) < near : kind === 'beam' ? Math.abs(raw - axis) < 0.1 : false;
+  const near = (hex ? Math.PI / 12 : Math.PI / 6) * (prev?.lock ? 1.2 : 0.85);
+  const beamNear = prev?.lock ? 0.13 : 0.08;
+  const alongRow = kind === 'cube' ? Math.abs(raw - axis) < near : kind === 'beam' ? Math.abs(raw - axis) < beamNear : false;
   if (opts.origin && alongRow) ang = axis;
+  let steps: number | null = null;
   if (opts.length) {
-    if (kind === 'emanation') L = (Math.max(1, Math.round(L / cell - 0.5)) + 0.5) * cell;
-    else L = Math.max(cell, Math.round(L / cell) * cell);
+    const half = kind === 'emanation' ? Math.max(cell, opts.widthPx ?? cell) / 2 : 0;
+    const exact = (L - half) / cell;
+    steps = Math.round(exact);
+    if (prev?.steps != null && Math.abs(exact - prev.steps) < 0.7) steps = prev.steps;
+    steps = Math.max(1, steps);
+    L = half + steps * cell;
   }
   if (!hex && opts.origin && opts.length && alongRow) {
     // the face of a cube (or the start of a line) sits on a grid line, and is centred so that it covers whole squares
@@ -237,18 +305,18 @@ export function snapTemplate(grid: GridSettings, a: Vec, b: Vec, opts: { origin:
     const mid = (v: number, o: number) => (span % 2 === 1 ? (Math.floor((v - o) / cell) + 0.5) * cell + o : line(v, o));
     A = horizontal ? { x: line(a.x, grid.ox), y: mid(a.y, grid.oy) } : { x: mid(a.x, grid.ox), y: line(a.y, grid.oy) };
   }
-  return { a: A, b: { x: A.x + Math.cos(ang) * L, y: A.y + Math.sin(ang) * L } };
+  return { a: A, b: { x: A.x + Math.cos(ang) * L, y: A.y + Math.sin(ang) * L }, st: { steps, lock: opts.origin && alongRow, ang: lockedAng } };
 }
 
 // ------------------------------------------------------------------ geometry of any drawing
 export function drawingPts(d: Pick<Drawing, 'p'>): Vec[] { return parsePts(d.p); }
 
 /** World-space bounds (loose for text). */
-export function drawingBounds(d: Drawing, widthPx = 0): Rect {
+export function drawingBounds(d: Drawing, widthPx = 0, hex?: 'pointy' | 'flat'): Rect {
   const pts = parsePts(d.p);
   if (!pts.length) return { x: 0, y: 0, w: 0, h: 0 };
   if (isTemplate(d.k) && pts.length >= 2) {
-    const g = templateGeom(d.k, pts[0], pts[1], widthPx);
+    const g = templateGeom(d.k, pts[0], pts[1], widthPx, hex);
     if (g.type === 'circle') return { x: g.c.x - g.r, y: g.c.y - g.r, w: g.r * 2, h: g.r * 2 };
     return boundsOf(g.pts);
   }
@@ -308,7 +376,7 @@ export function hitDrawing(d: Drawing, p: Vec, tol: number, grid: GridSettings, 
     }
     default: {
       if (pts.length < 2) return false;
-      const g = templateGeom(d.k, pts[0], pts[1], beamWidthPx(grid, d.bw));
+      const g = templateGeom(d.k, pts[0], pts[1], templateWidthPx(grid, d), grid.shape === 'square' ? undefined : grid.shape);
       if (solid) {
         if (g.type === 'circle') return Math.hypot(p.x - g.c.x, p.y - g.c.y) <= g.r + tol;
         return pointInPoly(p, g.pts);
@@ -439,7 +507,7 @@ export function resizeDrawing(d: Drawing, handle: HandleId, to: Vec, opts: { shi
       return {};
     default: {
       if (pts.length < 2 || handle !== 'b') return {};
-      const sn = snapTemplate(opts.grid, pts[0], to, { origin: false, length: !opts.alt, angleStep: opts.shift ? Math.PI / 12 : undefined, kind: d.k });
+      const sn = snapTemplate(opts.grid, pts[0], to, { origin: false, length: !opts.alt, angleStep: opts.shift ? Math.PI / 12 : undefined, kind: d.k, widthPx: templateWidthPx(opts.grid, d) });
       return { p: joinPts([pts[0], sn.b]) };
     }
   }
@@ -456,14 +524,14 @@ export function sizeFt(d: Drawing, grid: GridSettings): { w: number; h: number }
   }
   if (d.k === 'pen' || d.k === 'text') return null;
   const run = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
-  return { len: toFt(d.k === 'emanation' ? Math.max(0, run - grid.cell / 2) : run) };
+  return { len: toFt(d.k === 'emanation' ? Math.max(0, run - footprintPx(grid, d.of) / 2) : run) };
 }
 
 /** Set one dimension of a shape from a number of feet. Boxes keep their top-left corner; lines keep their start and direction. */
 export function withSizeFt(d: Drawing, grid: GridSettings, dim: 'w' | 'h' | 'len', ft: number): Partial<Pick<Drawing, 'p'>> {
   const pts = parsePts(d.p);
   if (pts.length < 2 || !(ft > 0)) return {};
-  const px = Math.max(1, (ft / grid.ft) * grid.cell + (d.k === 'emanation' ? grid.cell / 2 : 0));
+  const px = Math.max(1, (ft / grid.ft) * grid.cell + (d.k === 'emanation' ? footprintPx(grid, d.of) / 2 : 0));
   if (d.k === 'rect' || d.k === 'ellipse') {
     const r = boundsOf(pts);
     const w = dim === 'w' ? px : r.w;

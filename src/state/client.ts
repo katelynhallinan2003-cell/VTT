@@ -45,7 +45,7 @@ export interface SceneState {
 }
 
 /** A drawing as the caller describes it; the text styling and the fill colour are optional. */
-export type NewDrawing = Omit<Drawing, 'id' | 'uid' | 't' | 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz'> & Partial<Pick<Drawing, 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz'>>;
+export type NewDrawing = Omit<Drawing, 'id' | 'uid' | 't' | 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of'> & Partial<Pick<Drawing, 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of'>>;
 export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz'>>;
 
 export type ScenePatch = Partial<Omit<SceneMeta, 'grid' | 'fog'>> & {
@@ -706,21 +706,25 @@ export class TableClient {
   }
 
   /** Give temporary hit points. The rules say you keep whichever is higher, the old or the new; pass `replace` to set it outright. */
-  async giveTemp(ids: string[], amount: number, replace = false): Promise<void> {
-    if (!this.isDM || !Number.isFinite(amount)) return;
+  async giveTemp(ids: string[], amount: number, replace = false): Promise<{ id: string; name: string; had: number; now: number }[]> {
+    if (!this.isDM || !Number.isFinite(amount)) return [];
     const n = Math.max(0, Math.round(amount));
     const before: { id: string; tempHp: number }[] = [];
     const after: { id: string; tempHp: number }[] = [];
+    const out: { id: string; name: string; had: number; now: number }[] = [];
     for (const id of ids) {
       const t = this.scene?.tokens.get(id);
       if (!t || t.hp == null || t.maxHp == null) continue;
       before.push({ id, tempHp: t.tempHp });
-      after.push({ id, tempHp: replace ? n : Math.max(t.tempHp, n) });
+      const now = replace ? n : Math.max(t.tempHp, n);
+      after.push({ id, tempHp: now });
+      out.push({ id, name: t.name || 'Token', had: t.tempHp, now });
     }
-    if (!after.length) return;
+    if (!after.length) return [];
     const apply = (list: { id: string; tempHp: number }[]) => Promise.all(list.map((x) => this.updateToken(x.id, { tempHp: x.tempHp }))).then(() => undefined);
     await apply(after);
     this.history.push({ label: 'Temporary hit points', undo: () => apply(before), redo: () => apply(after) });
+    return out;
   }
 
   // ---------------------------------------------------------------- initiative (DM)

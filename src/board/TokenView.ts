@@ -1,6 +1,7 @@
 import { Container, Graphics, Sprite, Text } from 'pixi.js';
 import { healthState, HEALTH_COLOR } from '../core/combat';
 import { altLabel, type Altitude } from '../core/height';
+import { tintColor } from '../core/effects';
 import type { Effect, GridSettings, Token } from '../types';
 import { loadTexture, type LoadedTexture } from './textures';
 
@@ -16,7 +17,7 @@ export interface TokenCtx {
 }
 
 /** what has to change on screen when a token's effects change */
-const fxKey = (fx: Effect[]): string => fx.map((e) => `${e.id}${e.ic}${e.c}${e.look}${e.left ?? ''}`).join(',');
+const fxKey = (fx: Effect[]): string => fx.map((e) => `${e.id}${e.ic}${e.c}${e.look}${e.tint ? 't' + e.tc : ''}${e.left ?? ''}`).join(',');
 
 const hex = (c: string) => parseInt(c.replace('#', '').padEnd(6, '0').slice(0, 6), 16) || 0xffffff;
 
@@ -54,6 +55,7 @@ export class TokenView {
   private altNow: Altitude = { alt: 0, clear: 0, ground: 0 };
   /** glow around the token (effects with the Glow look), drawn under everything */
   private fxBack = new Graphics();
+  private tintG = new Graphics();
   /** badges and orbiting symbols of effects, drawn above the token */
   private fxFront = new Container();
   private base = new Graphics();
@@ -81,7 +83,7 @@ export class TokenView {
     this.label.anchor.set(0.5, 0);
     this.altText = new Text({ text: '', style: { fontFamily: 'system-ui, sans-serif', fontWeight: '700', fill: 0xffffff, fontSize: 12 } });
     this.altText.anchor.set(0.5);
-    this.container.addChild(this.shadowG, this.fxBack, this.base, this.maskG, this.initial, this.ring, this.healthG, this.fxFront, this.altG, this.altText, this.label);
+    this.container.addChild(this.shadowG, this.fxBack, this.base, this.maskG, this.initial, this.tintG, this.ring, this.healthG, this.fxFront, this.altG, this.altText, this.label);
   }
 
   apply(token: Token, ctx: TokenCtx) {
@@ -175,12 +177,34 @@ export class TokenView {
   private drawFx(t: Token, ctx: TokenCtx) {
     const g = this.fxBack;
     g.clear();
+    this.tintG.clear();
     for (const c of this.fxFront.removeChildren()) c.destroy();
-    if (!t.fx.length) return;
+    if (!t.fx.length) { if (this.sprite) this.sprite.tint = 0xffffff; return; }
     const cell = ctx.grid.cell;
     const D = t.size * cell;
     const r = D / 2;
     const square = t.shape === 'square';
+
+    // a wash of colour over the whole token for effects that ask for it (a few at once still leave the picture readable)
+    const tints = t.fx.filter((e) => e.tint).slice(0, 3);
+    if (this.sprite) {
+      // frameless tokens have no shape to fill, so the picture itself is coloured (multiplied by a light version of the colour)
+      let tt = 0xffffff;
+      if (t.shape === 'none' && tints.length) {
+        const k = hex(tintColor(tints[0]));
+        const mixc = (c: number) => Math.round(255 - (255 - c) * 0.65);
+        tt = (mixc((k >> 16) & 255) << 16) | (mixc((k >> 8) & 255) << 8) | mixc(k & 255);
+      }
+      this.sprite.tint = tt;
+    }
+    if (t.shape !== 'none') {
+      tints.forEach((e) => {
+        const col = hex(tintColor(e));
+        const a = tints.length > 1 ? 0.3 : 0.42;
+        if (square) this.tintG.rect(-r, -r, D, D).fill({ color: col, alpha: a });
+        else this.tintG.circle(0, 0, r).fill({ color: col, alpha: a });
+      });
+    }
     const bs = Math.max(13, Math.min(cell * 0.3, D * 0.6 + 6));
 
     // glow: stacked translucent strokes, strongest at the token's edge

@@ -2,7 +2,7 @@ import { Application, Container, Graphics, Sprite, Text, Texture } from 'pixi.js
 import {
   clamp, distanceFt, fitCamera, gridFromRect, mapRect, normRect, pointInToken, rectContains, snapTokenCenter, snapToCellCenter, snapToCorner, zoomAt,
 } from '../core/geometry';
-import { FILL_LEVEL, STROKE_CELLS, beamWidthPx, dashSegments, fitPenPoints, handlesOf, hitDrawing, isTemplate, joinPts, resizeDrawing, setLineMeasurer, snapTemplate, templateLabel, type HandleId } from '../core/draw';
+import { FILL_LEVEL, STROKE_CELLS, beamWidthPx, dashSegments, fitPenPoints, handlesOf, hitDrawing, isTemplate, joinPts, resizeDrawing, setLineMeasurer, footprintPx, snapTemplate, templateLabel, templateWidthPx, type HandleId, type TemplateSnapState } from '../core/draw';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
 import { altitudeOf, groundAt, heightChangeNote, heightNote, setAltitude, zoneColor, zonesOf, type Altitude, type Zone } from '../core/height';
@@ -34,7 +34,9 @@ type Drag =
   | { kind: 'rect'; start: Vec; cur: Vec }
   | { kind: 'brush'; pts: Vec[] }
   | { kind: 'map'; start: Vec; orig: Vec; moved: boolean }
-  | { kind: 'shape'; dk: DrawKind; start: Vec; pts: Vec[]; /** set while drawing a height zone: its height in feet */ hz?: number }
+  | { kind: 'shape'; dk: DrawKind; start: Vec; pts: Vec[]; /** set while drawing a height zone: its height in feet */ hz?: number;
+      /** an emanation from a creature: where it comes out, and how wide that creature's space is in feet */ of?: number; fixedOrigin?: Vec;
+      /** what the last template snap decided (so it only changes when the pointer clearly moves on) */ snap?: TemplateSnapState }
   | { kind: 'erase'; ids: Set<string> }
   | { kind: 'ruler' }
   | { kind: 'drawmove'; ids: string[]; start: Vec; dx: number; dy: number; moved: boolean }
@@ -915,9 +917,9 @@ export class Board {
         if (d.pts.length >= 2) this.plotLabel(li++, `${d.hz} ft`, (d.pts[0].x + d.pts[1].x) / 2, Math.min(d.pts[0].y, d.pts[1].y) - 8 / z, num(zc));
       } else paintShape(g, {
         k: d.dk, pts: d.pts, color: u.drawColor, w: isT ? Math.max(2, this.strokePx()) : this.strokePx(),
-        fill: !isT && (d.dk === 'rect' || d.dk === 'ellipse') ? FILL_LEVEL[u.drawFillMode] : 0, fc: u.drawFillColor, dash: !isT && u.drawDash, bw: u.tplWidth,
+        fill: !isT && (d.dk === 'rect' || d.dk === 'ellipse') ? FILL_LEVEL[u.drawFillMode] : 0, fc: u.drawFillColor, dash: !isT && u.drawDash, bw: u.tplWidth, of: d.of,
       }, grid, 0.85, u.tplCover);
-      if (isT && d.pts.length >= 2) this.plotLabel(li++, templateLabel(d.dk, grid, d.pts[0], d.pts[1], u.tplWidth), d.pts[1].x, d.pts[1].y - 12 / z, num(u.drawColor));
+      if (isT && d.pts.length >= 2) this.plotLabel(li++, templateLabel(d.dk, grid, d.pts[0], d.pts[1], u.tplWidth, footprintPx(grid, d.of ?? 0)), d.pts[1].x, d.pts[1].y - 12 / z, num(u.drawColor));
     }
 
     // an erase swipe
@@ -1250,8 +1252,17 @@ export class Board {
     if (!this.client.canDo('draw')) { this.cb.onNotice('Drawing is turned off for players.', 'error'); return; }
     // `start` stays where the pointer went down; where the template really starts depends on its kind and size (see snapTemplate)
     const kind = this.ui.data.tplKind;
-    const a = this.templateSnap(kind, w, w, e).a;
-    this.drag = { kind: 'shape', dk: kind, start: w, pts: [a, a] };
+    const d: Extract<Drag, { kind: 'shape' }> = { kind: 'shape', dk: kind, start: w, pts: [w, w] };
+    if (kind === 'emanation') {
+      // it comes out of whoever is standing there: a bigger creature's space is bigger, and the area is measured from its edge
+      const grid = this.client.grid;
+      const t = this.emanationSource(w, snapToCellCenter(grid, w));
+      if (t) { d.fixedOrigin = { x: t.x, y: t.y }; d.of = Math.max(1, t.size) * grid.ft; }
+    }
+    const sn = this.templateSnap(kind, w, w, e, d);
+    d.pts = [sn.a, sn.a];
+    d.snap = sn.st;
+    this.drag = d;
   }
 
   private startRuler(w: Vec, e: PointerEvent) {
@@ -1275,21 +1286,36 @@ export class Board {
   }
 
   /** A template from the pointer-down point to the pointer, put on the grid the way the 2024 rules and the table expect. */
-  private templateSnap(kind: DrawKind, start: Vec, w: Vec, e: PointerEvent): { a: Vec; b: Vec } {
+  private templateSnap(kind: DrawKind, start: Vec, w: Vec, e: PointerEvent, d?: Extract<Drag, { kind: 'shape' }>): { a: Vec; b: Vec; st: TemplateSnapState } {
     const grid = this.client.grid;
     const sphereAt = this.ui.data.tplSphereSnap;
     const free = kind === 'sphere' && sphereAt === 'off'; // a sphere that is told not to snap goes exactly where it is put
     return snapTemplate(grid, start, w, {
       origin: grid.snap && !e.altKey && !free, length: !e.altKey && !free, angleStep: e.shiftKey ? Math.PI / 12 : undefined,
-      kind, widthPx: beamWidthPx(grid, this.ui.data.tplWidth), sphereAt,
+      kind, widthPx: kind === 'emanation' ? footprintPx(grid, d?.of ?? 0) : beamWidthPx(grid, this.ui.data.tplWidth), sphereAt,
+      fixedOrigin: d?.fixedOrigin, prev: d?.snap,
     });
+  }
+
+  /** The token an emanation comes out of: the one under the pointer, or the one standing in the square it snapped to. */
+  private emanationSource(w: Vec, snapped: Vec): Token | null {
+    const hit = this.hitToken(w);
+    if (hit) return hit;
+    let best: Token | null = null;
+    let bd = this.client.grid.cell * 0.5;
+    for (const v of this.views.values()) {
+      const dd = Math.hypot(v.token.x - snapped.x, v.token.y - snapped.y);
+      if (dd < bd) { bd = dd; best = v.token; }
+    }
+    return best;
   }
 
   private moveShape(d: Extract<Drag, { kind: 'shape' }>, w: Vec, e: PointerEvent) {
     const k = d.dk;
     if (isTemplate(k)) {
-      const sn = this.templateSnap(k, d.start, w, e);
+      const sn = this.templateSnap(k, d.start, w, e, d);
       d.pts = [sn.a, sn.b];
+      d.snap = sn.st;
       return;
     }
     if (k === 'pen') {
@@ -1334,7 +1360,7 @@ export class Board {
     void this.client.addDrawing({
       k, p: joinPts(pts), color: u.drawColor, w: isT ? Math.max(2, stroke) : stroke,
       fill: !isT && closed ? FILL_LEVEL[u.drawFillMode] : 0, fc: closed ? u.drawFillColor : '',
-      dash: !isT && u.drawDash, txt: '', fs: 28, bw: u.tplWidth,
+      dash: !isT && u.drawDash, txt: '', fs: 28, bw: u.tplWidth, of: k === 'emanation' && d.of ? d.of : undefined,
     }, { onId: (id) => { if (closed || k === 'line' || k === 'arrow') this.ui.selectDrawings([id]); } }).catch((err: Error) => this.cb.onNotice(err.message, 'error'));
   }
 
@@ -1523,7 +1549,12 @@ export class Board {
     if (!d) return;
     switch (d.kind) {
       case 'pan':
-        if (!d.moved && d.button === 2) {
+        if (!d.moved && d.button === 2 && this.ui.data.tool === 'ruler' && this.ruler) {
+          // right-click wipes the measurement instead of opening the menu
+          this.ruler = null;
+          this.publishLive();
+          this.invalidate();
+        } else if (!d.moved && d.button === 2) {
           const w = this.screenToWorld(e.clientX, e.clientY);
           const hit = this.hitToken(w);
           if (hit && !this.ui.data.selection.has(hit.id)) this.ui.select([hit.id]);

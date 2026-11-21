@@ -123,7 +123,7 @@ export class UiState {
 
   set(patch: Partial<UiData>) {
     // the ruler and test moves do not mix: trying a move switches the ruler off
-    if (patch.testMove === true && this.data.tool === 'ruler' && patch.tool === undefined) patch = { ...patch, tool: 'select' };
+    if (patch.testMove === true && this.data.tool !== 'select' && patch.tool === undefined) patch = { ...patch, tool: 'select' }; // test move works on tokens, so it takes over from any other tool
     try {
       if (patch.drawTool !== undefined) localStorage.setItem('vtt-draw-tool', patch.drawTool);
       if (patch.tplKind !== undefined) localStorage.setItem('vtt-tpl-kind', patch.tplKind);

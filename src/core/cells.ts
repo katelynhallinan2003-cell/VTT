@@ -1,7 +1,7 @@
 // Which grid cells an area covers, and what a cell looks like. Spell templates use this to light up the squares they affect.
 // Everything that depends on the shape of the grid lives here, so a hex grid only has to change this file.
 import type { DrawKind, GridSettings, Rect, Vec } from '../types';
-import { boundsOf, distToSegment, pointInPoly, templateGeom } from './draw';
+import { boundsOf, distToSegment, footprintPoly, pointInPoly, templateGeom } from './draw';
 import { hexCentersIn, hexCorners, isHex } from './hex';
 
 /** Centres of every cell whose centre lies inside `r`. */
@@ -35,16 +35,20 @@ export const MAX_COVERED = 2500;
  * An emanation leaves out the square it comes out of.
  */
 export function coveredCells(grid: GridSettings, kind: DrawKind, a: Vec, b: Vec, widthPx: number): Vec[] {
-  const g = templateGeom(kind, a, b, widthPx);
+  const hexShape = isHex(grid) ? (grid.shape as 'pointy' | 'flat') : undefined;
+  const g = templateGeom(kind, a, b, widthPx, hexShape);
   const bounds = g.type === 'circle' ? { x: g.c.x - g.r, y: g.c.y - g.r, w: g.r * 2, h: g.r * 2 } : boundsOf(g.pts);
-  const eps = 0.5;
+  // a cell whose middle sits right on the edge counts, and stays counted however the pointer wobbles
+  const eps = Math.max(0.5, grid.cell * 0.02);
+  const own = kind === 'emanation' ? footprintPoly(a, Math.max(widthPx, grid.cell), hexShape) : null;
   const out: Vec[] = [];
   for (const p of cellCentersIn(grid, bounds)) {
     let inside: boolean;
     if (g.type === 'circle') inside = Math.hypot(p.x - g.c.x, p.y - g.c.y) <= g.r + eps;
     else inside = pointInPoly(p, g.pts) || g.pts.some((q, i) => distToSegment(p, q, g.pts[(i + 1) % g.pts.length]) < eps);
     if (!inside) continue;
-    if (kind === 'emanation' && Math.hypot(p.x - a.x, p.y - a.y) < grid.cell * 0.25) continue;
+    // an emanation leaves out the space it comes out of
+    if (own && pointInPoly(p, own)) continue;
     out.push(p);
     if (out.length >= MAX_COVERED) break;
   }

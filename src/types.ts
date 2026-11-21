@@ -133,6 +133,10 @@ export interface Effect {
   /** colour */
   c: string;
   look: FxLook;
+  /** also tint the whole token with a colour wash (on top of whatever look it has) */
+  tint: boolean;
+  /** the tint colour; empty means the same as `c` */
+  tc: string;
   /** rounds left, or null when it lasts until someone removes it */
   left: number | null;
   tick: FxTick;
@@ -184,6 +188,8 @@ export interface Drawing {
   ho: boolean;
   /** width of a line template, in feet */
   bw: number;
+  /** how wide the creature an emanation comes from is, in feet (0 or missing: one square) */
+  of?: number;
   /** a box or circle with a height set marks ground at that many feet above (or below) the map's base level */
   hz: number | null;
   t: number;

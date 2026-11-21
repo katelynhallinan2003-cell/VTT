@@ -10,7 +10,7 @@ import type { DockTab, UiState } from '../state/ui';
 import type { Aura, GridSettings, LabelMode, Token, TokenShape } from '../types';
 import { Field, Section, SliderField, Toggle, toast, useClient, useUi } from './common';
 import { uploadImage } from './uploads';
-import { HpBar, parseDamage, tempPct } from './initiative';
+import { HpBar, parseDamage, tellTemp, tempPct } from './initiative';
 import { FxIcons } from './effects';
 import { AuraEditor } from './auraEditor';
 import { PlayersPanel } from './modals';
@@ -150,24 +150,39 @@ function HpControl(props: { client: TableClient; tokens: Token[] }) {
   const { client, tokens } = props;
   const [text, setText] = useState('');
   const one = tokens.length === 1 ? tokens[0] : null;
+  const box = useRef<HTMLInputElement>(null);
+  /** Nothing typed yet: say so and put the cursor in the box, instead of silently doing nothing. */
+  const needNumber = (n: number | null): n is number => {
+    if (n != null) return true;
+    toast(text.trim() ? `"${text.trim()}" is not a number. Type how many hit points, then press the button.` : 'Type how many hit points in the box first, then press the button.', 'info', 2600);
+    box.current?.focus();
+    return false;
+  };
   /** The buttons always do what they say; Enter follows the sign (a plain number hurts, +number heals). */
   const apply = (sign: 1 | -1 | 0) => {
     const n = sign === 0 ? parseDamage(text) : parseDamage(text.replace(/^[+-]/, ''));
-    if (n == null) return;
+    if (!needNumber(n)) return;
     void client.damage(tokens.map((t) => t.id), sign === 0 ? n : sign * n);
+    setText('');
+  };
+  const temp = () => {
+    const n = parseDamage(text.replace(/^[+-]/, ''));
+    if (!needNumber(n)) return;
+    const amount = Math.abs(n);
+    void client.giveTemp(tokens.map((t) => t.id), amount).then((r) => tellTemp(r, amount));
     setText('');
   };
   return (
     <span class="tt-hp" title={one ? `${one.hp} of ${one.maxHp} hit points` : `${tokens.length} tokens with hit points`}>
       {one && <><HpBar pct={pctOf(one.hp, one.maxHp) ?? 0} width={70} temp={tempPct(one)} /><span class="tt-hpnum">{one.hp}/{one.maxHp}{one.tempHp > 0 && <span class="temp-hp" title="Temporary hit points"> +{one.tempHp}</span>}</span></>}
       {!one && <span class="tt-hpnum">{tokens.length} with HP</span>}
-      <input type="text" inputMode="numeric" placeholder="±" value={text} aria-label="Hit points to take off or give back"
+      <input ref={box} type="text" inputMode="numeric" placeholder="±" value={text} aria-label="Hit points to take off or give back"
         onInput={(e) => setText((e.target as HTMLInputElement).value)}
         onKeyDown={(e) => { if (e.key === 'Enter') apply(0); e.stopPropagation(); }} />
       <button class="btn small" title="Damage" onClick={() => apply(1)}>−</button>
       <button class="btn small" title="Heal" onClick={() => apply(-1)}>+</button>
       <button class="btn small" title="Give temporary hit points. They soak up damage first, and you keep the higher of the old and new amount."
-        onClick={() => { const n = parseDamage(text.replace(/^[+-]/, '')); if (n == null) return; void client.giveTemp(tokens.map((t) => t.id), Math.abs(n)); setText(''); }}>Temp</button>
+        onClick={temp}>Temp</button>
     </span>
   );
 }

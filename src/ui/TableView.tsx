@@ -69,6 +69,14 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
   const modalRef = useRef<ModalState>(null);
   modalRef.current = modal;
 
+  // Esc closes the right-click menu (and stops there, so it doesn't also clear the selection)
+  useEffect(() => {
+    if (!menu) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); setMenu(null); } };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [menu]);
+
   // ---- board lifecycle
   useEffect(() => {
     if (!hostRef.current) return;

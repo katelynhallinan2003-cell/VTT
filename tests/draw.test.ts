@@ -163,8 +163,8 @@ describe('spell templates on the grid (2024 rules)', () => {
     expect(templateFt(grid, s.a, s.b, 'emanation')).toBe(5);
     expect(templateFt(grid, s.a, T('emanation', { x: 130, y: 60 }, { x: 430, y: 50 }).b, 'emanation')).toBe(10);
     expect(templateLabel('emanation', grid, s.a, s.b, 5)).toBe('5 ft emanation');
-    const g = templateGeom('emanation', s.a, s.b, 0);
-    expect(g).toEqual({ type: 'circle', c: s.a, r: 150 });
+    const g = templateGeom('emanation', s.a, s.b, 100);
+    expect(g.type).toBe('poly');
     // never smaller than one square past the edge
     expect(templateFt(grid, s.a, T('emanation', { x: 130, y: 60 }, { x: 160, y: 50 }).b, 'emanation')).toBe(5);
   });

@@ -68,6 +68,8 @@ export function normalizeFx(raw: any): Effect[] {
       ic: typeof e.ic === 'string' ? e.ic.slice(0, 8) : '',
       c: hexOk(e.c) ? e.c : '#ff6b6b',
       look: e.look === 'halo' || e.look === 'orbit' || e.look === 'dot' ? e.look : 'badge',
+      tint: e.tint === true,
+      tc: hexOk(e.tc) ? e.tc : '',
       left: typeof e.left === 'number' && Number.isFinite(e.left) ? Math.min(999, Math.max(0, Math.round(e.left))) : null,
       tick: e.tick === 'start' || e.tick === 'round' ? e.tick : 'end',
     });
@@ -82,6 +84,7 @@ export function fxToWire(list: Effect[]): Record<string, unknown>[] | null {
     const o: Record<string, unknown> = { id: e.id, n: e.n, c: e.c };
     if (e.ic) o.ic = e.ic;
     if (e.look !== 'badge') o.look = e.look;
+    if (e.tint) { o.tint = true; if (e.tc && e.tc !== e.c) o.tc = e.tc; }
     if (e.left != null) o.left = e.left;
     if (e.tick !== 'end') o.tick = e.tick;
     return o;
@@ -89,13 +92,15 @@ export function fxToWire(list: Effect[]): Record<string, unknown>[] | null {
 }
 
 /** An effect from a preset or typed details, ready to put on a token. */
-export function makeEffect(p: { n: string; ic?: string; c?: string; look?: FxLook; left?: number | null; tick?: FxTick }): Effect {
+export function makeEffect(p: { n: string; ic?: string; c?: string; look?: FxLook; tint?: boolean; tc?: string; left?: number | null; tick?: FxTick }): Effect {
   return {
     id: newFxId(),
     n: p.n.trim().slice(0, 40) || 'Effect',
     ic: (p.ic ?? '').slice(0, 8),
     c: hexOk(p.c) ? p.c : '#ff6b6b',
     look: p.look ?? 'badge',
+    tint: p.tint === true,
+    tc: hexOk(p.tc) ? p.tc : '',
     left: p.left == null ? null : Math.max(0, Math.round(p.left)),
     tick: p.tick ?? 'end',
   };
@@ -135,3 +140,6 @@ export function fxDuration(e: Pick<Effect, 'left'>): string {
 export function fxTickLabel(t: FxTick): string {
   return FX_TICKS.find((x) => x.id === t)?.label ?? '';
 }
+
+/** The colour a tinted effect washes over its token. */
+export const tintColor = (e: Pick<Effect, 'c' | 'tc'>): string => e.tc || e.c;

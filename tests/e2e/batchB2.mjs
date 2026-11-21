@@ -166,7 +166,7 @@ check('a cone snaps to whole squares (15 ft)', !!t && Math.abs(tl - 3 * cell) < 
 { const u = tp[0] / cell, v = tp[1] / cell, fr = (n) => Math.abs(n - Math.floor(n) - 0.5) < 0.05, ln = (n) => Math.abs(n - Math.round(n)) < 0.05;
   check('and its start sits in the middle of a grid line (2024 rules)', (ln(u) && fr(v)) || (ln(v) && fr(u)), `${u.toFixed(2)},${v.toFixed(2)}`); }
 await dm.locator('.flyout .seg button', { hasText: 'Sphere' }).click();
-await rel(dm, { x: 9 * cell, y: 6 * cell }, { x: 13 * cell, y: 6 * cell }, 8);
+await rel(dm, { x: 8 * cell, y: 6 * cell }, { x: 12.45 * cell, y: 6.5 * cell }, 8);
 check('a sphere of 20 ft radius', (await draws(dm)).some((d) => d.k === 'sphere' && Math.abs(Math.hypot(...[d.p.split(',').map(Number)].map((q) => [q[2] - q[0], q[3] - q[1]])[0]) - 4 * cell) < 2));
 await dm.locator('.flyout .seg button', { hasText: 'Cube' }).click();
 await rel(dm, { x: 4 * cell, y: 9 * cell }, { x: 4 * cell, y: 11 * cell }, 8);

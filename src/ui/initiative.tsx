@@ -22,6 +22,14 @@ export function HpBar(props: { pct: number; width?: number; temp?: number }) {
 export const tempPct = (t: Pick<Token, 'tempHp' | 'maxHp'>): number => (t.maxHp ? (t.tempHp / t.maxHp) * 100 : 0);
 
 /** "7" or "-7" is damage, "+7" is healing. Returns the amount to take off (negative heals). */
+/** Say what giving temporary hit points did, including when nothing changed because they already had more. */
+export function tellTemp(r: { name: string; had: number; now: number }[], asked: number) {
+  if (!r.length) { toast('Only tokens with hit points can have temporary ones.', 'info', 2400); return; }
+  const same = r.every((x) => x.now === x.had);
+  if (same) toast(r.length === 1 ? `${r[0].name} already has ${r[0].had} temporary hit points, and you keep the higher number (${asked} is not more).` : `They already have at least ${asked} temporary hit points.`, 'info', 3600);
+  else toast(r.length === 1 ? `${r[0].name} now has ${r[0].now} temporary hit points.` : `${r.length} tokens have temporary hit points.`, 'ok', 2200);
+}
+
 export function parseDamage(text: string): number | null {
   const t = text.trim();
   if (!/^[+-]?\d+$/.test(t)) return null;
@@ -256,7 +264,8 @@ function InitRow(props: {
   /** The buttons always do what they say; Enter follows the sign (a plain number hurts, +number heals). */
   function applyDamage(sign: 1 | -1 | 0) {
     const n = sign === 0 ? parseDamage(dmg) : parseDamage(dmg.replace(/^[+-]/, ''));
-    if (n == null || !token) return;
+    if (n == null) { toast('Type how many hit points in the box first.', 'info', 2200); return; }
+    if (!token) return;
     void client.damage([token.id], sign === 0 ? n : sign * n);
     setDmg('');
   }
@@ -298,7 +307,7 @@ function InitRow(props: {
               onKeyDown={(ev) => { if (ev.key === 'Enter') applyDamage(0); ev.stopPropagation(); }} />
             <button class="icon-btn" title="Damage" onClick={() => applyDamage(1)}>−</button>
             <button class="icon-btn" title="Heal" onClick={() => applyDamage(-1)}>+</button>
-            <button class="icon-btn" title="Give temporary hit points (you keep the higher of the old and new amount)" onClick={() => { const n = parseDamage(dmg.replace(/^[+-]/, '')); if (n != null && token) { void client.giveTemp([token.id], Math.abs(n)); setDmg(''); } }}>T</button>
+            <button class="icon-btn" title="Give temporary hit points (you keep the higher of the old and new amount)" onClick={() => { const n = parseDamage(dmg.replace(/^[+-]/, '')); if (n == null) { toast('Type how many temporary hit points in the box first.', 'info', 2400); return; } if (token) { void client.giveTemp([token.id], Math.abs(n)).then((r) => tellTemp(r, Math.abs(n))); setDmg(''); } }}>T</button>
           </span>
         </div>
       )}

@@ -18,7 +18,7 @@ export const TEMPLATE_LABEL: Record<string, string> = { cone: 'Cone', cube: 'Cub
 /** What a drawing is called in panels. */
 export const DRAW_NAME: Record<DrawKind, string> = {
   pen: 'Pen stroke', line: 'Line', arrow: 'Arrow', rect: 'Box', ellipse: 'Circle', text: 'Text',
-  cone: 'Cone', cube: 'Cube', sphere: 'Sphere', emanation: 'Emanation', beam: 'Line template',
+  cone: 'Cone', cube: 'Cube', sphere: 'Sphere', emanation: 'Emanation', beam: 'Line template', terrain: 'Height area',
 };
 
 /** Outline thickness presets, as a fraction of a grid square. */
@@ -344,6 +344,7 @@ export function hitDrawing(d: Drawing, p: Vec, tol: number, grid: GridSettings, 
   if (!pts.length) return false;
   const reach = d.w / 2 + tol;
   switch (d.k) {
+    case 'terrain': return false; // painted ground is picked by the area under the pointer (see core/terrain)
     case 'pen': {
       if (pts.length === 1) return Math.hypot(p.x - pts[0].x, p.y - pts[0].y) <= reach;
       for (let i = 1; i < pts.length; i++) if (distToSegment(p, pts[i - 1], pts[i]) <= reach) return true;
@@ -450,6 +451,7 @@ export function handlesOf(d: Drawing): Handle[] {
       return [{ id: 'se', x: b.x + b.w, y: b.y + b.h }];
     }
     case 'pen':
+    case 'terrain':
       return [];
     default:
       return pts.length >= 2 ? [{ id: 'b', x: pts[1].x, y: pts[1].y }] : [];
@@ -504,6 +506,7 @@ export function resizeDrawing(d: Drawing, handle: HandleId, to: Vec, opts: { shi
       return { fs: clampFs(d.fs * Math.max(0.1, k)) };
     }
     case 'pen':
+    case 'terrain':
       return {};
     default: {
       if (pts.length < 2 || handle !== 'b') return {};

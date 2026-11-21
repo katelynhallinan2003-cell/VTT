@@ -11,10 +11,10 @@ describe('height zones', () => {
   const cliff = zone('cliff', 'rect', '0,0,1000,1000', 10);
   const nest = zone('nest', 'rect', '400,400,600,600', 40);
   const pond = zone('pond', 'ellipse', '700,700,900,900', -5);
-  const zones = zonesOf([cliff, nest, pond, zone('plain', 'rect', '0,0,50,50', null)]);
+  const zones = zonesOf([cliff, nest, pond, zone('plain', 'rect', '0,0,50,50', null)], grid);
 
   it('only boxes and circles with a height count', () => {
-    expect(zones.map((z) => z.id).sort()).toEqual(['cliff', 'nest', 'pond']);
+    expect(zones.areas.map((z) => z.id).sort()).toEqual(['cliff', 'nest', 'pond']);
     expect(normalizeDrawing('l', { uid: 'u', k: 'line', p: '0,0,5,5', hz: 10 })!.hz).toBeNull();
   });
 
@@ -31,7 +31,7 @@ describe('height zones', () => {
     const flat = zone('flat', 'rect', '100,100,200,200', 0);
     expect(flat.hz).toBe(0);
     expect(drawingToWire(flat).hz).toBe(0);
-    expect(groundAt(zonesOf([cliff, flat]), { x: 150, y: 150 })).toBe(0);
+    expect(groundAt(zonesOf([cliff, flat], grid), { x: 150, y: 150 })).toBe(0);
     expect(drawingToWire(cliff).hz).toBe(10);
     expect(drawingToWire(zone('n', 'rect', '0,0,5,5', null)).hz).toBeUndefined();
   });

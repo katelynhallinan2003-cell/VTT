@@ -54,7 +54,7 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
   const sub = multi ? '' : [sizeLabel, viewerSeesState ? HEALTH_LABEL[healthState(t0.hpPct)] : '', t0.hidden ? 'hidden' : '', t0.locked ? 'locked' : '', t0.fx.map((e) => e.n).join(', ')].filter(Boolean).join(' · ');
   const tracked = client.isDM ? tokens.filter((t) => t.hp != null && t.maxHp != null) : [];
   const canAura = !multi && editable;
-  const zones = zonesOf(client.scene?.draws.values() ?? []);
+  const zones = zonesOf(client.scene?.draws.values() ?? [], client.grid);
   const alts = tokens.map((t) => altitudeOf(t, groundAt(zones, t)));
   const a0 = alts[0];
   const altText = multi ? (alts.every((a) => a.alt === a0.alt) ? altLabel(a0, t0.fly) : '') : altLabel(a0, t0.fly);

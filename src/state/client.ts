@@ -45,8 +45,8 @@ export interface SceneState {
 }
 
 /** A drawing as the caller describes it; the text styling and the fill colour are optional. */
-export type NewDrawing = Omit<Drawing, 'id' | 'uid' | 't' | 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of'> & Partial<Pick<Drawing, 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of'>>;
-export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz'>>;
+export type NewDrawing = Omit<Drawing, 'id' | 'uid' | 't' | 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc'> & Partial<Pick<Drawing, 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc'>>;
+export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'hg' | 'ha' | 'he' | 'hc'>>;
 
 export type ScenePatch = Partial<Omit<SceneMeta, 'grid' | 'fog'>> & {
   grid?: Partial<GridSettings>;
@@ -567,7 +567,7 @@ export class TableClient {
 
   private drawPath(id: string) { return P.sceneDrawing(this.tableId, this.viewSceneId!, id); }
 
-  async addDrawing(d: NewDrawing, opts: { record?: boolean; onId?: (id: string) => void } = {}): Promise<string> {
+  async addDrawing(d: NewDrawing, opts: { record?: boolean; onId?: (id: string) => void; label?: string } = {}): Promise<string> {
     if (!this.viewSceneId) throw new Error('No scene is open');
     if (!this.canDo('draw')) throw new Error('You are not allowed to draw here.');
     const id = this.backend.newKey();
@@ -575,7 +575,7 @@ export class TableClient {
     const wrote = this.backend.set(this.drawPath(id), drawingToWire(full));
     opts.onId?.(id);
     await wrote;
-    if (opts.record !== false) this.recordDrawn([full], isTemplate(d.k) ? 'Place template' : 'Draw');
+    if (opts.record !== false) this.recordDrawn([full], opts.label ?? (isTemplate(d.k) ? 'Place template' : 'Draw'));
     return id;
   }
 
@@ -601,6 +601,19 @@ export class TableClient {
     this.history.push({ label: snaps.length > 1 ? `${label}s` : label, undo: () => this.restoreDrawings(snaps), redo: () => this.deleteDrawingsRaw(snaps.map((d) => d.id)) });
   }
 
+  /** Change the height (and whether it adds to the ground below) of a painted area: all of its strokes together. */
+  async setArea(area: { paint: { id: string }[] }, patch: { hz?: number; ha?: boolean; color?: string }): Promise<void> {
+    await this.updateDrawings(area.paint.map((s) => s.id), patch, 'Change ground');
+  }
+
+  /** Make several painted areas one. They take the height and mode of the first, and each keeps its erased bits. */
+  async mergeAreas(areas: { id: string; h: number; add: boolean; ids: string[] }[]): Promise<void> {
+    if (areas.length < 2) return;
+    const [first, ...rest] = areas;
+    const ids = rest.flatMap((a) => a.ids);
+    await this.updateDrawings(ids, { hg: first.id, hz: first.h, ha: first.add }, 'Merge areas');
+  }
+
   /** Remove every drawing that matches (for "clear mine", "clear templates"…). Undoable. */
   async clearDrawings(match: (d: Drawing) => boolean, label = 'Clear drawings'): Promise<number> {
     const ids = this.drawingsSorted().filter((d) => this.canEditDrawing(d) && match(d)).map((d) => d.id);
@@ -623,7 +636,7 @@ export class TableClient {
     if (record) this.history.push({ label: before.length > 1 ? 'Move drawings' : 'Move drawing', undo: () => write(before), redo: () => write(after) });
   }
 
-  async updateDrawings(ids: string[], patch: DrawingPatch): Promise<void> {
+  async updateDrawings(ids: string[], patch: DrawingPatch, label = 'Edit drawing'): Promise<void> {
     const cur = ids.map((id) => this.scene?.draws.get(id)).filter((d): d is Drawing => !!d && this.canEditDrawing(d));
     if (!cur.length) return;
     const prev = cur.map((d) => ({ id: d.id, vals: Object.fromEntries(Object.keys(patch).map((k) => [k, (d as any)[k]])) }));
@@ -634,7 +647,7 @@ export class TableClient {
     };
     const next = cur.map((d) => ({ id: d.id, vals: patch as Record<string, unknown> }));
     await write(next);
-    this.history.push({ label: 'Edit drawing', key: `draw:${ids.join('+')}:${Object.keys(patch).sort().join(',')}`, undo: () => write(prev), redo: () => write(next) });
+    this.history.push({ label, key: `draw:${ids.join('+')}:${Object.keys(patch).sort().join(',')}`, undo: () => write(prev), redo: () => write(next) });
   }
 
   // ---------------------------------------------------------------- live plotting (ruler, test moves)

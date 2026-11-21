@@ -57,53 +57,46 @@ check('H opens the Heights panel', (await dm.evaluate(() => window.__vtt.ui.data
 await dm.locator('.flyout .chip', { hasText: /^\+10$/ }).click();
 check('a preset chip sets the height', (await dm.evaluate(() => window.__vtt.ui.data.heightFt)) === 10);
 
-// ---- draw a 10 ft ledge (cols 10..14, rows 3..7) with the box shape
-await dm.locator('.flyout .seg button', { hasText: /^Box$/ }).click();
-const a = await screen(dm, 10 * cell, 3 * cell);
-const b = await screen(dm, 14 * cell, 7 * cell);
+// ---- paint a 10 ft ledge (cols 10..13, rows 3..6): a 4-square brush clicked on the corner in the middle of them
+await dm.evaluate(() => window.__vtt.ui.set({ heightBrush: 4 }));
+const a = await screen(dm, 12 * cell, 5 * cell);
 await dm.mouse.move(a.x, a.y);
 await dm.mouse.down();
-await dm.mouse.move((a.x + b.x) / 2, (a.y + b.y) / 2, { steps: 4 });
-await dm.mouse.move(b.x, b.y, { steps: 4 });
 await sleep(120);
-check('dragging shows its height while you draw', (await dm.evaluate(() => window.__vtt.board.plotLabels.some((l) => l && l.visible && /10 ft/.test(l.text)))));
+check('while you paint it shows its height', (await dm.evaluate(() => window.__vtt.board.plotLabels.some((l) => l && l.visible && /\+10 ft/.test(l.text)))));
 await dm.mouse.up();
 await sleep(400);
 let zs = await zones(dm);
-check('a box with a height of 10 is made', zs.length === 1 && zs[0].k === 'rect' && zs[0].hz === 10, JSON.stringify(zs));
+check('a stroke with a height of 10 is made', zs.length === 1 && zs[0].k === 'terrain' && zs[0].hz === 10, JSON.stringify(zs));
 check('the goblin standing in it is lifted to 10 ft', (await alt(dm, gob)).alt === 10);
 check("and the hero, outside it, is still at 0", (await alt(dm, hero)).alt === 0);
 await dm.screenshot({ path: '/tmp/shots/j1-ledge.png' });
 
-// ---- a nest drawn inside it wins (smaller on top)
-await dm.locator('.flyout .seg button', { hasText: /^Circle$/ }).click();
+// ---- a nest painted on top of it wins (newer sits on top)
+await dm.keyboard.press('Escape');
+await dm.evaluate(() => window.__vtt.ui.set({ heightBrush: 1 }));
 await dm.locator('.flyout .numf input').fill('40');
 await dm.locator('.flyout .numf input').blur();
 check('typing a height works', (await dm.evaluate(() => window.__vtt.ui.data.heightFt)) === 40);
-const c = await screen(dm, 11 * cell, 4 * cell);
-const e = await screen(dm, 12 * cell, 5 * cell);
+const c = await screen(dm, 11.5 * cell, 4.5 * cell);
 await dm.mouse.move(c.x, c.y);
 await dm.mouse.down();
-await dm.mouse.move(e.x, e.y, { steps: 6 });
 await dm.mouse.up();
 await sleep(400);
 zs = await zones(dm);
-check('a second, smaller area (a 40 ft nest) is made', zs.length === 2 && zs.some((z) => z.k === 'ellipse' && z.hz === 40));
+check('a second area (a 40 ft nest) is made', zs.length === 2 && zs.some((z) => z.hz === 40));
 const nestCentre = await dm.evaluate(([x, y]) => window.__vtt.board.heightOf({ fly: false, elev: 0, x, y }).alt, [11.5 * cell, 4.5 * cell]);
-check('the small one sits on top of the big one', nestCentre === 40, String(nestCentre));
+check('the nest sits on top of the ledge', nestCentre === 40, String(nestCentre));
 await dm.screenshot({ path: '/tmp/shots/j2-nest.png' });
 
-// ---- selecting one and changing its height from the panel at the bottom
-await dm.evaluate((id) => window.__vtt.ui.selectDrawings([id]), zs.find((z) => z.hz === 40).id);
-await dm.locator('.drawtag').waitFor();
-check('the panel calls it a height area', /Height area/.test(await dm.locator('.drawtag .dt-head strong').innerText()));
-check("and has no colour or fill pickers", (await dm.locator('.drawtag .swatches').count()) === 0);
-const gh = dm.locator('.drawtag .numf', { hasText: 'Ground height' }).locator('input');
+// ---- the nest is still selected: change its height from the card
+await dm.locator('.ht-card', { hasText: 'Selected ground' }).waitFor();
+const gh = dm.locator('.ht-card .numf input');
 await gh.fill('30');
 await gh.blur();
 await sleep(400);
 check('changing it there changes the area', (await zones(dm)).some((z) => z.hz === 30) && !(await zones(dm)).some((z) => z.hz === 40));
-await dm.locator('.drawtag .chip', { hasText: /^\+40$/ }).click();
+await dm.locator('.ht-card .chip', { hasText: /^\+40$/ }).click();
 await sleep(300);
 check('and the chips work too', (await zones(dm)).some((z) => z.hz === 40));
 await dm.keyboard.press('Escape');

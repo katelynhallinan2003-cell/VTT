@@ -3,7 +3,8 @@ import type { Board } from '../board/Board';
 import { DRAW_COLORS, DRAW_NAME, FILL_LEVEL, FONTS, LINE_H, STROKE_CELLS, fillModeOf, fontStack, isTemplate, sizeFt, withSizeFt, type FillMode } from '../core/draw';
 import type { TableClient } from '../state/client';
 import type { DrawTool, StrokeSize, TemplateKind, UiState } from '../state/ui';
-import { ZONE_PRESETS, zoneColor } from '../core/height';
+import { ZONE_PRESETS, zoneColor, zonesOf } from '../core/height';
+import { areasSelected } from '../core/terrain';
 import { isHex } from '../core/hex';
 import type { Drawing } from '../types';
 import { Toggle, toast, useClient, useUi } from './common';
@@ -127,38 +128,93 @@ export function DrawFlyout(props: { ui: UiState; client: TableClient }) {
       {wide && !isText && <Toggle checked={d.drawDash} onChange={(v) => ui.set({ drawDash: v })} label="Dashed" />}
       <p class="hint">{tool.hint}</p>
       <div class="row wrap">
-        <button class="btn small" onClick={async () => { const n = await client.clearDrawings((x) => x.uid === client.uid && !isTemplate(x.k) && x.hz == null, 'Clear my drawings'); toast(n ? `Cleared ${n} drawing${n > 1 ? 's' : ''}` : 'Nothing of yours to clear', 'info', 1800); }}>Clear mine</button>
-        {client.isDM && <button class="btn small danger" onClick={async () => { const n = await client.clearDrawings((x) => !isTemplate(x.k) && x.hz == null, 'Clear all drawings'); toast(n ? `Cleared ${n} drawing${n > 1 ? 's' : ''}` : 'No drawings to clear', 'info', 1800); }}>Clear all</button>}
+        <button class="btn small" onClick={async () => { const n = await client.clearDrawings((x) => x.uid === client.uid && !isTemplate(x.k) && x.hz == null && x.k !== 'terrain', 'Clear my drawings'); toast(n ? `Cleared ${n} drawing${n > 1 ? 's' : ''}` : 'Nothing of yours to clear', 'info', 1800); }}>Clear mine</button>
+        {client.isDM && <button class="btn small danger" onClick={async () => { const n = await client.clearDrawings((x) => !isTemplate(x.k) && x.hz == null && x.k !== 'terrain', 'Clear all drawings'); toast(n ? `Cleared ${n} drawing${n > 1 ? 's' : ''}` : 'No drawings to clear', 'info', 1800); }}>Clear all</button>}
       </div>
     </div>
   );
 }
 
+const BRUSH_SIZES = [1, 2, 3, 4, 6, 8];
+
 export function HeightFlyout(props: { ui: UiState; client: TableClient }) {
   const { ui, client } = props;
   const d = useUi(ui);
   useClient(client);
-  const count = [...(client.scene?.draws.values() ?? [])].filter((x) => x.hz != null).length;
+  const grid = client.grid;
+  const hex = isHex(grid);
+  const cellWord = hex ? 'hex' : 'square';
+  const terrain = zonesOf(client.drawingsSorted(), grid);
+  const sel = areasSelected(terrain, d.drawSel);
+  const mine = sel.filter((a) => a.ids.every((id) => { const x = client.scene?.draws.get(id); return !x || client.canEditDrawing(x); }));
+  const paintable = mine.filter((a) => !a.legacy);
+  const one = mine.length === 1 ? mine[0] : null;
+  const editing = mine.length > 0;
+  // the number box shows the selected area (and edits it), or else what the next area will be
+  const shownH = editing ? mine[0].h : d.heightFt;
+  const shownAdd = editing ? paintable.length > 0 && paintable[0].add : d.heightAdds;
+  const setH = (h: number) => {
+    const n = Math.max(-1000, Math.min(5000, Math.round(h)));
+    ui.set({ heightFt: n });
+    for (const a of mine) void client.setArea(a, { hz: n });
+  };
+  const setAdds = (v: boolean) => {
+    ui.set({ heightAdds: v });
+    for (const a of paintable) void client.setArea(a, { ha: v });
+  };
+  const n = terrain.areas.length;
   return (
     <div class="flyout">
       <div class="flyout-title">Heights</div>
-      <p class="hint">Draw the high and low ground. Anything that walks onto it is lifted to that height, and the ruler counts the climb. Flying tokens keep their own altitude.</p>
+      <p class="hint">Paint high and low ground like a brush. Whatever walks onto it is lifted to that height, and the ruler counts the climb. Flying tokens keep their own altitude.</p>
       <div class="seg">
-        <button class={d.heightShape === 'rect' ? 'on' : ''} onClick={() => ui.set({ heightShape: 'rect' })}>Box</button>
-        <button class={d.heightShape === 'ellipse' ? 'on' : ''} onClick={() => ui.set({ heightShape: 'ellipse' })}>Circle</button>
-      </div>
-      <NumField label="Ground height" value={d.heightFt} min={-1000} max={5000} step={5} unit="ft" title="How high this ground is above the base level of the map. Negative is a pit." onCommit={(n) => ui.set({ heightFt: Math.round(n) })} />
-      <div class="chips">
-        {ZONE_PRESETS.map((h) => (
-          <button key={h} class={`chip ${d.heightFt === h ? 'on' : ''}`} style={{ borderColor: zoneColor(h) }} onClick={() => ui.set({ heightFt: h })}>{h > 0 ? `+${h}` : h}</button>
+        {([['paint', 'Paint'], ['erase', 'Rub out'], ['move', 'Move']] as const).map(([k, label]) => (
+          <button key={k} class={d.heightMode === k ? 'on' : ''} onClick={() => ui.set({ heightMode: k })}>{label}</button>
         ))}
       </div>
+      {d.heightMode !== 'move' && (
+        <>
+          <Toggle checked={d.heightSnap} onChange={(v) => ui.set({ heightSnap: v })} label={`Fill whole ${cellWord}s`} hint={`Off paints freely under the brush. Hold Alt while you paint to flip it for one stroke.`} />
+          <span class="field-label">Brush size ({d.heightSnap ? `${cellWord}s across` : 'cells wide'})</span>
+          <div class="chips">
+            {BRUSH_SIZES.map((x) => <button key={x} class={`chip ${d.heightBrush === x ? 'on' : ''}`} onClick={() => ui.set({ heightBrush: x })}>{x}</button>)}
+          </div>
+        </>
+      )}
+      <div class="ht-card">
+        <div class="row">
+          <strong>{editing ? (one ? 'Selected ground' : `${mine.length} areas selected`) : 'Next ground you paint'}</strong>
+          <span class="grow" />
+          {editing && <button class="btn small" title="Let go of this ground so the next stroke starts a new one (Esc)" onClick={() => ui.selectDrawings([])}>New area</button>}
+        </div>
+        <NumField label="Height" value={shownH} min={-1000} max={5000} step={5} unit="ft" title="How high this ground is. Negative is a pit." onCommit={setH} />
+        <div class="chips">
+          {ZONE_PRESETS.map((h) => (
+            <button key={h} class={`chip ${shownH === h ? 'on' : ''}`} style={{ borderColor: zoneColor(h) }} onClick={() => setH(h)}>{h > 0 ? `+${h}` : h}</button>
+          ))}
+        </div>
+        <div class="seg">
+          <button class={!shownAdd ? 'on' : ''} disabled={editing && !paintable.length} title="This ground is exactly this high, whatever is under it" onClick={() => setAdds(false)}>Sets height</button>
+          <button class={shownAdd ? 'on' : ''} disabled={editing && !paintable.length} title="This ground is this much higher than whatever is under it, so overlapping areas stack up" onClick={() => setAdds(true)}>Adds to ground</button>
+        </div>
+        {editing ? (
+          <div class="row wrap">
+            {paintable.length > 1 && <button class="btn small" title="Make these one area" onClick={() => void client.mergeAreas(paintable)}>Merge</button>}
+            <button class="btn small danger" onClick={() => { void client.removeDrawings(mine.flatMap((a) => a.ids), 'Delete ground'); ui.selectDrawings([]); }}>Delete {one ? 'area' : 'areas'}</button>
+          </div>
+        ) : <p class="hint">Click to start a new area. Every stroke after it joins the same one until you press New area or Esc.</p>}
+      </div>
+      <p class="hint">
+        {d.heightMode === 'paint' && 'Paint or drag across the map. Ctrl-click an area to select it, then paint more onto it or change its height.'}
+        {d.heightMode === 'erase' && (editing ? 'Rubs out of the selected area only.' : 'Rubs out of every area. Select an area first to rub out of just that one.')}
+        {d.heightMode === 'move' && `Click an area to select it, then drag it. Ground made of whole ${cellWord}s moves a ${cellWord} at a time (Alt moves it freely). Shift-click adds more.`}
+      </p>
       <Toggle checked={d.showHeights} onChange={(v) => ui.set({ showHeights: v })} label="Show heights on the map" hint="Only changes what you see. Everyone gets the same ground." />
-      <p class="hint">Drag out a box or circle. Click the edge of one to select it, move it, resize it, or change its height. Smaller ones sit on top of bigger ones, so draw a nest inside a cliff. {'] and [ raise and lower the selected tokens.'}</p>
+      <p class="hint">{'] and [ raise and lower the selected tokens.'}</p>
       <div class="row wrap">
-        <span class="hint">{count ? `${count} height area${count > 1 ? 's' : ''} on this map` : 'No height areas yet'}</span>
+        <span class="hint">{n ? `${n} height area${n > 1 ? 's' : ''} on this map` : 'No height areas yet'}</span>
         <span class="grow" />
-        {count > 0 && <button class="btn small danger" onClick={async () => { const n = await client.clearDrawings((x) => x.hz != null, 'Clear all heights'); toast(n ? `Cleared ${n} height area${n > 1 ? 's' : ''}` : 'No heights to clear', 'info', 1800); }}>Clear all heights</button>}
+        {n > 0 && <button class="btn small danger" onClick={async () => { const c = await client.clearDrawings((x) => x.hz != null || x.k === 'terrain', 'Clear all heights'); ui.selectDrawings([]); toast(c ? `Cleared the height areas` : 'No heights to clear', 'info', 1800); }}>Clear all heights</button>}
       </div>
     </div>
   );
@@ -292,7 +348,8 @@ export function DrawInspector(props: { ui: UiState; client: TableClient; board: 
   const { ui, client, board } = props;
   useClient(client);
   const d = useUi(ui);
-  const list = [...d.drawSel].map((id) => client.scene?.draws.get(id)).filter((x): x is Drawing => !!x && client.canEditDrawing(x));
+  // painted ground is edited in the Heights panel, not here
+  const list = [...d.drawSel].map((id) => client.scene?.draws.get(id)).filter((x): x is Drawing => !!x && x.k !== 'terrain' && client.canEditDrawing(x));
   if (!list.length || d.textEdit) return null;
   const one = list.length === 1 ? list[0] : null;
   const first = list[0];

@@ -130,7 +130,7 @@ export function normalizeAuras(raw: any): Aura[] {
   }));
 }
 
-const DRAW_KINDS = ['pen', 'line', 'arrow', 'rect', 'ellipse', 'text', 'cone', 'cube', 'sphere', 'emanation', 'beam'];
+const DRAW_KINDS = ['pen', 'line', 'arrow', 'rect', 'ellipse', 'text', 'cone', 'cube', 'sphere', 'emanation', 'beam', 'terrain'];
 
 export function normalizeDrawing(id: string, raw: any): Drawing | null {
   if (!raw || typeof raw.p !== 'string' || !DRAW_KINDS.includes(raw.k)) return null;
@@ -153,7 +153,8 @@ export function normalizeDrawing(id: string, raw: any): Drawing | null {
     ho: bool(raw.ho, false),
     bw: Math.min(200, Math.max(1, num(raw.bw, 5))),
     of: Math.min(400, Math.max(0, num(raw.of, 0))),
-    hz: typeof raw.hz === 'number' && Number.isFinite(raw.hz) && (raw.k === 'rect' || raw.k === 'ellipse') ? Math.min(5000, Math.max(-1000, Math.round(raw.hz))) : null,
+    hz: typeof raw.hz === 'number' && Number.isFinite(raw.hz) && (raw.k === 'rect' || raw.k === 'ellipse' || raw.k === 'terrain') ? Math.min(5000, Math.max(-1000, Math.round(raw.hz))) : null,
+    ...(raw.k === 'terrain' ? { hg: typeof raw.hg === 'string' ? raw.hg.slice(0, 24) : '', ha: bool(raw.ha, false), he: bool(raw.he, false), hc: bool(raw.hc, false) } : {}),
     t: num(raw.t, 0),
   };
 }
@@ -165,6 +166,7 @@ export function drawingToWire(d: Omit<Drawing, 'id'> | Drawing): Record<string, 
     fc: rest.fc || undefined, font: rest.font || undefined, b: rest.b || undefined, i: rest.i || undefined, u: rest.u || undefined, ho: rest.ho || undefined,
     hz: rest.hz ?? undefined,
     of: rest.of || undefined,
+    hg: rest.hg || undefined, ha: rest.ha || undefined, he: rest.he || undefined, hc: rest.hc || undefined,
   });
 }
 

@@ -60,7 +60,14 @@ export interface UiData {
   pingMode: 'middle' | 'hold';
   /** the Heights tool: how high the ground it draws is (feet), and whether it draws boxes or circles */
   heightFt: number;
-  heightShape: 'rect' | 'ellipse';
+  /** what the Heights brush does: paint ground, rub ground out, or select and move an area */
+  heightMode: 'paint' | 'erase' | 'move';
+  /** paint whole squares (or hexes) rather than freehand */
+  heightSnap: boolean;
+  /** how wide the brush is, in grid squares */
+  heightBrush: number;
+  /** new areas add to the ground below them instead of setting its height */
+  heightAdds: boolean;
   /** show the height zones on the map (the Heights tool shows them anyway) */
   showHeights: boolean;
   /** DM: the initiative pop-up is open */
@@ -113,7 +120,10 @@ export class UiState {
     textEdit: null, camRev: 0, initOpen: false,
     fxJump: readFlag('vtt-fx-jump', true), fxDraft: null,
     heightFt: (() => { try { const n = Number(localStorage.getItem('vtt-height-ft')); return Number.isFinite(n) && localStorage.getItem('vtt-height-ft') !== null ? n : 10; } catch { return 10; } })(),
-    heightShape: readStr('vtt-height-shape', 'rect', ['rect', 'ellipse'] as const),
+    heightMode: readStr('vtt-height-mode', 'paint', ['paint', 'erase', 'move'] as const),
+    heightSnap: readFlag('vtt-height-snap', true),
+    heightBrush: (() => { try { const n = Number(localStorage.getItem('vtt-height-brush')); return Number.isFinite(n) && n >= 1 && n <= 8 ? n : 1; } catch { return 1; } })(),
+    heightAdds: readFlag('vtt-height-adds', false),
     showHeights: readFlag('vtt-show-heights', true),
     initPos: readStr('vtt-init-pos', 'top', ['top', 'side'] as const),
     panButton: readStr('vtt-pan-button', 'right', ['right', 'middle'] as const),
@@ -148,7 +158,10 @@ export class UiState {
       if (patch.panButton !== undefined) localStorage.setItem('vtt-pan-button', patch.panButton);
       if (patch.pingMode !== undefined) localStorage.setItem('vtt-ping-mode', patch.pingMode);
       if (patch.heightFt !== undefined) localStorage.setItem('vtt-height-ft', String(patch.heightFt));
-      if (patch.heightShape !== undefined) localStorage.setItem('vtt-height-shape', patch.heightShape);
+      if (patch.heightMode !== undefined) localStorage.setItem('vtt-height-mode', patch.heightMode);
+      if (patch.heightSnap !== undefined) localStorage.setItem('vtt-height-snap', patch.heightSnap ? '1' : '0');
+      if (patch.heightBrush !== undefined) localStorage.setItem('vtt-height-brush', String(patch.heightBrush));
+      if (patch.heightAdds !== undefined) localStorage.setItem('vtt-height-adds', patch.heightAdds ? '1' : '0');
       if (patch.showHeights !== undefined) localStorage.setItem('vtt-show-heights', patch.showHeights ? '1' : '0');
       if (patch.initPos !== undefined) localStorage.setItem('vtt-init-pos', patch.initPos);
       if (patch.sharePlot !== undefined) localStorage.setItem('vtt-share-plot', patch.sharePlot ? '1' : '0');

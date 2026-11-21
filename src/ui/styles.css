@@ -534,3 +534,7 @@ input[type=text], input[type=number], input[type=password], select { border-radi
 .fx-tintcol { display: inline-flex; gap: 6px; align-items: center; flex: none; }
 .fx-previewnote { margin: 6px 0 4px; }
 .fx-viewset { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); }
+
+/* Heights panel: the card for the selected (or next) ground */
+.ht-card { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--line, #3a3f4b); border-radius: 8px; background: rgba(255,255,255,0.03); }
+.ht-card .btn[disabled], .ht-card .seg button[disabled] { opacity: 0.45; cursor: not-allowed; }

@@ -156,7 +156,7 @@ export interface Aura {
   dm: boolean;
 }
 
-export type DrawKind = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'cone' | 'cube' | 'sphere' | 'emanation' | 'beam';
+export type DrawKind = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'cone' | 'cube' | 'sphere' | 'emanation' | 'beam' | 'terrain';
 
 /** Something drawn on the map: freehand, a shape, text or a spell template. */
 export interface Drawing {
@@ -190,8 +190,16 @@ export interface Drawing {
   bw: number;
   /** how wide the creature an emanation comes from is, in feet (0 or missing: one square) */
   of?: number;
-  /** a box or circle with a height set marks ground at that many feet above (or below) the map's base level */
+  /** a box, circle or brush stroke with a height set marks ground at that many feet above (or below) the map's base level */
   hz: number | null;
+  /** terrain brush strokes: the area (everything painted together) this stroke belongs to */
+  hg?: string;
+  /** terrain: the area adds this height to the ground below it, instead of setting it */
+  ha?: boolean;
+  /** terrain: this stroke takes ground away from its area (or from every area when `hg` is empty) */
+  he?: boolean;
+  /** terrain: the stroke is a list of whole cells (their centres), not a free brush */
+  hc?: boolean;
   t: number;
 }
 

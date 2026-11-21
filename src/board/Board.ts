@@ -5,7 +5,10 @@ import {
 import { FILL_LEVEL, STROKE_CELLS, beamWidthPx, dashSegments, fitPenPoints, handlesOf, hitDrawing, isTemplate, joinPts, resizeDrawing, setLineMeasurer, footprintPx, snapTemplate, templateLabel, templateWidthPx, type HandleId, type TemplateSnapState } from '../core/draw';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
-import { altitudeOf, groundAt, heightChangeNote, heightNote, setAltitude, zoneColor, zonesOf, type Altitude, type Zone } from '../core/height';
+import { altitudeOf, groundAt, heightChangeNote, heightNote, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
+import { EMPTY_TERRAIN, MAX_STROKE_CELLS, areaAt, areaLabel, areasSelected, cellKey, cellsAlong, heightColor, newAreaId, type Area, type Terrain } from '../core/terrain';
+import { cellPoly } from '../core/cells';
+import { DEFAULT_GRID } from '../core/model';
 import { pctOf, toPub, visionCircles } from '../core/combat';
 import type { DrawingPatch, TableClient } from '../state/client';
 import type { StrokeSize, UiState } from '../state/ui';
@@ -13,6 +16,7 @@ import type { DrawKind, Drawing, Ping, Rect, Token, Vec } from '../types';
 import { throttle } from '../core/throttle';
 import { TokenView, type TokenCtx } from './TokenView';
 import { DrawLayer, paintShape } from './DrawLayer';
+import { TerrainLayer } from './TerrainLayer';
 import { canvasTexture, loadTexture, releaseTexture, setTextureFailHandler, type LoadedTexture } from './textures';
 import { diagnoseImage } from '../core/images';
 
@@ -38,8 +42,10 @@ type Drag =
       /** an emanation from a creature: where it comes out, and how wide that creature's space is in feet */ of?: number; fixedOrigin?: Vec;
       /** what the last template snap decided (so it only changes when the pointer clearly moves on) */ snap?: TemplateSnapState }
   | { kind: 'erase'; ids: Set<string> }
+  /** painting (or rubbing out) ground with the Heights brush */
+  | { kind: 'terrain'; erase: boolean; /** the area it paints into (empty: rub out of every area) */ group: string; h: number; add: boolean; /** the cells covered so far (null for a free brush) */ cells: Map<string, Vec> | null; pts: Vec[]; last: Vec; size: number }
   | { kind: 'ruler' }
-  | { kind: 'drawmove'; ids: string[]; start: Vec; dx: number; dy: number; moved: boolean }
+  | { kind: 'drawmove'; ids: string[]; start: Vec; dx: number; dy: number; moved: boolean; /** ground being moved: it steps a whole cell at a time */ snap?: boolean }
   | { kind: 'drawresize'; id: string; handle: HandleId; orig: Drawing; patch: DrawingPatch | null };
 
 const num = (c: string) => parseInt(c.replace('#', '').padEnd(6, '0').slice(0, 6), 16) || 0xffffff;
@@ -62,6 +68,7 @@ export class Board {
   private tokenLayer = new Container();
   private fogLayer = new Container();
   private drawLayer = new DrawLayer();
+  private terrainLayer = new TerrainLayer();
   private auraG = new Graphics();
   private ghostLayer = new Container();
   private overlayG = new Graphics();
@@ -73,7 +80,7 @@ export class Board {
   private liveSent = false;
   private seenDrawRev = -1;
   private seenLiveRev = -1;
-  private prevUi = { testMove: false, sharePlot: false, tool: 'select' as string, rulerColor: '', cover: true, heights: true, draft: null as unknown };
+  private prevUi = { testMove: false, sharePlot: false, tool: 'select' as string, rulerColor: '', cover: true, heights: true, draft: null as unknown, sel: null as unknown };
   private distText!: Text;
 
   private cam = { zoom: 1, tx: 0, ty: 0 };
@@ -106,7 +113,7 @@ export class Board {
   private drag: Drag | null = null;
   private polyPts: Vec[] = [];
   /** the boxes and circles that give the ground a height, for every token's altitude */
-  private zones: Zone[] = [];
+  private zones: Terrain = EMPTY_TERRAIN({ ...DEFAULT_GRID });
   private seenZoneRev = -1;
   private pointerW: Vec | null = null;
   private spaceDown = false;
@@ -126,6 +133,8 @@ export class Board {
   private sendMoves: ReturnType<typeof throttle<[{ id: string; x: number; y: number }[], boolean]>>;
   /** W (for warp) is held: tokens being dragged jump instead of walking (they do not clear the ground between) */
   private teleportHeld = false;
+  /** Alt was held at the last pointer move (the Heights brush flips between cells and free with it) */
+  private altDown = false;
   private sendMap: ReturnType<typeof throttle<[number, number]>>;
 
   constructor(host: HTMLElement, client: TableClient, ui: UiState, cb: BoardCallbacks) {
@@ -178,7 +187,7 @@ export class Board {
     this.distText.anchor.set(0.5, 1);
     this.distText.visible = false;
     this.ghostLayer.sortableChildren = true;
-    this.world.addChild(this.mapLayer, this.gridG, this.drawLayer.container, this.auraG, this.tokenLayer, this.ghostLayer, this.fogLayer, this.overlayG, this.fxLayer, this.distText);
+    this.world.addChild(this.mapLayer, this.gridG, this.terrainLayer.container, this.drawLayer.container, this.auraG, this.tokenLayer, this.ghostLayer, this.fogLayer, this.overlayG, this.fxLayer, this.distText);
     app.stage.addChild(this.world);
 
     this.bindInput(app.canvas);
@@ -356,8 +365,8 @@ export class Board {
 
     if (scene.drawRev !== this.seenZoneRev) {
       this.seenZoneRev = scene.drawRev;
-      const next = zonesOf(scene.draws.values());
-      if (JSON.stringify(next) !== JSON.stringify(this.zones)) { this.zones = next; this.seenTokensRev = -1; }
+      const next = zonesOf(scene.draws.values(), this.client.grid);
+      if (next.sig !== this.zones.sig) { this.zones = next; this.seenTokensRev = -1; this.refreshDraws(); }
     }
     if (scene.tokensRev !== this.seenTokensRev) {
       this.seenTokensRev = scene.tokensRev;
@@ -404,7 +413,7 @@ export class Board {
     this.mapTex = null;
     this.cb.onMapError(null);
     this.seenMetaRev = this.seenTokensRev = this.seenFogRev = this.seenDrawRev = this.seenLiveRev = this.seenInitRev = this.seenZoneRev = -1;
-    this.zones = [];
+    this.zones = EMPTY_TERRAIN(this.client.grid);
     this.seenGridKey = '';
     if (this.fogSprite) this.fogSprite.visible = false;
     const saved = scene ? this.cams.get(scene.id) : undefined;
@@ -490,6 +499,9 @@ export class Board {
   heightOf(t: Token, pos?: Vec): Altitude {
     return altitudeOf(t, groundAt(this.zones, pos ?? t));
   }
+
+  /** How high the ground is at a spot, in feet. */
+  groundAtPoint(p: Vec): number { return groundAt(this.zones, p); }
 
   /** How high a spot on the map is: whatever token is standing or flying there, else the ground. */
   private pointAlt(p: Vec): number {
@@ -662,7 +674,8 @@ export class Board {
   private onUiChange() {
     const u = this.ui.data;
     const prev = this.prevUi;
-    this.prevUi = { testMove: u.testMove, sharePlot: u.sharePlot, tool: u.tool, rulerColor: u.rulerColor, cover: u.tplCover, heights: u.showHeights, draft: u.fxDraft };
+    this.prevUi = { testMove: u.testMove, sharePlot: u.sharePlot, tool: u.tool, rulerColor: u.rulerColor, cover: u.tplCover, heights: u.showHeights, draft: u.fxDraft, sel: u.drawSel };
+    if (u.drawSel !== prev.sel && this.client.scene) this.refreshDraws();
     if (u.fxDraft !== prev.draft && this.client.scene) this.reconcileTokens();
     if (prev.testMove && !u.testMove && this.testMoves.size) this.resetTestMoves();
     if (u.sharePlot !== prev.sharePlot) this.publishLive(true);
@@ -670,6 +683,7 @@ export class Board {
     if (u.tplCover !== prev.cover || u.showHeights !== prev.heights || (prev.tool === 'height') !== (u.tool === 'height')) this.refreshDraws();
     if (prev.tool !== u.tool) {
       this.cancelPress();
+      if (prev.tool === 'height' && this.selectedAreas().length) this.ui.selectDrawings([]);
       if (this.ruler && u.tool !== 'ruler') { this.ruler = null; this.publishLive(); }
     }
   }
@@ -929,7 +943,7 @@ export class Board {
     // outlines around selected drawings (shifted while they are being dragged)
     for (const id of u.drawSel) {
       const dd = this.shownDrawing(id);
-      if (!dd) continue;
+      if (!dd || dd.k === 'terrain') continue; // painted ground outlines itself
       const b = this.drawLayer.boundsOf(dd, grid);
       const mv = d?.kind === 'drawmove' && d.ids.includes(id) ? d : null;
       const pad = 5 / z;
@@ -957,6 +971,11 @@ export class Board {
       }, grid, 0.85, u.tplCover);
       if (isT && d.pts.length >= 2) this.plotLabel(li++, templateLabel(d.dk, grid, d.pts[0], d.pts[1], u.tplWidth, footprintPx(grid, d.of ?? 0)), d.pts[1].x, d.pts[1].y - 12 / z, num(u.drawColor));
     }
+
+    // the Heights brush: where it would paint, the stroke so far, and areas being carried to a new place
+    if (d?.kind === 'terrain') li = this.paintBrush(g, z, d.last, d, li);
+    else if (!d && u.tool === 'height' && (u.heightMode === 'paint' || u.heightMode === 'erase') && this.pointerW && this.client.isDM) li = this.paintBrush(g, z, this.pointerW, null, li);
+    if (d?.kind === 'drawmove' && d.moved) this.paintMoveGhost(g, d);
 
     // an erase swipe
     if (d?.kind === 'erase' && this.pointerW) g.circle(this.pointerW.x, this.pointerW.y, 6 / z).stroke({ width: 1.5 / z, color: 0xff6b6b });
@@ -1096,7 +1115,7 @@ export class Board {
     if (tool === 'grid' && this.client.isDM) { this.drag = { kind: 'rect', start: w, cur: w }; return; }
     if (tool === 'fog' && this.client.isDM) { this.startFog(w, e); return; }
     if (tool === 'draw') { this.startDraw(w, e); return; }
-    if (tool === 'height' && this.client.isDM) { this.startHeight(w); return; }
+    if (tool === 'height' && this.client.isDM) { this.startHeight(w, e); return; }
     if (tool === 'template') { this.startTemplate(w, e); return; }
     if (tool === 'ruler') { this.startRuler(w, e); return; }
 
@@ -1186,7 +1205,8 @@ export class Board {
   }
 
   private drawingsShown(): Drawing[] {
-    const list = this.client.drawingsSorted().filter((d) => d.hz == null || this.zonesVisible());
+    // ground (boxes, circles and brush strokes with a height) is painted by the terrain layer, not here
+    const list = this.client.drawingsSorted().filter((d) => d.hz == null && d.k !== 'terrain');
     const pv = this.drawPreview;
     return pv ? list.map((d) => (d.id === pv.id ? { ...d, ...pv.patch } : d)) : list;
   }
@@ -1202,7 +1222,20 @@ export class Board {
 
   private refreshDraws() {
     this.drawLayer.sync(this.drawingsShown(), this.client.grid, this.textRes, this.ui.data.tplCover);
+    this.syncTerrain();
     this.invalidate();
+  }
+
+  /** The areas that are selected (any of their strokes selected). */
+  private selectedAreas(): Area[] {
+    return areasSelected(this.zones, this.ui.data.drawSel);
+  }
+
+  /** Repaint the high and low ground (a resize that is still being dragged shows as it goes). */
+  private syncTerrain() {
+    const pv = this.drawPreview;
+    const t = pv ? zonesOf(this.client.drawingsSorted().map((d) => (d.id === pv.id ? { ...d, ...pv.patch } : d)), this.client.grid) : this.zones;
+    this.terrainLayer.sync(t, new Set(this.selectedAreas().map((a) => a.id)), this.textRes, this.zonesVisible());
   }
 
   /** The resize handle under the pointer, for the one drawing that is selected. */
@@ -1224,7 +1257,7 @@ export class Board {
   }
 
   private hitDrawingAt(p: Vec, solid: boolean): Drawing | null {
-    const list = this.client.drawingsSorted().filter((d) => d.hz == null || this.zonesVisible());
+    const list = this.client.drawingsSorted().filter((d) => d.k !== 'terrain' && (d.hz == null || this.zonesVisible()));
     const tol = 6 / this.cam.zoom;
     for (let i = list.length - 1; i >= 0; i--) {
       const d = list[i];
@@ -1271,17 +1304,129 @@ export class Board {
     this.cb.onNotice(ids.length === 1 ? (to > a0.ground ? `${t0.name || 'Token'} flies at ${to} ft` : `${t0.name || 'Token'} lands`) : `${ids.length} tokens ${ft > 0 ? 'up' : 'down'} ${Math.abs(ft)} ft`, 'info');
   }
 
-  /** The Heights tool: grab a zone by its edge, or drag out a new box or circle (it can sit inside another one). */
-  private startHeight(w: Vec) {
-    const edge = this.hitDrawingAt(w, false);
-    if (edge && edge.hz != null) {
-      this.ui.selectDrawings([edge.id]);
-      this.drag = { kind: 'drawmove', ids: [edge.id], start: w, dx: 0, dy: 0, moved: false };
+  /** The area the brush adds to: the one area that is selected (an old-style box or circle cannot take more paint). */
+  private currentArea(): Area | null {
+    const a = this.selectedAreas();
+    return a.length === 1 && !a[0].legacy ? a[0] : null;
+  }
+
+  /**
+   * The Heights tool. Paint lays down ground (in the selected area, or a new one), Rub out takes it away, Move slides whole areas.
+   * Ctrl/Cmd-click picks the area under the pointer in any of them; Shift adds it to the selection.
+   */
+  private startHeight(w: Vec, e: PointerEvent) {
+    const u = this.ui.data;
+    const mode = u.heightMode;
+    if (mode === 'move' || e.ctrlKey || e.metaKey) {
+      const a = areaAt(this.zones, w);
+      if (!a) { if (!e.shiftKey) this.ui.selectDrawings([]); return; }
+      const sel = new Set(u.drawSel);
+      const has = a.ids.some((id) => sel.has(id));
+      if (e.shiftKey) {
+        for (const id of a.ids) { if (has) sel.delete(id); else sel.add(id); }
+        this.ui.selectDrawings(sel);
+        if (has || mode !== 'move') return;
+      } else if (!has) this.ui.selectDrawings(a.ids);
+      if (mode !== 'move') return;
+      const mine = this.selectedAreas();
+      const ids = mine.flatMap((x) => x.ids).filter((id) => { const d = this.client.scene?.draws.get(id); return !!d && this.client.canEditDrawing(d); });
+      if (!ids.length) return;
+      const snap = !e.altKey && mine.some((x) => x.paint.some((s) => s.kind === 'cells'));
+      this.drag = { kind: 'drawmove', ids, start: w, dx: 0, dy: 0, moved: false, snap };
       return;
     }
+    const erase = mode === 'erase';
+    const cur = this.currentArea();
+    const d: Extract<Drag, { kind: 'terrain' }> = {
+      kind: 'terrain', erase, group: cur?.id ?? (erase ? '' : newAreaId()),
+      h: cur ? cur.h : u.heightFt, add: cur ? cur.add : u.heightAdds,
+      cells: u.heightSnap !== e.altKey ? new Map() : null, pts: [], last: w, size: u.heightBrush,
+    };
+    this.drag = d;
+    this.paintTerrainAt(d, w, true);
+  }
+
+  /** Add the ground under the brush as it moves from the last spot to `w`. */
+  private paintTerrainAt(d: Extract<Drag, { kind: 'terrain' }>, w: Vec, first = false) {
+    const grid = this.client.grid;
+    if (d.cells) {
+      for (const c of cellsAlong(grid, first ? w : d.last, w, d.size)) {
+        const k = cellKey(grid, c);
+        if (!d.cells.has(k) && d.cells.size < MAX_STROKE_CELLS) d.cells.set(k, c);
+      }
+    } else if (first) d.pts = [w];
+    else if (Math.hypot(w.x - d.last.x, w.y - d.last.y) * this.cam.zoom > 2) d.pts.push(w);
+    d.last = w;
+  }
+
+  private commitTerrain(d: Extract<Drag, { kind: 'terrain' }>) {
+    const grid = this.client.grid;
+    const hex = grid.shape !== 'square';
+    let pts: Vec[];
+    let wpx: number;
+    if (d.cells) {
+      pts = [...d.cells.values()];
+      wpx = grid.cell * (hex ? 1.16 : 1);
+    } else {
+      wpx = Math.max(1, d.size * grid.cell);
+      pts = d.pts.length > 2 ? fitPenPoints(d.pts, Math.max(0.5, wpx * 0.06)) : d.pts;
+    }
+    if (!pts.length) return;
+    const col = heightColor(d.h);
+    const cur = this.selectedAreas();
+    const keep = cur.length === 1 && cur[0].id === d.group ? cur[0].ids : [];
+    void this.client.addDrawing(
+      { k: 'terrain', p: joinPts(pts), color: col, w: wpx, fill: 0, fc: '', dash: false, txt: '', fs: 28, bw: 5, hz: d.erase ? null : d.h, hg: d.group, ha: !d.erase && d.add, he: d.erase, hc: !!d.cells },
+      { label: d.erase ? 'Rub out ground' : 'Paint ground', onId: (id) => { if (!d.erase) this.ui.selectDrawings([...keep, id]); } },
+    ).catch((err: Error) => this.cb.onNotice(err.message, 'error'));
+  }
+
+  /** What the brush would cover: the cells, or a circle. Drawn as the hover marker and for the stroke in progress. */
+  private paintBrush(g: Graphics, z: number, at: Vec, d: Extract<Drag, { kind: 'terrain' }> | null, li: number): number {
     const u = this.ui.data;
-    this.ui.selectDrawings([]);
-    this.drag = { kind: 'shape', dk: u.heightShape, start: w, pts: [w, w], hz: u.heightFt };
+    const grid = this.client.grid;
+    const erase = d ? d.erase : u.heightMode === 'erase';
+    const cur = this.currentArea();
+    const h = d ? d.h : cur ? cur.h : u.heightFt;
+    const add = d ? d.add : cur ? cur.add : u.heightAdds;
+    const col = erase ? 0xff6b6b : num(heightColor(h));
+    const snap = d ? !!d.cells : u.heightSnap !== !!this.altDown;
+    const n = d ? d.size : u.heightBrush;
+    if (snap) {
+      const cells = d?.cells ? [...d.cells.values()] : cellsAlong(grid, at, at, n);
+      for (const c of cells) g.poly(cellPoly(grid, c).flatMap((p) => [p.x, p.y]), true);
+      g.fill({ color: col, alpha: d ? 0.5 : 0.28 });
+      for (const c of cells) g.poly(cellPoly(grid, c).flatMap((p) => [p.x, p.y]), true);
+      g.stroke({ width: 1.5 / z, color: col, alpha: 0.9 });
+    } else {
+      const r = (Math.max(1, n * grid.cell)) / 2;
+      if (d && d.pts.length > 1) {
+        g.moveTo(d.pts[0].x, d.pts[0].y);
+        for (const p of d.pts.slice(1)) g.lineTo(p.x, p.y);
+        g.stroke({ width: r * 2, color: col, alpha: 0.45, cap: 'round', join: 'round' });
+      } else if (d) g.circle(d.pts[0].x, d.pts[0].y, r).fill({ color: col, alpha: 0.45 });
+      g.circle(at.x, at.y, r).stroke({ width: 1.5 / z, color: col, alpha: 0.9 });
+    }
+    if (!erase) this.plotLabel(li++, areaLabel(h, add), at.x, at.y - Math.max(grid.cell * 0.7, 18 / z), col);
+    return li;
+  }
+
+  /** A faint copy of the areas being moved, where they would land. */
+  private paintMoveGhost(g: Graphics, d: Extract<Drag, { kind: 'drawmove' }>) {
+    const grid = this.client.grid;
+    const ids = new Set(d.ids);
+    for (const a of this.zones.areas) {
+      if (!a.ids.some((id) => ids.has(id))) continue;
+      const col = num(heightColor(a.h));
+      for (const s of a.paint) {
+        if (s.kind === 'cells') for (const c of s.pts) g.poly(cellPoly(grid, { x: c.x + d.dx, y: c.y + d.dy }).flatMap((p) => [p.x, p.y]), true);
+        else if (s.kind === 'rect') g.rect(s.b.x + d.dx, s.b.y + d.dy, s.b.w, s.b.h);
+        else if (s.kind === 'ellipse') g.ellipse(s.b.x + d.dx + s.b.w / 2, s.b.y + d.dy + s.b.h / 2, s.b.w / 2, s.b.h / 2);
+        else if (s.pts.length === 1) g.circle(s.pts[0].x + d.dx, s.pts[0].y + d.dy, s.r);
+        else { g.moveTo(s.pts[0].x + d.dx, s.pts[0].y + d.dy); for (const p of s.pts.slice(1)) g.lineTo(p.x + d.dx, p.y + d.dy); g.stroke({ width: s.r * 2, color: col, alpha: 0.4, cap: 'round', join: 'round' }); }
+      }
+      g.fill({ color: col, alpha: 0.4 });
+    }
   }
 
   private startTemplate(w: Vec, e: PointerEvent) {
@@ -1485,6 +1630,7 @@ export class Board {
   private onPointerMove(e: PointerEvent) {
     const w = this.screenToWorld(e.clientX, e.clientY);
     this.pointerW = w;
+    this.altDown = e.altKey;
     if (this.press && Math.hypot(e.clientX - this.press.x, e.clientY - this.press.y) > 6) this.cancelPress();
     const d = this.drag;
     if (!d) {
@@ -1521,13 +1667,19 @@ export class Board {
       case 'erase': this.eraseAt(w); break;
       case 'ruler': if (this.ruler) { this.ruler.b = this.rulerPoint(w, e); this.publishLive(); } break;
       case 'drawmove': {
-        const dx = w.x - d.start.x;
-        const dy = w.y - d.start.y;
+        let dx = w.x - d.start.x;
+        let dy = w.y - d.start.y;
         if (!d.moved && Math.hypot(dx, dy) * this.cam.zoom < 4) break;
+        if (d.snap && !e.altKey) {
+          // ground made of whole cells goes a whole cell (or hex) at a time, so it stays on the grid
+          const a = snapToCellCenter(this.client.grid, d.start), b = snapToCellCenter(this.client.grid, w);
+          dx = b.x - a.x; dy = b.y - a.y;
+        }
         d.moved = true; d.dx = dx; d.dy = dy;
         this.drawLayer.setOffset(new Set(d.ids), dx, dy);
         break;
       }
+      case 'terrain': this.paintTerrainAt(d, w); break;
       case 'brush': {
         const last = d.pts[d.pts.length - 1];
         if (Math.hypot(last.x - w.x, last.y - w.y) > this.client.grid.cell / 8) d.pts.push(w);
@@ -1635,6 +1787,7 @@ export class Board {
         this.sendMap.flush();
         break;
       case 'shape': this.commitShape(d); break;
+      case 'terrain': this.commitTerrain(d); break;
       case 'erase':
         this.drawLayer.setFaded(new Set());
         if (d.ids.size) void this.client.removeDrawings([...d.ids]);
@@ -1687,9 +1840,11 @@ export class Board {
       this.polyPts = [];
       this.drag = null;
       for (const v of this.views.values()) v.dragging = false;
+      // with the Heights tool, the first Esc lets go of the selected ground (so the next stroke starts a new area); the next one leaves the tool
+      const holding = ui.data.tool === 'height' && this.selectedAreas().length > 0;
       ui.select([]);
       ui.selectDrawings([]);
-      if (ui.data.tool !== 'select') ui.set({ tool: 'select' });
+      if (!holding && ui.data.tool !== 'select') ui.set({ tool: 'select' });
       this.invalidate();
       return;
     }

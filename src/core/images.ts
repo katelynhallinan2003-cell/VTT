@@ -13,6 +13,22 @@ export function loadImage(src: string | Blob, crossOrigin = true): Promise<HTMLI
   });
 }
 
+/** Work out (in plain words) why an image URL could not be used on the board. */
+export async function diagnoseImage(url: string): Promise<string> {
+  try {
+    const r = await fetch(url, { mode: 'cors', cache: 'no-store' });
+    if (!r.ok) return `the image host answered with an error (HTTP ${r.status}); the file may have been deleted`;
+    return 'the image downloaded but the browser could not decode it';
+  } catch {
+    try {
+      await fetch(url, { mode: 'no-cors', cache: 'no-store' });
+      return 'the image host does not allow other websites to use its images (CORS)';
+    } catch {
+      return 'the browser could not reach the image host (offline, or an ad/privacy blocker?)';
+    }
+  }
+}
+
 export function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality?: number): Promise<Blob> {
   return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not encode image'))), type, quality));
 }

@@ -8,13 +8,16 @@ import type { UiState } from '../state/ui';
 import type { Ping, Rect, Token, Vec } from '../types';
 import { throttle } from '../core/throttle';
 import { TokenView } from './TokenView';
-import { canvasTexture, loadTexture, releaseTexture, type LoadedTexture } from './textures';
+import { canvasTexture, loadTexture, releaseTexture, setTextureFailHandler, type LoadedTexture } from './textures';
+import { diagnoseImage } from '../core/images';
 
 export interface BoardCallbacks {
   onContextMenu(info: { clientX: number; clientY: number; tokenId: string | null; world: Vec }): void;
   /** DM finished dragging a rectangle with the grid tool */
   onGridRect(rect: Rect, derived: { cell: number; ox: number; oy: number }): void;
   onMapError(message: string | null): void;
+  /** a token's picture could not be loaded (shown once per picture) */
+  onTokenImageError(message: string): void;
 }
 
 type Drag =
@@ -95,7 +98,14 @@ export class Board {
   }
 
   // ------------------------------------------------------------------ lifecycle
+  private failedTokenUrls = new Set<string>();
+
   async init() {
+    setTextureFailHandler((kind, url) => {
+      if (kind !== 'token' || this.failedTokenUrls.has(url)) return;
+      this.failedTokenUrls.add(url);
+      void diagnoseImage(url).then((why) => { if (!this.destroyed) this.cb.onTokenImageError(`A token picture could not be shown: ${why}.`); });
+    });
     const app = new Application();
     await app.init({
       width: Math.max(1, this.host.clientWidth),
@@ -150,6 +160,7 @@ export class Board {
 
   destroy() {
     this.destroyed = true;
+    setTextureFailHandler(null);
     cancelAnimationFrame(this.raf);
     this.resizeObs?.disconnect();
     for (const u of this.unsubs) u();
@@ -311,7 +322,11 @@ export class Board {
     if (this.destroyed || this.client.scene?.id !== sceneId || this.mapUrl !== url) return;
     this.ui.set({ status: null });
     if (!tex) {
-      this.cb.onMapError('The map image could not be loaded. If it is hosted somewhere other than imgbb, the host may block it (CORS).');
+      // keep the camera on the (empty) board so tokens stay visible even without the picture
+      if (this.fitPending) { this.fit(); this.fitPending = false; }
+      const why = await diagnoseImage(url);
+      if (this.destroyed || this.mapUrl !== url) return;
+      this.cb.onMapError(`The map picture could not be shown: ${why}. Picture address: ${url}`);
       return;
     }
     this.cb.onMapError(null);

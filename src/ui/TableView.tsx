@@ -61,6 +61,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       onContextMenu: (info) => setMenu({ x: info.clientX, y: info.clientY, tokenId: info.tokenId, world: info.world }),
       onGridRect: (rect, derived) => setModal({ kind: 'grid', rect, derived }),
       onMapError: setMapError,
+      onTokenImageError: (m) => toast(m, 'error', 9000),
     });
     let dead = false;
     void b.init().then(() => { if (!dead) { boardRef.current = b; setBoard(b); (window as any).__vtt = { client, ui, board: b }; } });

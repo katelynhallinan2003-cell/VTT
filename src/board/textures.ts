@@ -23,6 +23,11 @@ export interface LoadedTexture {
 
 const cache = new Map<string, Promise<LoadedTexture | null>>();
 
+type FailHandler = (kind: 'map' | 'token', url: string) => void;
+let onFail: FailHandler | null = null;
+/** Called whenever a texture could not be loaded (the board turns this into a visible message). */
+export function setTextureFailHandler(fn: FailHandler | null) { onFail = fn; }
+
 /** Cap on texture side / pixel count so huge maps stay crisp without exhausting GPU memory. */
 function fitSize(w: number, h: number, maxSide: number, maxPixels: number) {
   let k = Math.min(1, maxSide / Math.max(w, h), Math.sqrt(maxPixels / (w * h)));
@@ -54,6 +59,7 @@ export function loadTexture(url: string, kind: 'map' | 'token'): Promise<LoadedT
       } catch (e) {
         console.warn('texture load failed', url, e);
         cache.delete(key);
+        onFail?.(kind, url);
         return null;
       }
     })();

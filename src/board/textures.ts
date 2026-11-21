@@ -1,5 +1,6 @@
 import { CanvasSource, ImageSource, Texture } from 'pixi.js';
 import { loadImage } from '../core/images';
+import { hideGrid, scaleCut, type GridCut, type PixelImage } from '../core/gridcut';
 
 let gpuMax = 0;
 export function maxTextureSide(): number {
@@ -97,4 +98,34 @@ export function releaseTexture(url: string, kind: 'map' | 'token') {
 
 export function canvasTexture(canvas: HTMLCanvasElement): Texture {
   return new Texture({ source: new CanvasSource({ resource: canvas, scaleMode: 'linear' }) });
+}
+
+/** The pixels of a loaded map, as the screen shows them (a very large map is already scaled down, see `scale`). */
+export function readPixels(tex: LoadedTexture): { img: PixelImage; id: ImageData; ctx: CanvasRenderingContext2D; canvas: HTMLCanvasElement } | null {
+  try {
+    const src = tex.texture.source as unknown as { resource: CanvasImageSource; pixelWidth: number; pixelHeight: number };
+    const w = src.pixelWidth, h = src.pixelHeight;
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(src.resource, 0, 0, w, h);
+    const id = ctx.getImageData(0, 0, w, h);
+    return { img: { data: id.data, width: w, height: h }, id, ctx, canvas };
+  } catch (e) {
+    console.warn('could not read the map pixels', e);
+    return null;
+  }
+}
+
+/** A copy of the map with its printed grid filled in. `cut` is in pixels of the original picture. */
+export async function gridlessTexture(tex: LoadedTexture, cut: GridCut): Promise<Texture | null> {
+  // let the screen paint ("working…") before the heavy part
+  await new Promise<void>((r) => setTimeout(r, 20));
+  const px = readPixels(tex);
+  if (!px) return null;
+  hideGrid(px.img, scaleCut(cut, 1 / tex.scale));
+  px.ctx.putImageData(px.id, 0, 0);
+  return new Texture({ source: new CanvasSource({ resource: px.canvas, scaleMode: 'linear', autoGenerateMipmaps: true }) });
 }

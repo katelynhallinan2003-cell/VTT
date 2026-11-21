@@ -49,6 +49,13 @@ export function normalizeGrid(raw: any): GridSettings {
   };
 }
 
+function normalizeMapGrid(raw: any): SceneMeta['mapGrid'] {
+  if (!raw || typeof raw !== 'object') return null;
+  const p = num(raw.p, 0);
+  if (!(p >= 4)) return null;
+  return { on: bool(raw.on, true), p, x: num(raw.x, 0), y: num(raw.y, 0), t: Math.min(24, Math.max(0.5, num(raw.t, 2))) };
+}
+
 export function normalizeSceneMeta(raw: any): SceneMeta {
   const m = raw ?? {};
   return {
@@ -60,6 +67,7 @@ export function normalizeSceneMeta(raw: any): SceneMeta {
     mapY: num(m.mapY, 0),
     mapScale: Math.max(0.01, num(m.mapScale, 1)),
     mapLocked: bool(m.mapLocked, true),
+    mapGrid: normalizeMapGrid(m.mapGrid),
     bg: OLD_DEFAULT_BGS.has(str(m.bg, '')) ? DEFAULT_BG : str(m.bg, DEFAULT_BG),
     grid: normalizeGrid(m.grid),
     fog: {

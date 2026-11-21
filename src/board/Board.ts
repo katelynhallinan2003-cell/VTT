@@ -8,6 +8,7 @@ import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
 import { altitudeOf, groundAt, heightChangeNote, heightNote, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
 import { EMPTY_TERRAIN, MAX_STROKE_CELLS, areaAt, areaLabel, areasSelected, cellKey, cellsAlong, heightColor, newAreaId, type Area, type Terrain } from '../core/terrain';
 import { cellPoly } from '../core/cells';
+import { findGrid, scaleCut, type GridCut } from '../core/gridcut';
 import { DEFAULT_GRID } from '../core/model';
 import { pctOf, toPub, visionCircles } from '../core/combat';
 import type { DrawingPatch, TableClient } from '../state/client';
@@ -17,7 +18,7 @@ import { throttle } from '../core/throttle';
 import { TokenView, type TokenCtx } from './TokenView';
 import { DrawLayer, paintShape } from './DrawLayer';
 import { TerrainLayer } from './TerrainLayer';
-import { canvasTexture, loadTexture, releaseTexture, setTextureFailHandler, type LoadedTexture } from './textures';
+import { canvasTexture, loadTexture, releaseTexture, setTextureFailHandler, type LoadedTexture, gridlessTexture, readPixels } from './textures';
 import { diagnoseImage } from '../core/images';
 
 export interface BoardCallbacks {
@@ -100,6 +101,10 @@ export class Board {
   private mapUrl: string | null = null;
   private mapTex: LoadedTexture | null = null;
   private mapScaleToWorld = 1;
+  /** the map with its printed grid filled in (shown instead of the original while that is switched on) */
+  private mapCutTex: Texture | null = null;
+  private mapCutKey = '';
+  private cutSeq = 0;
 
   private views = new Map<string, TokenView>();
   private fogMask = new FogMask();
@@ -222,6 +227,7 @@ export class Board {
     for (const f of this.cleanupInput) f();
     this.sendMoves.cancel();
     this.sendMap.cancel();
+    this.resetCut();
     if (this.mapUrl) releaseTexture(this.mapUrl, 'map');
     if (this.app) {
       try { this.app.destroy(true, { children: true }); } catch { /* already gone */ }
@@ -409,6 +415,7 @@ export class Board {
     this.drawPreview = null;
     this.ui.set({ drawSel: new Set(), testCount: 0, textEdit: null });
     if (this.mapSprite) { this.mapSprite.destroy(); this.mapSprite = null; }
+    this.resetCut();
     if (this.mapUrl) { releaseTexture(this.mapUrl, 'map'); this.mapUrl = null; }
     this.mapTex = null;
     this.cb.onMapError(null);
@@ -434,14 +441,67 @@ export class Board {
       this.mapUrl = meta.mapUrl;
       this.mapTex = null;
       if (this.mapSprite) { this.mapSprite.destroy(); this.mapSprite = null; }
+      this.resetCut();
       if (meta.mapUrl) void this.loadMap(meta.mapUrl, scene.id);
     }
     if (this.mapSprite && this.mapTex) {
       this.mapSprite.position.set(meta.mapX, meta.mapY);
       this.mapSprite.scale.set(meta.mapScale * this.mapScaleToWorld);
+      this.applyMapCut();
     }
     if (this.fitPending && !meta.mapUrl) { this.fit(); this.fitPending = false; }
     this.updateFog();
+  }
+
+  private resetCut() {
+    this.cutSeq++;
+    this.mapCutKey = '';
+    if (this.mapCutTex) { this.mapCutTex.destroy(true); this.mapCutTex = null; }
+  }
+
+  /** Show the map with or without its printed grid, whichever the scene says. Done on every screen from the saved lines, so nothing extra is stored. */
+  private applyMapCut() {
+    const sprite = this.mapSprite, tex = this.mapTex;
+    const cut = this.client.scene?.meta?.mapGrid;
+    if (!sprite || !tex) return;
+    const want = cut && cut.on ? cut : null;
+    const key = want ? `${this.mapUrl}|${want.p}|${want.x}|${want.y}|${want.t}` : '';
+    if (key === this.mapCutKey) return;
+    this.mapCutKey = key;
+    const seq = ++this.cutSeq;
+    if (!want) {
+      sprite.texture = tex.texture;
+      if (this.mapCutTex) { this.mapCutTex.destroy(true); this.mapCutTex = null; }
+      this.invalidate();
+      return;
+    }
+    void gridlessTexture(tex, want).then((t) => {
+      if (seq !== this.cutSeq || this.destroyed || this.mapSprite !== sprite) { t?.destroy(true); return; }
+      if (!t) { this.mapCutKey = ''; this.cb.onNotice("Couldn't hide the map's grid lines on this device.", 'error'); return; }
+      sprite.texture = t;
+      if (this.mapCutTex) this.mapCutTex.destroy(true);
+      this.mapCutTex = t;
+      this.invalidate();
+    });
+  }
+
+  /**
+   * Look for a grid printed on the map picture (the DM's "Find and hide" button).
+   * The answer is in pixels of the original picture, so it stays right however big the map is shown.
+   */
+  async findMapGrid(): Promise<{ cut: GridCut; strength: number } | { error: string }> {
+    const tex = this.mapTex;
+    const meta = this.client.scene?.meta;
+    if (!tex || !meta) return { error: 'Add a map picture first.' };
+    await new Promise<void>((r) => setTimeout(r, 20));
+    const px = readPixels(tex);
+    if (!px) return { error: "This browser would not let me read the map picture, so I can't look for lines in it." };
+    // the grid you already set is a good guess at the spacing; if nothing is there, look at every spacing
+    const hint = meta.grid.cell / (meta.mapScale * tex.scale);
+    let f = hint >= 10 ? findGrid(px.img, hint) : null;
+    if (!f) f = findGrid(px.img);
+    if (!f) return { error: 'I could not find evenly spaced grid lines in this picture. Some maps have none, or only faint ones.' };
+    return { cut: { ...scaleCut(f.cut, tex.scale), on: true }, strength: f.strength };
   }
 
   /** Try loading the map picture again (the banner's "Try again" button). */
@@ -477,6 +537,7 @@ export class Board {
     if (this.client.isDM && (!meta.mapW || !meta.mapH)) void this.client.updateScene({ mapW: tex.w, mapH: tex.h });
     sprite.position.set(meta.mapX, meta.mapY);
     sprite.scale.set(meta.mapScale * tex.scale);
+    this.applyMapCut();
     if (this.fitPending) { this.fit(); this.fitPending = false; }
     this.gridDirty = true;
     this.updateFog();

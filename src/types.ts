@@ -1,3 +1,4 @@
+import type { GridCut } from './core/gridcut';
 // Shared data model. Everything that crosses the network is plain JSON.
 // NOTE: Firebase Realtime Database drops null/undefined/empty values, so every
 // reader goes through the normalize*() helpers in core/model.ts to fill defaults.
@@ -58,6 +59,8 @@ export interface SceneMeta {
   mapY: number;
   mapScale: number;
   mapLocked: boolean;
+  /** a grid printed on the map picture, and whether it is hidden on screen (the picture itself is never changed) */
+  mapGrid: GridCut | null;
   bg: string;
   grid: GridSettings;
   fog: FogSettings;

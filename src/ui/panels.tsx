@@ -7,7 +7,8 @@ import { throttle } from '../core/throttle';
 import type { Board } from '../board/Board';
 import type { TableClient } from '../state/client';
 import type { DockTab, UiState } from '../state/ui';
-import type { Aura, GridSettings, LabelMode, Token, TokenShape } from '../types';
+import type { GridCut } from '../core/gridcut';
+import type { Aura, GridSettings, LabelMode, SceneMeta, Token, TokenShape } from '../types';
 import { Field, Section, SliderField, Toggle, toast, useClient, useUi } from './common';
 import { uploadImage } from './uploads';
 import { HpBar, parseDamage, tellTemp, tempPct } from './initiative';
@@ -189,6 +190,63 @@ function HpControl(props: { client: TableClient; tokens: Token[] }) {
 
 // ================================================================== scene panel (DM)
 /** The "Scene" tab: map, grid and fog settings. */
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Find the grid that is printed on the map picture, hide it on screen, and optionally line the app's own grid up with it. */
+function MapGridCut(props: { client: TableClient; board: Board | null; meta: SceneMeta }) {
+  const { client, board, meta } = props;
+  const [busy, setBusy] = useState(false);
+  const cut = meta.mapGrid;
+  const g = meta.grid;
+  const adjT = useThrottled((c: GridCut) => { void client.updateScene({ mapGrid: c }); });
+  if (isHex(g)) return <p class="hint">A hex grid printed on a map can't be hidden yet. Switch the grid type to squares to use this.</p>;
+  if (!meta.mapUrl) return <p class="hint">Add a map picture first.</p>;
+  const k = meta.mapScale;
+  const mod = (v: number, m: number) => ((v % m) + m) % m;
+  /** where the app's grid would sit to land exactly on the printed lines */
+  const implied = cut ? { cell: round2(cut.p * k), ox: round2(mod(meta.mapX + (cut.x + 0.5) * k, cut.p * k)), oy: round2(mod(meta.mapY + (cut.y + 0.5) * k, cut.p * k)) } : null;
+  const aligned = !implied || (Math.abs(g.cell - implied.cell) < 0.5 && [g.ox - implied.ox, g.oy - implied.oy].every((d) => Math.min(Math.abs(d), Math.abs(Math.abs(d) - implied.cell)) < 1.5));
+
+  async function find() {
+    if (!board || busy) return;
+    setBusy(true);
+    toast('Looking for grid lines in the map…', 'info', 1500);
+    try {
+      const r = await board.findMapGrid();
+      if ('error' in r) { toast(r.error, 'error', 7000); return; }
+      await client.updateScene({ mapGrid: r.cut });
+      toast(`Found lines every ${round2(r.cut.p)} px (about ${round2(r.cut.t)} px thick) and hid them.`, 'ok', 5000);
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <>
+      <p class="hint">If your map picture has a grid drawn on it, this finds it and covers it by filling each line in from the pixels beside it. The picture itself is never changed, and you can switch it back any time.</p>
+      <div class="row wrap">
+        <button class="btn small primary" disabled={busy || !board} onClick={() => void find()}>{busy ? 'Looking…' : cut ? 'Look again' : 'Find and hide it'}</button>
+        {cut && <button class="btn small" onClick={() => void client.updateScene({ mapGrid: null })}>Forget it</button>}
+      </div>
+      {cut && (
+        <>
+          <Toggle checked={cut.on} onChange={(v) => { void client.updateScene({ mapGrid: { ...cut, on: v } }); }} label="Hide the map's grid lines"
+            hint={`Lines every ${round2(cut.p)} px in the picture, about ${round2(cut.t)} px thick. Everyone sees the same thing.`} />
+          {!aligned && implied && (
+            <div class="row wrap">
+              <button class="btn small" title="Moves and resizes the app's grid so it sits exactly on the lines printed on the map"
+                onClick={() => { void client.updateScene({ grid: implied }); toast('Your grid now sits on the printed one', 'ok', 2500); }}>Line my grid up with it</button>
+            </div>
+          )}
+          <Section id="mapgrid-adjust" title="Adjust the hiding" defaultOpen={false}>
+            <SliderField label="Line width" value={cut.t} min={1} max={12} step={0.5} unit="px" onInput={(v) => adjT({ ...cut, t: v })} hint="Make this a little wider if a faint edge of a line is still showing." />
+            <SliderField label="Lines shift left / right" value={round2(cut.x)} min={0} max={Math.max(1, Math.round(cut.p))} step={0.1} unit="px" onInput={(v) => adjT({ ...cut, x: v })} />
+            <SliderField label="Lines shift up / down" value={round2(cut.y)} min={0} max={Math.max(1, Math.round(cut.p))} step={0.1} unit="px" onInput={(v) => adjT({ ...cut, y: v })} />
+          </Section>
+        </>
+      )}
+    </>
+  );
+}
+
 export function ScenePanel(props: { client: TableClient; ui: UiState; board: Board | null; onNewScene: () => void }) {
   const { client, ui, board } = props;
   useClient(client);
@@ -277,6 +335,10 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
             </Field>
           </div>
         </Section>
+      </Section>
+
+      <Section id="mapgrid" title="Grid printed on the map" defaultOpen={false}>
+        <MapGridCut client={client} board={board} meta={meta} />
       </Section>
 
       <Section id="fog" title="Fog of war">

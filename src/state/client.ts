@@ -54,7 +54,7 @@ export type ScenePatch = Partial<Omit<SceneMeta, 'grid' | 'fog'>> & {
 };
 
 let tokenClipboard: Token[] = [];
-const UNDOABLE_SCENE_KEYS = new Set(['mapX', 'mapY', 'mapScale', 'mapLocked', 'bg', 'grid', 'fog']);
+const UNDOABLE_SCENE_KEYS = new Set(['mapX', 'mapY', 'mapScale', 'mapLocked', 'mapGrid', 'bg', 'grid', 'fog']);
 
 /**
  * Everything the app knows about one table, kept in sync with the backend.
@@ -1111,7 +1111,7 @@ export class TableClient {
   }
 
   async setSceneMap(url: string, w: number, h: number) {
-    await this.updateScene({ mapUrl: url, mapW: w, mapH: h, mapX: 0, mapY: 0, mapScale: 1, mapLocked: true });
+    await this.updateScene({ mapUrl: url, mapW: w, mapH: h, mapX: 0, mapY: 0, mapScale: 1, mapLocked: true, mapGrid: null });
   }
 
   async deleteScene(sid: string): Promise<void> {

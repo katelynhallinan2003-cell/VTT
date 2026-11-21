@@ -17,10 +17,11 @@ const TOOLS: { id: DrawTool; label: string; hint: string }[] = [
 ];
 
 const TEMPLATES: { id: TemplateKind; label: string; hint: string }[] = [
-  { id: 'cone', label: 'Cone', hint: 'Drag out from the caster. It is as wide at the far end as it is long.' },
-  { id: 'cube', label: 'Cube', hint: 'Drag out from one face of the cube. The distance is the side length.' },
-  { id: 'sphere', label: 'Sphere', hint: 'Click the centre and drag out the radius.' },
-  { id: 'beam', label: 'Line', hint: 'Drag out the length of the line. Pick its width below.' },
+  { id: 'cone', label: 'Cone', hint: 'Click the middle of the edge of the caster\'s square and drag out. It is as wide at the far end as it is long.' },
+  { id: 'cube', label: 'Cube', hint: 'Click on one face and drag out. The distance is the side length, and it lines up with the squares.' },
+  { id: 'sphere', label: 'Sphere', hint: 'Click the centre (a grid corner) and drag out the radius.' },
+  { id: 'emanation', label: 'Emanation', hint: 'Click the square it comes out of and drag out. Its size is counted from the edge of that square, and the square itself is left out.' },
+  { id: 'beam', label: 'Line', hint: 'Click where it starts and drag out the length. Pick its width below.' },
 ];
 
 function Colors(props: { value: string; onPick: (c: string) => void; /** shown for a colour that can also be "the same as the outline" (value '') */ sameLabel?: string; fallback?: string; small?: boolean }) {
@@ -139,7 +140,7 @@ export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
     <div class="flyout">
       <div class="flyout-title">Spell templates</div>
       {!client.canDo('draw') && <p class="hint">Placing templates is turned off for players.</p>}
-      <div class="seg">
+      <div class="seg wrap">
         {TEMPLATES.map((x) => <button key={x.id} class={d.tplKind === x.id ? 'on' : ''} onClick={() => ui.set({ tplKind: x.id })}>{x.label}</button>)}
       </div>
       <Colors value={d.drawColor} onPick={(c) => ui.set({ drawColor: c })} />
@@ -152,7 +153,7 @@ export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
       )}
       <p class="hint">{t.hint} Sizes snap to whole squares (hold Alt to turn that off, Shift to lock the angle).</p>
       <div class="row wrap">
-        <button class="btn small" onClick={async () => { const n = await client.clearDrawings((x) => ['cone', 'cube', 'sphere', 'beam'].includes(x.k), 'Clear templates'); toast(n ? `Cleared ${n} template${n > 1 ? 's' : ''}` : 'No templates to clear', 'info', 1800); }}>
+        <button class="btn small" onClick={async () => { const n = await client.clearDrawings((x) => isTemplate(x.k), 'Clear templates'); toast(n ? `Cleared ${n} template${n > 1 ? 's' : ''}` : 'No templates to clear', 'info', 1800); }}>
           {client.isDM ? 'Clear all templates' : 'Clear my templates'}
         </button>
       </div>

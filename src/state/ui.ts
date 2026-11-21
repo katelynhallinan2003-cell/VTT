@@ -3,7 +3,7 @@ import { FONT_KEYS, type FillMode } from '../core/draw';
 
 export type Tool = 'select' | 'grid' | 'fog' | 'draw' | 'template' | 'ruler';
 export type DrawTool = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'erase';
-export type TemplateKind = 'cone' | 'cube' | 'sphere' | 'beam';
+export type TemplateKind = 'cone' | 'cube' | 'sphere' | 'emanation' | 'beam';
 export type StrokeSize = 'thin' | 'medium' | 'thick';
 export type FogShape = 'rect' | 'poly' | 'brush';
 export type DockTab = 'scene' | 'tokens' | 'init' | 'players';
@@ -75,7 +75,7 @@ export class UiState {
     selection: new Set(), mapSelected: false, dmPreview: false, zoom: 1, status: null,
     dockTab: null,
     drawTool: readStr('vtt-draw-tool', 'pen', ['pen', 'line', 'arrow', 'rect', 'ellipse', 'text', 'erase'] as const),
-    tplKind: readStr('vtt-tpl-kind', 'cone', ['cone', 'cube', 'sphere', 'beam'] as const),
+    tplKind: readStr('vtt-tpl-kind', 'cone', ['cone', 'cube', 'sphere', 'emanation', 'beam'] as const),
     drawColor: (() => { try { return localStorage.getItem('vtt-draw-color') || '#e03131'; } catch { return '#e03131'; } })(),
     drawSize: readStr('vtt-draw-size', 'medium', ['thin', 'medium', 'thick'] as const),
     drawFillMode: readStr('vtt-draw-fillmode', 'none', ['none', 'light', 'solid'] as const),

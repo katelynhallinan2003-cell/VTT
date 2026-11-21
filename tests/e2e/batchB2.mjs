@@ -163,7 +163,8 @@ let t = (await draws(dm)).find((d) => d.k === 'cone');
 const tp = t.p.split(',').map(Number);
 const tl = Math.hypot(tp[2] - tp[0], tp[3] - tp[1]);
 check('a cone snaps to whole squares (15 ft)', !!t && Math.abs(tl - 3 * cell) < 1.5, `${Math.round(tl)}px = ${(tl / cell) * 5}ft`);
-check('and its start sits on a grid corner', Math.abs((tp[0] / cell) - Math.round(tp[0] / cell)) < 0.05);
+{ const u = tp[0] / cell, v = tp[1] / cell, fr = (n) => Math.abs(n - Math.floor(n) - 0.5) < 0.05, ln = (n) => Math.abs(n - Math.round(n)) < 0.05;
+  check('and its start sits in the middle of a grid line (2024 rules)', (ln(u) && fr(v)) || (ln(v) && fr(u)), `${u.toFixed(2)},${v.toFixed(2)}`); }
 await dm.locator('.flyout .seg button', { hasText: 'Sphere' }).click();
 await rel(dm, { x: 9 * cell, y: 6 * cell }, { x: 13 * cell, y: 6 * cell }, 8);
 check('a sphere of 20 ft radius', (await draws(dm)).some((d) => d.k === 'sphere' && Math.abs(Math.hypot(...[d.p.split(',').map(Number)].map((q) => [q[2] - q[0], q[3] - q[1]])[0]) - 4 * cell) < 2));

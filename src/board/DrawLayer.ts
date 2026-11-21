@@ -52,10 +52,16 @@ export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1)
     const fillA = (s.fill > 0 ? s.fill : TEMPLATE_FILL) * alpha;
     if (geom.type === 'circle') g.circle(geom.c.x, geom.c.y, Math.max(0.5, geom.r)).fill({ color: fcol, alpha: fillA });
     else g.poly(geom.pts.flatMap((p) => [p.x, p.y])).fill({ color: fcol, alpha: fillA });
+    // an emanation does not include the square it comes out of
+    if (s.k === 'emanation' && geom.type === 'circle') {
+      const h = grid.cell / 2;
+      g.rect(geom.c.x - h, geom.c.y - h, grid.cell, grid.cell).cut();
+    }
     if (geom.type === 'circle') g.circle(geom.c.x, geom.c.y, Math.max(0.5, geom.r)).stroke({ ...stroke, width: Math.max(2, s.w) });
     else g.poly(geom.pts.flatMap((p) => [p.x, p.y]), true).stroke({ ...stroke, width: Math.max(2, s.w) });
-    // a dot on the point the template starts from
-    g.circle(pts[0].x, pts[0].y, Math.max(3, s.w * 1.2)).fill({ color: col, alpha });
+    // a dot on the point the template starts from (an emanation shows its square instead)
+    if (s.k === 'emanation') g.rect(pts[0].x - grid.cell / 2, pts[0].y - grid.cell / 2, grid.cell, grid.cell).stroke({ ...stroke, width: Math.max(1.5, s.w * 0.6) });
+    else g.circle(pts[0].x, pts[0].y, Math.max(3, s.w * 1.2)).fill({ color: col, alpha });
     return;
   }
 

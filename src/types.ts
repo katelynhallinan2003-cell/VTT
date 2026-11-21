@@ -118,7 +118,7 @@ export interface Aura {
   dm: boolean;
 }
 
-export type DrawKind = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'cone' | 'cube' | 'sphere' | 'beam';
+export type DrawKind = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'cone' | 'cube' | 'sphere' | 'emanation' | 'beam';
 
 /** Something drawn on the map: freehand, a shape, text or a spell template. */
 export interface Drawing {

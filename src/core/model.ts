@@ -123,7 +123,7 @@ export function normalizeAuras(raw: any): Aura[] {
   }));
 }
 
-const DRAW_KINDS = ['pen', 'line', 'arrow', 'rect', 'ellipse', 'text', 'cone', 'cube', 'sphere', 'beam'];
+const DRAW_KINDS = ['pen', 'line', 'arrow', 'rect', 'ellipse', 'text', 'cone', 'cube', 'sphere', 'emanation', 'beam'];
 
 export function normalizeDrawing(id: string, raw: any): Drawing | null {
   if (!raw || typeof raw.p !== 'string' || !DRAW_KINDS.includes(raw.k)) return null;

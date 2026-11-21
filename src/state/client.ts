@@ -10,7 +10,7 @@ import {
 import { lineOp } from '../core/fog';
 import { can, detectPreset, PRESETS, type Action } from '../core/permissions';
 import { mapRect, snapTokenCenter } from '../core/geometry';
-import { movedPoints } from '../core/draw';
+import { isTemplate, movedPoints } from '../core/draw';
 import { throttle } from '../core/throttle';
 import type {
   Drawing, FogOp, InitEntry, InitPub, InitState, LivePlot, GridSettings, Permissions, PermPreset, Ping, Player, Role, SceneIndexEntry,
@@ -564,7 +564,7 @@ export class TableClient {
     const wrote = this.backend.set(this.drawPath(id), drawingToWire(full));
     opts.onId?.(id);
     await wrote;
-    if (opts.record !== false) this.recordDrawn([full], d.k === 'cone' || d.k === 'cube' || d.k === 'sphere' || d.k === 'beam' ? 'Place template' : 'Draw');
+    if (opts.record !== false) this.recordDrawn([full], isTemplate(d.k) ? 'Place template' : 'Draw');
     return id;
   }
 

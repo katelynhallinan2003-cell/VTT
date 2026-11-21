@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_GRID, normalizeAuras, normalizeDrawing, normalizeLive } from '../src/core/model';
 import {
   beamWidthPx, dashSegments, distToSegment, drawingBounds, fillModeOf, fitPenPoints, handlesOf, hitDrawing, joinPts, movedPoints, parsePts, pointInPoly,
-  resizeDrawing, simplify, sizeFt, snapTemplate, templateFt, templateGeom, templateLabel, textMetrics, withSizeFt, MAX_PEN_POINTS,
+  resizeDrawing, simplify, sizeFt, snapToEdgeMid, snapTemplate, templateFt, templateGeom, templateLabel, textMetrics, withSizeFt, MAX_PEN_POINTS,
 } from '../src/core/draw';
 import type { Drawing } from '../src/types';
 
@@ -142,6 +142,62 @@ describe('hit testing', () => {
     expect(segs[0][0].x).toBe(0);
     expect(segs[0][1].x).toBeCloseTo(10);
     expect(segs[1][0].x).toBeCloseTo(20);
+  });
+});
+
+describe('spell templates on the grid (2024 rules)', () => {
+  const T = (kind: any, a: any, b: any, over: any = {}) => snapTemplate(grid, a, b, { origin: true, length: true, kind, widthPx: 100, ...over });
+  it('a cone starts in the middle of a square edge', () => {
+    expect(snapToEdgeMid(grid, { x: 98, y: 52 })).toEqual({ x: 100, y: 50 });
+    expect(snapToEdgeMid(grid, { x: 148, y: 103 })).toEqual({ x: 150, y: 100 });
+    const s = T('cone', { x: 98, y: 52 }, { x: 398, y: 52 });
+    expect(s.a).toEqual({ x: 100, y: 50 });
+    expect(s.b.x).toBeCloseTo(400, 0);
+    expect(s.b.y).toBeCloseTo(50, -1);
+  });
+  it('an emanation is centred on a square and counted from its edge', () => {
+    const s = T('emanation', { x: 130, y: 60 }, { x: 320, y: 50 });
+    expect(s.a).toEqual({ x: 150, y: 50 });
+    expect(s.b.x).toBeCloseTo(300); // 1.5 squares from the centre = 1 square past the edge
+    expect(templateFt(grid, s.a, s.b, 'emanation')).toBe(5);
+    expect(templateFt(grid, s.a, T('emanation', { x: 130, y: 60 }, { x: 430, y: 50 }).b, 'emanation')).toBe(10);
+    expect(templateLabel('emanation', grid, s.a, s.b, 5)).toBe('5 ft emanation');
+    const g = templateGeom('emanation', s.a, s.b, 0);
+    expect(g).toEqual({ type: 'circle', c: s.a, r: 150 });
+    // never smaller than one square past the edge
+    expect(templateFt(grid, s.a, T('emanation', { x: 130, y: 60 }, { x: 160, y: 50 }).b, 'emanation')).toBe(5);
+  });
+  it('a sphere still starts on a corner', () => {
+    expect(T('sphere', { x: 108, y: 93 }, { x: 441, y: 98 }).a).toEqual({ x: 100, y: 100 });
+  });
+  it('a cube lines up with the squares it covers, odd or even', () => {
+    const odd = T('cube', { x: 105, y: 240 }, { x: 405, y: 240 }); // 3 squares wide
+    expect(odd.a).toEqual({ x: 100, y: 250 });
+    expect(odd.b.x).toBeCloseTo(400);
+    const even = T('cube', { x: 105, y: 240 }, { x: 305, y: 240 }); // 2 squares wide
+    expect(even.a).toEqual({ x: 100, y: 200 });
+    // going down a column works the same way
+    const down = T('cube', { x: 240, y: 105 }, { x: 240, y: 405 });
+    expect(down.a).toEqual({ x: 250, y: 100 });
+    expect(down.b.y).toBeCloseTo(400);
+    // pointing diagonally leaves it free to turn
+    const diag = T('cube', { x: 100, y: 100 }, { x: 400, y: 400 });
+    expect(Math.abs(diag.b.x - diag.a.x)).toBeGreaterThan(150);
+    expect(Math.abs(diag.b.y - diag.a.y)).toBeGreaterThan(150);
+  });
+  it('a straight line covers whole rows', () => {
+    const s = T('beam', { x: 100, y: 330 }, { x: 500, y: 335 });
+    expect(s.a).toEqual({ x: 100, y: 350 });
+    expect(s.b.y).toBeCloseTo(350);
+    const wide = T('beam', { x: 100, y: 330 }, { x: 500, y: 335 }, { widthPx: 200 }); // 10 ft: straddles a grid line
+    expect(wide.a).toEqual({ x: 100, y: 300 });
+    // a slanted line is left alone
+    const slant = T('beam', { x: 100, y: 100 }, { x: 500, y: 300 });
+    expect(slant.b.y - slant.a.y).toBeGreaterThan(100);
+  });
+  it('turning snapping off leaves the start where it was clicked', () => {
+    const s = T('cone', { x: 98, y: 52 }, { x: 398, y: 52 }, { origin: false });
+    expect(s.a).toEqual({ x: 98, y: 52 });
   });
 });
 

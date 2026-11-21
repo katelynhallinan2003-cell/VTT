@@ -2,7 +2,7 @@ import { Application, Container, Graphics, Sprite, Text, Texture } from 'pixi.js
 import {
   clamp, distanceFt, fitCamera, gridFromRect, mapRect, normRect, pointInToken, rectContains, snapTokenCenter, snapToCellCenter, snapToCorner, zoomAt,
 } from '../core/geometry';
-import { FILL_LEVEL, STROKE_CELLS, dashSegments, fitPenPoints, handlesOf, hitDrawing, isTemplate, joinPts, resizeDrawing, setLineMeasurer, snapTemplate, templateLabel, type HandleId } from '../core/draw';
+import { FILL_LEVEL, STROKE_CELLS, beamWidthPx, dashSegments, fitPenPoints, handlesOf, hitDrawing, isTemplate, joinPts, resizeDrawing, setLineMeasurer, snapTemplate, templateLabel, type HandleId } from '../core/draw';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { pctOf, toPub, visionCircles } from '../core/combat';
 import type { DrawingPatch, TableClient } from '../state/client';
@@ -1160,9 +1160,10 @@ export class Board {
 
   private startTemplate(w: Vec, e: PointerEvent) {
     if (!this.client.canDo('draw')) { this.cb.onNotice('Drawing is turned off for players.', 'error'); return; }
-    const grid = this.client.grid;
-    const a = grid.snap && !e.altKey ? snapToCorner(grid, w) : w;
-    this.drag = { kind: 'shape', dk: this.ui.data.tplKind, start: a, pts: [a, a] };
+    // `start` stays where the pointer went down; where the template really starts depends on its kind and size (see snapTemplate)
+    const kind = this.ui.data.tplKind;
+    const a = this.templateSnap(kind, w, w, e).a;
+    this.drag = { kind: 'shape', dk: kind, start: w, pts: [a, a] };
   }
 
   private startRuler(w: Vec, e: PointerEvent) {
@@ -1185,10 +1186,19 @@ export class Board {
     if (hit && !d.ids.has(hit.id)) { d.ids.add(hit.id); this.drawLayer.setFaded(d.ids); this.invalidate(); }
   }
 
+  /** A template from the pointer-down point to the pointer, put on the grid the way the 2024 rules and the table expect. */
+  private templateSnap(kind: DrawKind, start: Vec, w: Vec, e: PointerEvent): { a: Vec; b: Vec } {
+    const grid = this.client.grid;
+    return snapTemplate(grid, start, w, {
+      origin: grid.snap && !e.altKey, length: !e.altKey, angleStep: e.shiftKey ? Math.PI / 12 : undefined,
+      kind, widthPx: beamWidthPx(grid, this.ui.data.tplWidth),
+    });
+  }
+
   private moveShape(d: Extract<Drag, { kind: 'shape' }>, w: Vec, e: PointerEvent) {
     const k = d.dk;
     if (isTemplate(k)) {
-      const sn = snapTemplate(this.client.grid, d.start, w, { origin: false, length: !e.altKey, angleStep: e.shiftKey ? Math.PI / 12 : undefined });
+      const sn = this.templateSnap(k, d.start, w, e);
       d.pts = [sn.a, sn.b];
       return;
     }

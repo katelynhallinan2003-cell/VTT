@@ -20,9 +20,9 @@ together with a link. Built for one DM and a handful of trusted friends, hosted 
 - **Pings:** middle-click the map or a token (configurable in Settings → Mouse: you can swap pan and ping buttons, or ping by holding the left mouse button).
 - **Undo / redo:** Ctrl+Z / Ctrl+Y for token moves, edits, deletes, map moves, grid changes and fog.
 - **Themes:** light (white drawing surface) and dark, plus a few fun ones, and your own accent colour, all in Settings.
-- **Drawing:** pen, line, arrow, box, circle, text and an eraser, in any colour, thin to thick, filled or dashed. Everyone with the permission can draw; you can move or delete your own (the DM can touch anything).
+- **Drawing:** pen, line, arrow, box, circle, text and an eraser. Shapes and text stay editable: click one to select it, then change its colours (outline and fill are separate; fill can be none, see-through or solid), thickness, dashing, or type a width / height / length in feet. Drag the white dots to resize, drag the shape to move it, arrow keys nudge it, Delete removes it. Text is typed right on the map at the size it will have, and can be edited again (double-click it, or select it and press Enter): font, size, bold, italic, underline, colour. Everyone with the permission can draw; you can change or delete your own (the DM can touch anything).
 - **Spell templates:** cone, cube, sphere and line that snap to your grid and read out their size in feet.
-- **Ruler:** measure with your table's diagonal rule. Private until you choose to show it.
+- **Ruler:** measure with your table's diagonal rule, in any colour you like. Private until you choose to show it. Switching on test move turns the ruler off.
 - **Test move:** try a move without making it. The token shows at the new spot, a shadow stays behind, with the distance. Keep it or reset it. Others only see it if you switch on "Show others".
 - **Auras:** coloured areas around a token (radius in feet, from the edge or the centre, round or square, DM-only if you like).
 - **Initiative (DM tab):** "Roll for initiative" pops up a number box for every token (Enter jumps to the next, or press the dice). The order sorts itself, you step through turns and rounds, drag lines to reorder, and hide any line from players. Nothing is shown to players until you tick "Show the order to players".

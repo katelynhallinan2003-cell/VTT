@@ -27,12 +27,7 @@ const state = () => dm.evaluate(() => {
   const { client } = window.__vtt;
   return { bg: client.scene?.meta?.bg, tokens: [...client.scene.tokens.values()].map((t) => ({ id: t.id, name: t.name, x: t.x, y: t.y, imgBg: t.imgBg, img: t.img })), canUndo: client.history.canUndo };
 });
-const toScreen = (wx, wy) => dm.evaluate(([x, y]) => {
-  const b = window.__vtt.board;
-  const r = b.app.canvas.getBoundingClientRect();
-  const p = b.worldToScreen ? b.worldToScreen(x, y) : { x: b.cam.tx + x * b.cam.zoom, y: b.cam.ty + y * b.cam.zoom };
-  return { x: r.left + p.x, y: r.top + p.y };
-}, [wx, wy]);
+const toScreen = (wx, wy) => dm.evaluate(([x, y]) => window.__vtt.board.worldToScreen({ x, y }), [wx, wy]);
 
 // white drawing surface by default
 check('scene background is white by default', (await state()).bg === '#ffffff');

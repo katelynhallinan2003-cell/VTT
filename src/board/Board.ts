@@ -2,10 +2,10 @@ import { Application, Container, Graphics, Sprite, Text, Texture } from 'pixi.js
 import {
   clamp, distanceFt, fitCamera, gridFromRect, mapRect, normRect, pointInToken, rectContains, snapTokenCenter, snapToCellCenter, snapToCorner, zoomAt,
 } from '../core/geometry';
-import { dashSegments, fitPenPoints, hitDrawing, isTemplate, joinPts, snapTemplate, templateLabel } from '../core/draw';
+import { FILL_LEVEL, STROKE_CELLS, dashSegments, fitPenPoints, handlesOf, hitDrawing, isTemplate, joinPts, resizeDrawing, setLineMeasurer, snapTemplate, templateLabel, type HandleId } from '../core/draw';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { pctOf, toPub, visionCircles } from '../core/combat';
-import type { TableClient } from '../state/client';
+import type { DrawingPatch, TableClient } from '../state/client';
 import type { StrokeSize, UiState } from '../state/ui';
 import type { DrawKind, Drawing, Ping, Rect, Token, Vec } from '../types';
 import { throttle } from '../core/throttle';
@@ -35,12 +35,12 @@ type Drag =
   | { kind: 'shape'; dk: DrawKind; start: Vec; pts: Vec[] }
   | { kind: 'erase'; ids: Set<string> }
   | { kind: 'ruler' }
-  | { kind: 'drawmove'; ids: string[]; start: Vec; dx: number; dy: number; moved: boolean };
+  | { kind: 'drawmove'; ids: string[]; start: Vec; dx: number; dy: number; moved: boolean }
+  | { kind: 'drawresize'; id: string; handle: HandleId; orig: Drawing; patch: DrawingPatch | null };
 
 const num = (c: string) => parseInt(c.replace('#', '').padEnd(6, '0').slice(0, 6), 16) || 0xffffff;
 const SELECT = 0x4da3ff;
 const PRESS_PING_MS = 450;
-const STROKE_CELLS: Record<StrokeSize, number> = { thin: 0.035, medium: 0.07, thick: 0.15 };
 const SHARE_BLUE = 0x4da3ff;
 
 interface PingFx { g: Graphics; label: Text; born: number; x: number; y: number; color: number }
@@ -69,7 +69,7 @@ export class Board {
   private liveSent = false;
   private seenDrawRev = -1;
   private seenLiveRev = -1;
-  private prevUi = { testMove: false, sharePlot: false, tool: 'select' as string };
+  private prevUi = { testMove: false, sharePlot: false, tool: 'select' as string, rulerColor: '' };
   private distText!: Text;
 
   private cam = { zoom: 1, tx: 0, ty: 0 };
@@ -105,6 +105,8 @@ export class Board {
   private spaceDown = false;
   /** holding the left button on empty space for a moment sends a ping */
   private press: { x: number; y: number; w: Vec; t0: number; timer: number } | null = null;
+  /** a drawing shown with unsaved changes while its handle is being dragged */
+  private drawPreview: { id: string; patch: DrawingPatch } | null = null;
   private dirty = true;
   private raf = 0;
   private lastT = 0;
@@ -130,6 +132,9 @@ export class Board {
   private failedTokenUrls = new Set<string>();
 
   async init() {
+    // text sizes come from a canvas, so boxes around text match what is drawn
+    const mctx = document.createElement('canvas').getContext('2d');
+    if (mctx) setLineMeasurer((css, line) => { mctx.font = css; return mctx.measureText(line).width; });
     setTextureFailHandler((kind, url) => {
       if (kind !== 'token' || this.failedTokenUrls.has(url)) return;
       this.failedTokenUrls.add(url);
@@ -213,6 +218,13 @@ export class Board {
     return { x: (clientX - r.left - this.cam.tx) / this.cam.zoom, y: (clientY - r.top - this.cam.ty) / this.cam.zoom };
   }
 
+  /** Where a world point is on the page (client coordinates), and how big the map is drawn. */
+  worldToScreen(p: Vec): Vec {
+    const r = this.app.canvas.getBoundingClientRect();
+    return { x: r.left + this.cam.tx + p.x * this.cam.zoom, y: r.top + this.cam.ty + p.y * this.cam.zoom };
+  }
+  get zoomNow() { return this.cam.zoom; }
+
   viewCenterWorld(): Vec {
     return { x: (this.host.clientWidth / 2 - this.cam.tx) / this.cam.zoom, y: (this.host.clientHeight / 2 - this.cam.ty) / this.cam.zoom };
   }
@@ -242,6 +254,7 @@ export class Board {
     this.gridDirty = true;
     this.invalidate();
     if (Math.abs(this.ui.data.zoom - this.cam.zoom) / this.cam.zoom > 0.005) this.ui.set({ zoom: this.cam.zoom });
+    if (this.ui.data.textEdit) this.ui.set({ camRev: this.ui.data.camRev + 1 });
     if (this.zoomSettleTimer) clearTimeout(this.zoomSettleTimer);
     this.zoomSettleTimer = setTimeout(() => this.settleText(), 180);
   }
@@ -310,7 +323,7 @@ export class Board {
     }
     if (scene.drawRev !== this.seenDrawRev) {
       this.seenDrawRev = scene.drawRev;
-      this.drawLayer.sync(c.drawingsSorted(), c.grid, this.textRes);
+      this.drawLayer.sync(this.drawingsShown(), c.grid, this.textRes);
       const stale = [...this.ui.data.drawSel].filter((id) => !scene.draws.has(id));
       if (stale.length) this.ui.selectDrawings([...this.ui.data.drawSel].filter((id) => scene.draws.has(id)));
       this.dirty = true;
@@ -337,7 +350,8 @@ export class Board {
     this.ruler = null;
     this.liveSent = false;
     this.ghostsDirty = true;
-    this.ui.set({ drawSel: new Set(), testCount: 0, textAt: null });
+    this.drawPreview = null;
+    this.ui.set({ drawSel: new Set(), testCount: 0, textEdit: null });
     if (this.mapSprite) { this.mapSprite.destroy(); this.mapSprite = null; }
     if (this.mapUrl) { releaseTexture(this.mapUrl, 'map'); this.mapUrl = null; }
     this.mapTex = null;
@@ -586,9 +600,10 @@ export class Board {
   private onUiChange() {
     const u = this.ui.data;
     const prev = this.prevUi;
-    this.prevUi = { testMove: u.testMove, sharePlot: u.sharePlot, tool: u.tool };
+    this.prevUi = { testMove: u.testMove, sharePlot: u.sharePlot, tool: u.tool, rulerColor: u.rulerColor };
     if (prev.testMove && !u.testMove && this.testMoves.size) this.resetTestMoves();
     if (u.sharePlot !== prev.sharePlot) this.publishLive(true);
+    if (u.rulerColor !== prev.rulerColor) { this.publishLive(); this.invalidate(); }
     if (prev.tool !== u.tool) {
       this.cancelPress();
       if (this.ruler && u.tool !== 'ruler') { this.ruler = null; this.publishLive(); }
@@ -599,7 +614,7 @@ export class Board {
   private publishLive(force = false) {
     const share = this.ui.data.sharePlot;
     const ghosts = share ? Object.fromEntries([...this.testMoves].map(([id, m]) => [id, m.to])) : {};
-    const ruler = share ? this.ruler : null;
+    const ruler = share && this.ruler ? { ...this.ruler, c: this.ui.data.rulerColor || undefined } : null;
     const any = !!ruler || Object.keys(ghosts).length > 0;
     if (!any && !this.liveSent && !force) return;
     this.liveSent = any;
@@ -834,12 +849,20 @@ export class Board {
 
     // outlines around selected drawings (shifted while they are being dragged)
     for (const id of u.drawSel) {
-      const dd = scene.draws.get(id);
+      const dd = this.shownDrawing(id);
       if (!dd) continue;
       const b = this.drawLayer.boundsOf(dd, grid);
       const mv = d?.kind === 'drawmove' && d.ids.includes(id) ? d : null;
       const pad = 5 / z;
       g.rect(b.x - pad + (mv?.dx ?? 0), b.y - pad + (mv?.dy ?? 0), b.w + pad * 2, b.h + pad * 2).stroke({ width: 1.5 / z, color: SELECT });
+    }
+    // handles to drag the edges, corners or ends of one selected drawing
+    if (u.drawSel.size === 1 && d?.kind !== 'drawmove' && (u.tool === 'select' || (u.tool === 'draw' && u.drawTool !== 'erase'))) {
+      const dd = this.shownDrawing([...u.drawSel][0]);
+      if (dd && this.client.canEditDrawing(dd)) {
+        const hs = 4.5 / z;
+        for (const h of handlesOf(dd)) g.rect(h.x - hs, h.y - hs, hs * 2, hs * 2).fill(0xffffff).stroke({ width: 1.5 / z, color: SELECT });
+      }
     }
 
     // the shape being dragged out
@@ -847,7 +870,7 @@ export class Board {
       const isT = isTemplate(d.dk);
       paintShape(g, {
         k: d.dk, pts: d.pts, color: u.drawColor, w: isT ? Math.max(2, this.strokePx()) : this.strokePx(),
-        fill: !isT && (d.dk === 'rect' || d.dk === 'ellipse') && u.drawFill ? 0.3 : 0, dash: !isT && u.drawDash, bw: u.tplWidth,
+        fill: !isT && (d.dk === 'rect' || d.dk === 'ellipse') ? FILL_LEVEL[u.drawFillMode] : 0, fc: u.drawFillColor, dash: !isT && u.drawDash, bw: u.tplWidth,
       }, grid, 0.85);
       if (isT && d.pts.length >= 2) this.plotLabel(li++, templateLabel(d.dk, grid, d.pts[0], d.pts[1], u.tplWidth), d.pts[1].x, d.pts[1].y - 12 / z, num(u.drawColor));
     }
@@ -856,13 +879,13 @@ export class Board {
     if (d?.kind === 'erase' && this.pointerW) g.circle(this.pointerW.x, this.pointerW.y, 6 / z).stroke({ width: 1.5 / z, color: 0xff6b6b });
 
     // my ruler, then everybody else's
-    const myCol = num(c.me?.color ?? '#ffffff');
+    const myCol = num(u.rulerColor || c.me?.color || '#ffffff');
     if (this.ruler) this.paintRuler(g, z, this.ruler, myCol, '', li++);
     for (const [uid, lv] of scene.live) {
       if (uid === c.uid) continue;
       const p = c.players.get(uid);
       const col = num(p?.color ?? '#ffffff');
-      if (lv.ruler) this.paintRuler(g, z, lv.ruler, col, p?.name ?? '', li++);
+      if (lv.ruler) this.paintRuler(g, z, lv.ruler, lv.ruler.c ? num(lv.ruler.c) : col, p?.name ?? '', li++);
       for (const [id, pos] of Object.entries(lv.ghosts)) {
         const t = scene.tokens.get(id);
         if (!t || !this.visibleToViewer(t)) continue;
@@ -930,7 +953,7 @@ export class Board {
     on(canvas, 'pointerleave', () => { this.pointerW = null; this.invalidate(); });
     on(canvas, 'contextmenu', (e: Event) => e.preventDefault());
     on(canvas, 'auxclick', (e: Event) => e.preventDefault());
-    on(canvas, 'dblclick', () => this.onDoubleClick());
+    on(canvas, 'dblclick', (e: MouseEvent) => this.onDoubleClick(e));
     on(canvas, 'wheel', (e: WheelEvent) => this.onWheel(e), { passive: false });
     on(window, 'keydown', (e: KeyboardEvent) => this.onKeyDown(e));
     on(window, 'keyup', (e: KeyboardEvent) => { if (e.code === 'Space') { this.spaceDown = false; this.updateCursor(); } });
@@ -982,6 +1005,10 @@ export class Board {
     if (e.button !== 0) return;
 
     const tool = this.ui.data.tool;
+    if (tool === 'select' || (tool === 'draw' && this.ui.data.drawTool !== 'erase')) {
+      const hh = this.handleAt(w);
+      if (hh) { this.drag = { kind: 'drawresize', id: hh.d.id, handle: hh.h.id, orig: hh.d, patch: null }; return; }
+    }
     if (tool === 'grid' && this.client.isDM) { this.drag = { kind: 'rect', start: w, cur: w }; return; }
     if (tool === 'fog' && this.client.isDM) { this.startFog(w, e); return; }
     if (tool === 'draw') { this.startDraw(w, e); return; }
@@ -1011,7 +1038,8 @@ export class Board {
       this.startPress(w, e);
       return;
     }
-    const dh = this.hitDrawingAt(w, false);
+    // a click inside a selected drawing grabs it too, even when its fill is see-through
+    const dh = this.hitDrawingAt(w, false) ?? this.hitSelectedDrawingInside(w);
     if (dh) {
       let sel = new Set(this.ui.data.drawSel);
       if (e.shiftKey) {
@@ -1072,6 +1100,41 @@ export class Board {
     return Math.max(1.5, STROKE_CELLS[this.ui.data.drawSize] * this.client.grid.cell);
   }
 
+  private drawingsShown(): Drawing[] {
+    const list = this.client.drawingsSorted();
+    const pv = this.drawPreview;
+    return pv ? list.map((d) => (d.id === pv.id ? { ...d, ...pv.patch } : d)) : list;
+  }
+
+  private shownDrawing(id: string): Drawing | undefined {
+    const d = this.client.scene?.draws.get(id);
+    const pv = this.drawPreview;
+    return d && pv?.id === id ? { ...d, ...pv.patch } : d;
+  }
+
+  private refreshDraws() {
+    this.drawLayer.sync(this.drawingsShown(), this.client.grid, this.textRes);
+    this.invalidate();
+  }
+
+  /** The resize handle under the pointer, for the one drawing that is selected. */
+  private handleAt(p: Vec): { d: Drawing; h: ReturnType<typeof handlesOf>[number] } | null {
+    if (this.ui.data.drawSel.size !== 1) return null;
+    const d = this.shownDrawing([...this.ui.data.drawSel][0]);
+    if (!d || !this.client.canEditDrawing(d)) return null;
+    const r = 7 / this.cam.zoom;
+    for (const h of handlesOf(d)) if (Math.abs(p.x - h.x) <= r && Math.abs(p.y - h.y) <= r) return { d, h };
+    return null;
+  }
+
+  private hitSelectedDrawingInside(p: Vec): Drawing | null {
+    for (const id of this.ui.data.drawSel) {
+      const d = this.client.scene?.draws.get(id);
+      if (d && this.client.canEditDrawing(d) && hitDrawing(d, p, 6 / this.cam.zoom, this.client.grid, true)) return d;
+    }
+    return null;
+  }
+
   private hitDrawingAt(p: Vec, solid: boolean): Drawing | null {
     const list = this.client.drawingsSorted();
     const tol = 6 / this.cam.zoom;
@@ -1085,7 +1148,12 @@ export class Board {
   private startDraw(w: Vec, e: PointerEvent) {
     if (!this.client.canDo('draw')) { this.cb.onNotice('Drawing is turned off for players.', 'error'); return; }
     const tool = this.ui.data.drawTool;
-    if (tool === 'text') { this.ui.set({ textAt: { sx: e.clientX, sy: e.clientY, x: w.x, y: w.y } }); return; }
+    if (tool === 'text') {
+      const hit = this.hitDrawingAt(w, true);
+      if (hit && hit.k === 'text') this.startTextEdit(hit);
+      else this.startTextEdit(null, w);
+      return;
+    }
     if (tool === 'erase') { this.drag = { kind: 'erase', ids: new Set() }; this.eraseAt(w); return; }
     this.drag = { kind: 'shape', dk: tool, start: w, pts: tool === 'pen' ? [w] : [w, w] };
   }
@@ -1156,22 +1224,54 @@ export class Board {
     else if (k === 'pen') { if (pts.length > 2) pts = fitPenPoints(pts, Math.max(0.6, 1 / this.cam.zoom)); }
     else if (len * this.cam.zoom < 4) return;
     const stroke = this.strokePx();
+    const closed = k === 'rect' || k === 'ellipse';
     void this.client.addDrawing({
       k, p: joinPts(pts), color: u.drawColor, w: isT ? Math.max(2, stroke) : stroke,
-      fill: !isT && (k === 'rect' || k === 'ellipse') && u.drawFill ? 0.3 : 0,
+      fill: !isT && closed ? FILL_LEVEL[u.drawFillMode] : 0, fc: closed ? u.drawFillColor : '',
       dash: !isT && u.drawDash, txt: '', fs: 28, bw: u.tplWidth,
-    }).catch((err: Error) => this.cb.onNotice(err.message, 'error'));
+    }, { onId: (id) => { if (closed || k === 'line' || k === 'arrow') this.ui.selectDrawings([id]); } }).catch((err: Error) => this.cb.onNotice(err.message, 'error'));
   }
 
-  /** Put a line of text on the map (called when the text box is confirmed). */
-  addText(at: Vec, text: string) {
-    const t = text.trim();
-    if (!t) return;
-    const cell = this.client.grid.cell;
+  // ------------------------------------------------------------------ text
+  /** Style for text that is about to be written: the colour, font and size picked in the Draw panel. */
+  textDefaults(): Pick<Drawing, 'color' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho'> {
     const u = this.ui.data;
-    const fs = Math.round(cell * (u.drawSize === 'thin' ? 0.32 : u.drawSize === 'thick' ? 0.7 : 0.45));
-    void this.client.addDrawing({ k: 'text', p: joinPts([at]), color: u.drawColor, w: 1, fill: 0, dash: false, txt: t, fs, bw: 5 })
-      .catch((err: Error) => this.cb.onNotice(err.message, 'error'));
+    const fs = Math.round(this.client.grid.cell * (u.drawSize === 'thin' ? 0.32 : u.drawSize === 'thick' ? 0.7 : 0.45));
+    return { color: u.drawColor, fs, font: u.textFont, b: u.textBold, i: u.textItalic, u: u.textUnderline, ho: false };
+  }
+
+  /** Open the text box: on an existing text drawing, or for a new one at `at`. */
+  startTextEdit(existing: Drawing | null, at?: Vec) {
+    if (!this.client.canDo('draw')) { this.cb.onNotice('Drawing is turned off for players.', 'error'); return; }
+    if (existing) {
+      const p = existing.p.split(',').map(Number);
+      this.ui.selectDrawings([existing.id]);
+      this.ui.set({ textEdit: { id: existing.id, x: p[0], y: p[1] } });
+      this.drawLayer.setHidden(existing.id);
+    } else if (at) {
+      this.ui.set({ textEdit: { id: null, x: at.x, y: at.y } });
+    }
+    this.invalidate();
+  }
+
+  /** The text box was closed: save what was typed (or drop the change). */
+  finishText(commit: boolean, value: string) {
+    const te = this.ui.data.textEdit;
+    if (!te) return;
+    this.ui.set({ textEdit: null });
+    this.drawLayer.setHidden(null);
+    this.invalidate();
+    if (!commit) return;
+    const v = value.replace(/\s+$/, '');
+    if (te.id) {
+      const cur = this.client.scene?.draws.get(te.id);
+      if (!cur) return;
+      if (!v.trim()) { void this.client.removeDrawings([te.id], 'Delete text'); this.ui.selectDrawings([]); }
+      else if (v !== cur.txt) void this.client.updateDrawings([te.id], { txt: v });
+    } else if (v.trim()) {
+      void this.client.addDrawing({ k: 'text', p: joinPts([{ x: te.x, y: te.y }]), w: 1, fill: 0, dash: false, txt: v, bw: 5, ...this.textDefaults() },
+        { onId: (id) => this.ui.selectDrawings([id]) }).catch((err: Error) => this.cb.onNotice(err.message, 'error'));
+    }
   }
 
   worldFromClient(clientX: number, clientY: number): Vec { return this.screenToWorld(clientX, clientY); }
@@ -1203,7 +1303,11 @@ export class Board {
     this.invalidate();
   }
 
-  private onDoubleClick() {
+  private onDoubleClick(e: MouseEvent) {
+    if (this.ui.data.tool === 'select') {
+      const hit = this.hitDrawingAt(this.screenToWorld(e.clientX, e.clientY), false);
+      if (hit?.k === 'text') { this.drag = null; this.startTextEdit(hit); return; }
+    }
     if (this.ui.data.tool === 'fog' && this.ui.data.fogShape === 'poly' && this.polyPts.length >= 3) {
       this.polyPts.pop(); // the second click of the double-click added a duplicate point
       this.finishPoly();
@@ -1240,6 +1344,12 @@ export class Board {
       }
       case 'rect': d.cur = w; break;
       case 'shape': this.moveShape(d, w, e); break;
+      case 'drawresize': {
+        d.patch = resizeDrawing(d.orig, d.handle, w, { shift: e.shiftKey, alt: e.altKey, grid: this.client.grid });
+        this.drawPreview = { id: d.id, patch: d.patch };
+        this.refreshDraws();
+        break;
+      }
       case 'erase': this.eraseAt(w); break;
       case 'ruler': if (this.ruler) { this.ruler.b = this.rulerPoint(w, e); this.publishLive(); } break;
       case 'drawmove': {
@@ -1363,6 +1473,13 @@ export class Board {
         this.drawLayer.setOffset(new Set(), 0, 0);
         if (d.moved) void this.client.moveDrawings(d.ids, d.dx, d.dy);
         break;
+      case 'drawresize': {
+        const patch = d.patch;
+        if (patch && Object.keys(patch).length) {
+          void this.client.updateDrawings([d.id], patch).finally(() => { this.drawPreview = null; this.refreshDraws(); });
+        } else { this.drawPreview = null; this.refreshDraws(); }
+        break;
+      }
       case 'marquee': break;
     }
   }
@@ -1390,7 +1507,8 @@ export class Board {
 
     if (e.key === 'Escape') {
       if (this.testMoves.size) { this.resetTestMoves(); return; }
-      if (ui.data.textAt) { ui.set({ textAt: null }); return; }
+      if (ui.data.textEdit) { this.finishText(false, ''); return; }
+      if (this.drawPreview) { this.drawPreview = null; this.refreshDraws(); }
       this.polyPts = [];
       this.drag = null;
       for (const v of this.views.values()) v.dragging = false;
@@ -1401,6 +1519,10 @@ export class Board {
       return;
     }
     if (e.key === 'Enter' && this.testMoves.size) { this.keepTestMoves(); return; }
+    if (e.key === 'Enter' && ui.data.drawSel.size === 1 && !ui.data.textEdit) {
+      const dd = c.scene?.draws.get([...ui.data.drawSel][0]);
+      if (dd?.k === 'text' && c.canEditDrawing(dd)) { e.preventDefault(); this.startTextEdit(dd); return; }
+    }
     if (e.key === 'Enter' && ui.data.tool === 'fog' && this.polyPts.length >= 3) { this.finishPoly(); return; }
 
     if ((e.key === 'Delete' || e.key === 'Backspace') && ui.data.drawSel.size) {
@@ -1446,6 +1568,14 @@ export class Board {
     }
     if (mod) return;
 
+    if (e.key.startsWith('Arrow') && !ui.data.selection.size && ui.data.drawSel.size) {
+      e.preventDefault();
+      const step = c.grid.cell * (e.shiftKey ? 1 : 0.25);
+      const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+      const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+      void c.moveDrawings([...ui.data.drawSel], dx, dy);
+      return;
+    }
     if (e.key.startsWith('Arrow') && ui.data.selection.size) {
       e.preventDefault();
       const step = c.grid.cell * (e.shiftKey ? 1 : 1);

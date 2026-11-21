@@ -131,13 +131,23 @@ export interface Drawing {
   color: string;
   /** stroke width in world pixels */
   w: number;
-  /** fill opacity 0..1 */
+  /** fill opacity 0..1 (0 = none, 1 = solid) */
   fill: number;
+  /** fill colour; empty means the same as the outline colour */
+  fc: string;
   dash: boolean;
-  /** text content (text only) */
+  /** text content (text only; lines are separated by \n) */
   txt: string;
   /** font size in world pixels (text only) */
   fs: number;
+  /** font family key (text only): '' sans, serif, mono, hand, fantasy */
+  font: string;
+  /** bold, italic, underline (text only) */
+  b: boolean;
+  i: boolean;
+  u: boolean;
+  /** no outline around the letters (text only) */
+  ho: boolean;
   /** width of a line template, in feet */
   bw: number;
   t: number;
@@ -146,7 +156,7 @@ export interface Drawing {
 /** What someone is plotting right now (ruler, test moves). Short-lived, only shared when they choose to. */
 export interface LivePlot {
   uid: string;
-  ruler: { a: Vec; b: Vec } | null;
+  ruler: { a: Vec; b: Vec; c?: string } | null;
   /** token id -> where they are trying that token out */
   ghosts: Record<string, Vec>;
 }

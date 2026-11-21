@@ -1,17 +1,18 @@
-import { useEffect, useRef } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import type { Board } from '../board/Board';
-import { DRAW_COLORS } from '../core/draw';
+import { DRAW_COLORS, DRAW_NAME, FILL_LEVEL, FONTS, LINE_H, STROKE_CELLS, fillModeOf, fontStack, isTemplate, sizeFt, withSizeFt, type FillMode } from '../core/draw';
 import type { TableClient } from '../state/client';
 import type { DrawTool, StrokeSize, TemplateKind, UiState } from '../state/ui';
-import { Toggle, toast, useUi } from './common';
+import type { Drawing } from '../types';
+import { Toggle, toast, useClient, useUi } from './common';
 
 const TOOLS: { id: DrawTool; label: string; hint: string }[] = [
   { id: 'pen', label: 'Pen', hint: 'Hold and drag to draw freehand.' },
   { id: 'line', label: 'Line', hint: 'Drag from one point to another. Hold Shift to lock the angle.' },
   { id: 'arrow', label: 'Arrow', hint: 'Drag to point at something. Hold Shift to lock the angle.' },
-  { id: 'rect', label: 'Box', hint: 'Drag a box. Hold Shift for a square.' },
+  { id: 'rect', label: 'Box', hint: 'Drag a box. Hold Shift for a square. Drag the dots on it to resize.' },
   { id: 'ellipse', label: 'Circle', hint: 'Drag out a circle or oval. Hold Shift for a perfect circle.' },
-  { id: 'text', label: 'Text', hint: 'Click where the words should go, type, press Enter.' },
+  { id: 'text', label: 'Text', hint: 'Click where the words should go, type, press Enter (Shift+Enter for a new line). Click text again to change it.' },
   { id: 'erase', label: 'Erase', hint: 'Click or swipe over drawings to remove them.' },
 ];
 
@@ -22,14 +23,73 @@ const TEMPLATES: { id: TemplateKind; label: string; hint: string }[] = [
   { id: 'beam', label: 'Line', hint: 'Drag out the length of the line. Pick its width below.' },
 ];
 
-function Colors(props: { value: string; onPick: (c: string) => void }) {
+function Colors(props: { value: string; onPick: (c: string) => void; /** shown for a colour that can also be "the same as the outline" (value '') */ sameLabel?: string; fallback?: string; small?: boolean }) {
+  const shown = props.value || props.fallback || '#e03131';
   return (
-    <div class="swatches">
+    <div class={`swatches ${props.small ? 'small' : ''}`}>
+      {props.sameLabel !== undefined && (
+        <button class={`swatch same ${props.value === '' ? 'on' : ''}`} title={props.sameLabel} aria-label={props.sameLabel} onClick={() => props.onPick('')}>＝</button>
+      )}
       {DRAW_COLORS.map((c) => (
         <button key={c} class={`swatch ${props.value.toLowerCase() === c ? 'on' : ''}`} style={{ background: c }} aria-label={c} onClick={() => props.onPick(c)} />
       ))}
-      <input type="color" value={props.value} title="Any colour" onInput={(e) => props.onPick((e.target as HTMLInputElement).value)} />
+      <input type="color" value={shown} title="Any colour" onInput={(e) => props.onPick((e.target as HTMLInputElement).value)} />
     </div>
+  );
+}
+
+const FILL_LABEL: Record<FillMode, string> = { none: 'None', light: 'See-through', solid: 'Solid' };
+
+/** None / see-through / solid, plus the fill colour (which can follow the outline). */
+function FillControls(props: { mode: FillMode; color: string; outline: string; onMode: (m: FillMode) => void; onColor: (c: string) => void }) {
+  return (
+    <>
+      <div class="seg">
+        {(['none', 'light', 'solid'] as FillMode[]).map((m) => <button key={m} class={props.mode === m ? 'on' : ''} onClick={() => props.onMode(m)}>{FILL_LABEL[m]}</button>)}
+      </div>
+      {props.mode !== 'none' && (
+        <div>
+          <span class="field-label">Fill colour</span>
+          <Colors value={props.color} fallback={props.outline} sameLabel="Same as the outline" small onPick={props.onColor} />
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Bold, italic and underline buttons. */
+function StyleButtons(props: { b: boolean; i: boolean; u: boolean; onB: (v: boolean) => void; onI: (v: boolean) => void; onU: (v: boolean) => void }) {
+  return (
+    <div class="seg style-btns">
+      <button class={props.b ? 'on' : ''} title="Bold" aria-label="Bold" onClick={() => props.onB(!props.b)}><b>B</b></button>
+      <button class={props.i ? 'on' : ''} title="Italic" aria-label="Italic" onClick={() => props.onI(!props.i)}><i>I</i></button>
+      <button class={props.u ? 'on' : ''} title="Underline" aria-label="Underline" onClick={() => props.onU(!props.u)}><u>U</u></button>
+    </div>
+  );
+}
+
+function FontSelect(props: { value: string; onChange: (k: string) => void }) {
+  return (
+    <select value={props.value} aria-label="Font" onChange={(e) => props.onChange((e.target as HTMLSelectElement).value)}>
+      {FONTS.map((f) => <option key={f.key} value={f.key} style={{ fontFamily: f.stack }}>{f.label}</option>)}
+    </select>
+  );
+}
+
+/** A number box that applies when you press Enter or click away. Out-of-range numbers are ignored. */
+function NumField(props: { label: string; value: number; min?: number; max?: number; step?: number; unit?: string; title?: string; onCommit: (n: number) => void }) {
+  return (
+    <label class="numf" title={props.title}>
+      <span>{props.label}</span>
+      <input key={props.value} type="number" defaultValue={props.value} min={props.min} max={props.max} step={props.step ?? 1}
+        onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+        onChange={(e) => {
+          const n = Number((e.target as HTMLInputElement).value);
+          if (Number.isFinite(n) && (props.min === undefined || n >= props.min) && (props.max === undefined || n <= props.max) && n !== props.value) props.onCommit(n);
+          else (e.target as HTMLInputElement).value = String(props.value);
+        }} />
+      {props.unit && <span class="unit">{props.unit}</span>}
+    </label>
   );
 }
 
@@ -39,6 +99,7 @@ export function DrawFlyout(props: { ui: UiState; client: TableClient }) {
   const tool = TOOLS.find((t) => t.id === d.drawTool) ?? TOOLS[0];
   const allowed = client.canDo('draw');
   const closed = d.drawTool === 'rect' || d.drawTool === 'ellipse';
+  const isText = d.drawTool === 'text';
   const wide = d.drawTool !== 'erase';
   return (
     <div class="flyout">
@@ -50,15 +111,21 @@ export function DrawFlyout(props: { ui: UiState; client: TableClient }) {
       {wide && <Colors value={d.drawColor} onPick={(c) => ui.set({ drawColor: c })} />}
       {wide && (
         <div class="seg">
-          {(['thin', 'medium', 'thick'] as StrokeSize[]).map((s) => <button key={s} class={d.drawSize === s ? 'on' : ''} onClick={() => ui.set({ drawSize: s })}>{s === 'thin' ? 'Thin' : s === 'medium' ? 'Medium' : 'Thick'}</button>)}
+          {(['thin', 'medium', 'thick'] as StrokeSize[]).map((s) => <button key={s} class={d.drawSize === s ? 'on' : ''} onClick={() => ui.set({ drawSize: s })}>{isText ? (s === 'thin' ? 'Small' : s === 'medium' ? 'Medium' : 'Large') : s === 'thin' ? 'Thin' : s === 'medium' ? 'Medium' : 'Thick'}</button>)}
         </div>
       )}
-      {closed && <Toggle checked={d.drawFill} onChange={(v) => ui.set({ drawFill: v })} label="Fill in" />}
-      {wide && d.drawTool !== 'text' && <Toggle checked={d.drawDash} onChange={(v) => ui.set({ drawDash: v })} label="Dashed" />}
+      {closed && <FillControls mode={d.drawFillMode} color={d.drawFillColor} outline={d.drawColor} onMode={(m) => ui.set({ drawFillMode: m })} onColor={(c) => ui.set({ drawFillColor: c })} />}
+      {isText && (
+        <div class="row wrap">
+          <FontSelect value={d.textFont} onChange={(k) => ui.set({ textFont: k })} />
+          <StyleButtons b={d.textBold} i={d.textItalic} u={d.textUnderline} onB={(v) => ui.set({ textBold: v })} onI={(v) => ui.set({ textItalic: v })} onU={(v) => ui.set({ textUnderline: v })} />
+        </div>
+      )}
+      {wide && !isText && <Toggle checked={d.drawDash} onChange={(v) => ui.set({ drawDash: v })} label="Dashed" />}
       <p class="hint">{tool.hint}</p>
       <div class="row wrap">
-        <button class="btn small" onClick={async () => { const n = await client.clearDrawings((x) => x.uid === client.uid && !['cone', 'cube', 'sphere', 'beam'].includes(x.k), 'Clear my drawings'); toast(n ? `Cleared ${n} drawing${n > 1 ? 's' : ''}` : 'Nothing of yours to clear', 'info', 1800); }}>Clear mine</button>
-        {client.isDM && <button class="btn small danger" onClick={async () => { const n = await client.clearDrawings((x) => !['cone', 'cube', 'sphere', 'beam'].includes(x.k), 'Clear all drawings'); toast(n ? `Cleared ${n} drawing${n > 1 ? 's' : ''}` : 'No drawings to clear', 'info', 1800); }}>Clear all</button>}
+        <button class="btn small" onClick={async () => { const n = await client.clearDrawings((x) => x.uid === client.uid && !isTemplate(x.k), 'Clear my drawings'); toast(n ? `Cleared ${n} drawing${n > 1 ? 's' : ''}` : 'Nothing of yours to clear', 'info', 1800); }}>Clear mine</button>
+        {client.isDM && <button class="btn small danger" onClick={async () => { const n = await client.clearDrawings((x) => !isTemplate(x.k), 'Clear all drawings'); toast(n ? `Cleared ${n} drawing${n > 1 ? 's' : ''}` : 'No drawings to clear', 'info', 1800); }}>Clear all</button>}
       </div>
     </div>
   );
@@ -96,12 +163,14 @@ export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
 export function RulerFlyout(props: { ui: UiState; client: TableClient }) {
   const { ui, client } = props;
   const d = useUi(ui);
-  const g = client.grid;
+  const mine = client.me?.color ?? '#ffffff';
   return (
     <div class="flyout">
       <div class="flyout-title">Ruler</div>
       {!client.canDo('measure') && <p class="hint">The ruler is turned off for players.</p>}
-      <p class="hint">Drag to measure. Distances use your grid rule ({g.rule === 'chebyshev' ? 'every diagonal is one square' : g.rule === 'alt' ? '5-10-5 diagonals' : 'true distance'}, {g.ft} ft per square). Hold Alt to measure freely instead of from square to square. Esc clears it.</p>
+      <p class="hint">Drag to measure. Hold Alt to measure freely instead of from square to square. Esc clears it.</p>
+      <span class="field-label">Colour</span>
+      <Colors value={d.rulerColor} fallback={mine} sameLabel="Use my player colour" onPick={(c) => ui.set({ rulerColor: c })} />
       <Toggle checked={d.sharePlot} onChange={(v) => ui.set({ sharePlot: v })} label="Show my ruler to everyone" hint="Off by default so planning doesn't distract the table." />
     </div>
   );
@@ -127,26 +196,120 @@ export function TestMoveBar(props: { ui: UiState; board: Board | null }) {
   );
 }
 
-/** A small text box where the text tool was clicked. */
-export function TextBox(props: { ui: UiState; board: Board | null }) {
-  const { ui, board } = props;
+/** The box you type in. It sits exactly where the text will be, at the same size, and follows the map when it moves or zooms. */
+export function TextEditor(props: { ui: UiState; client: TableClient; board: Board | null }) {
+  const { ui, client, board } = props;
   const d = useUi(ui);
-  const ref = useRef<HTMLInputElement>(null);
+  useClient(client);
+  const ref = useRef<HTMLTextAreaElement>(null);
   const finished = useRef(false);
-  const at = d.textAt;
-  useEffect(() => { finished.current = false; if (at) setTimeout(() => ref.current?.focus(), 0); }, [at?.x, at?.y]);
-  if (!at) return null;
+  const te = d.textEdit;
+  const existing = te?.id ? client.scene?.draws.get(te.id) : undefined;
+  useEffect(() => { finished.current = false; if (te) setTimeout(() => { const el = ref.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 0); }, [te?.id, te?.x, te?.y]);
+  const style = te && board ? (existing ?? { ...board.textDefaults(), txt: '' }) : null;
+  const text = existing?.txt ?? '';
+  // grow with what is typed
+  const fit = () => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.width = '10px';
+    el.style.height = '10px';
+    el.style.width = `${el.scrollWidth + 6}px`;
+    el.style.height = `${el.scrollHeight}px`;
+  };
+  useLayoutEffect(() => { fit(); });
+  if (!te || !board || !style) return null;
   const done = (commit: boolean) => {
     if (finished.current) return;
     finished.current = true;
-    const v = ref.current?.value ?? '';
-    ui.set({ textAt: null });
-    if (commit && v.trim()) board?.addText({ x: at.x, y: at.y }, v);
+    board.finishText(commit, ref.current?.value ?? '');
   };
+  const z = board.zoomNow;
+  const pos = board.worldToScreen({ x: te.x, y: te.y });
   return (
-    <input ref={ref} class="textbox" type="text" maxLength={120} placeholder="Type, then Enter"
-      style={{ left: `${at.sx}px`, top: `${at.sy - 16}px` }}
-      onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') done(true); else if (e.key === 'Escape') done(false); }}
+    <textarea ref={ref} class="text-editor" defaultValue={text} rows={1} spellcheck={false} placeholder="Type here"
+      key={`${te.id ?? 'new'}:${te.x}:${te.y}`}
+      style={{
+        left: `${pos.x}px`, top: `${pos.y}px`, fontSize: `${style.fs * z}px`, lineHeight: `${LINE_H}`,
+        color: style.color, fontFamily: fontStack(style.font), fontWeight: style.b ? '700' : '400', fontStyle: style.i ? 'italic' : 'normal',
+        textDecoration: style.u ? 'underline' : 'none',
+      }}
+      onInput={fit}
+      onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); done(true); } else if (e.key === 'Escape') { e.preventDefault(); done(false); } }}
       onBlur={() => done(true)} />
+  );
+}
+
+/** The panel at the bottom for whatever drawing is selected: colours, fill, size, text style. */
+export function DrawInspector(props: { ui: UiState; client: TableClient; board: Board | null }) {
+  const { ui, client, board } = props;
+  useClient(client);
+  const d = useUi(ui);
+  const list = [...d.drawSel].map((id) => client.scene?.draws.get(id)).filter((x): x is Drawing => !!x && client.canEditDrawing(x));
+  if (!list.length || d.textEdit) return null;
+  const one = list.length === 1 ? list[0] : null;
+  const first = list[0];
+  const ids = list.map((x) => x.id);
+  const upd = (patch: Parameters<TableClient['updateDrawings']>[1]) => { void client.updateDrawings(ids, patch); };
+  const allText = list.every((x) => x.k === 'text');
+  const allClosed = list.every((x) => x.k === 'rect' || x.k === 'ellipse');
+  const allTemplates = list.every((x) => isTemplate(x.k));
+  const strokeKey = (['thin', 'medium', 'thick'] as StrokeSize[]).reduce((best, k) => (Math.abs(STROKE_CELLS[k] * client.grid.cell - first.w) < Math.abs(STROKE_CELLS[best] * client.grid.cell - first.w) ? k : best), 'medium' as StrokeSize);
+  const size = one ? sizeFt(one, client.grid) : null;
+  const ft = client.grid.ft;
+  return (
+    <div class="drawtag" onMouseDown={(e) => e.stopPropagation()}>
+      <div class="dt-head">
+        <strong>{one ? DRAW_NAME[one.k] : `${list.length} drawings`}</strong>
+        <span class="grow" />
+        {one?.k === 'text' && <button class="btn small" title="Change the words (Enter)" onClick={() => board?.startTextEdit(one)}>Edit text</button>}
+        <button class="btn small danger" title="Delete (Del)" onClick={() => { void client.removeDrawings(ids); ui.selectDrawings([]); }}>Delete</button>
+        <button class="icon-btn" title="Deselect" onClick={() => ui.selectDrawings([])}>✕</button>
+      </div>
+      <div class="dt-body">
+        <div>
+          <span class="field-label">{allText ? 'Text colour' : allClosed ? 'Outline colour' : 'Colour'}</span>
+          <Colors value={first.color} small onPick={(c) => upd({ color: c })} />
+        </div>
+        {allClosed && (
+          <div>
+            <span class="field-label">Fill</span>
+            <FillControls mode={fillModeOf(first.fill)} color={first.fc} outline={first.color}
+              onMode={(m) => upd({ fill: FILL_LEVEL[m] })} onColor={(c) => upd({ fc: c })} />
+          </div>
+        )}
+        {allTemplates && (
+          <label class="field"><span class="field-label">Opacity</span>
+            <input type="range" min={10} max={100} value={Math.round((first.fill || 0.28) * 100)} onInput={(e) => upd({ fill: Number((e.target as HTMLInputElement).value) / 100 })} /></label>
+        )}
+        {!allText && !allTemplates && (
+          <div class="row wrap">
+            <div class="seg">
+              {(['thin', 'medium', 'thick'] as StrokeSize[]).map((k) => <button key={k} class={strokeKey === k ? 'on' : ''} onClick={() => upd({ w: Math.max(1.5, STROKE_CELLS[k] * client.grid.cell) })}>{k === 'thin' ? 'Thin' : k === 'medium' ? 'Medium' : 'Thick'}</button>)}
+            </div>
+            <Toggle checked={first.dash} onChange={(v) => upd({ dash: v })} label="Dashed" />
+          </div>
+        )}
+        {one && size && 'w' in size && (
+          <div class="row wrap">
+            <NumField label="Width" value={size.w} min={1} max={2000} step={ft} unit="ft" title="Width in feet" onCommit={(n) => { const p = withSizeFt(one, client.grid, 'w', n); if (p.p) upd(p); }} />
+            <NumField label="Height" value={size.h} min={1} max={2000} step={ft} unit="ft" title="Height in feet" onCommit={(n) => { const p = withSizeFt(one, client.grid, 'h', n); if (p.p) upd(p); }} />
+          </div>
+        )}
+        {one && size && 'len' in size && (
+          <NumField label="Length" value={size.len} min={1} max={2000} step={ft} unit="ft" title="Length in feet" onCommit={(n) => { const p = withSizeFt(one, client.grid, 'len', n); if (p.p) upd(p); }} />
+        )}
+        {allText && (
+          <div class="row wrap">
+            <FontSelect value={first.font} onChange={(k) => upd({ font: k })} />
+            <NumField label="Size" value={Math.round((first.fs / client.grid.cell) * 100)} min={5} max={1000} unit="%" title="Letter height as a percentage of a grid square"
+              onCommit={(n) => upd({ fs: Math.min(400, Math.max(6, Math.round((n / 100) * client.grid.cell * 10) / 10)) })} />
+            <StyleButtons b={first.b} i={first.i} u={first.u} onB={(v) => upd({ b: v })} onI={(v) => upd({ i: v })} onU={(v) => upd({ u: v })} />
+            <Toggle checked={!first.ho} onChange={(v) => upd({ ho: !v })} label="Outline" />
+          </div>
+        )}
+      </div>
+      <p class="hint">Drag it to move it · drag the white dots to resize · arrow keys nudge it · Del removes it</p>
+    </div>
   );
 }

@@ -42,6 +42,10 @@ export interface SceneState {
   metaRev: number;
 }
 
+/** A drawing as the caller describes it; the text styling and the fill colour are optional. */
+export type NewDrawing = Omit<Drawing, 'id' | 'uid' | 't' | 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho'> & Partial<Pick<Drawing, 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho'>>;
+export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho'>>;
+
 export type ScenePatch = Partial<Omit<SceneMeta, 'grid' | 'fog'>> & {
   grid?: Partial<GridSettings>;
   fog?: Partial<SceneMeta['fog']>;
@@ -552,12 +556,14 @@ export class TableClient {
 
   private drawPath(id: string) { return P.sceneDrawing(this.tableId, this.viewSceneId!, id); }
 
-  async addDrawing(d: Omit<Drawing, 'id' | 'uid' | 't'>, opts: { record?: boolean } = {}): Promise<string> {
+  async addDrawing(d: NewDrawing, opts: { record?: boolean; onId?: (id: string) => void } = {}): Promise<string> {
     if (!this.viewSceneId) throw new Error('No scene is open');
     if (!this.canDo('draw')) throw new Error('You are not allowed to draw here.');
     const id = this.backend.newKey();
-    const full: Drawing = { ...d, id, uid: this.uid, t: this.backend.now() };
-    await this.backend.set(this.drawPath(id), drawingToWire(full));
+    const full: Drawing = { fc: '', font: '', b: false, i: false, u: false, ho: false, ...d, id, uid: this.uid, t: this.backend.now() };
+    const wrote = this.backend.set(this.drawPath(id), drawingToWire(full));
+    opts.onId?.(id);
+    await wrote;
     if (opts.record !== false) this.recordDrawn([full], d.k === 'cone' || d.k === 'cube' || d.k === 'sphere' || d.k === 'beam' ? 'Place template' : 'Draw');
     return id;
   }
@@ -606,7 +612,7 @@ export class TableClient {
     if (record) this.history.push({ label: before.length > 1 ? 'Move drawings' : 'Move drawing', undo: () => write(before), redo: () => write(after) });
   }
 
-  async updateDrawings(ids: string[], patch: Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'dash' | 'txt' | 'bw'>>): Promise<void> {
+  async updateDrawings(ids: string[], patch: DrawingPatch): Promise<void> {
     const cur = ids.map((id) => this.scene?.draws.get(id)).filter((d): d is Drawing => !!d && this.canEditDrawing(d));
     if (!cur.length) return;
     const prev = cur.map((d) => ({ id: d.id, vals: Object.fromEntries(Object.keys(patch).map((k) => [k, (d as any)[k]])) }));
@@ -621,13 +627,13 @@ export class TableClient {
   }
 
   // ---------------------------------------------------------------- live plotting (ruler, test moves)
-  private liveMine: { ruler: { a: Vec; b: Vec } | null; ghosts: Record<string, Vec> } = { ruler: null, ghosts: {} };
+  private liveMine: { ruler: { a: Vec; b: Vec; c?: string } | null; ghosts: Record<string, Vec> } = { ruler: null, ghosts: {} };
   private liveSid: string | null = null;
   private liveArmed = false;
   private pushLive = throttle(() => { void this.writeLive(); }, 90);
 
   /** Share (or stop sharing) what you are plotting. Pass only the parts that changed. */
-  setLive(patch: { ruler?: { a: Vec; b: Vec } | null; ghosts?: Record<string, Vec> }) {
+  setLive(patch: { ruler?: { a: Vec; b: Vec; c?: string } | null; ghosts?: Record<string, Vec> }) {
     if (!this.viewSceneId) return;
     if (patch.ruler !== undefined) this.liveMine.ruler = patch.ruler;
     if (patch.ghosts !== undefined) this.liveMine.ghosts = patch.ghosts;
@@ -645,7 +651,7 @@ export class TableClient {
       if (!ruler && !Object.keys(gh).length) { await this.backend.remove(path); return; }
       if (!this.liveArmed) { this.backend.onDisconnectSet(path, null); this.liveArmed = true; }
       await this.backend.set(path, stripUndefined({
-        ruler: ruler ? { ax: Math.round(ruler.a.x), ay: Math.round(ruler.a.y), bx: Math.round(ruler.b.x), by: Math.round(ruler.b.y) } : undefined,
+        ruler: ruler ? { ax: Math.round(ruler.a.x), ay: Math.round(ruler.a.y), bx: Math.round(ruler.b.x), by: Math.round(ruler.b.y), c: ruler.c } : undefined,
         ghosts: Object.keys(gh).length ? gh : undefined,
       }));
     } catch (e) { console.warn('live plotting', (e as Error).message); }

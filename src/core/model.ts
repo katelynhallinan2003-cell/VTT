@@ -3,6 +3,7 @@ import type {
   TableSettings, Token, Vec,
 } from '../types';
 import { cleanHp, emptyInit, orderOf } from './combat';
+import { FONT_KEYS } from './draw';
 
 export const DEFAULT_GRID: GridSettings = {
   cell: 70, ox: 0, oy: 0, visible: true, color: '#000000', opacity: 0.35,
@@ -134,9 +135,15 @@ export function normalizeDrawing(id: string, raw: any): Drawing | null {
     color: str(raw.color, '#e03131'),
     w: Math.min(200, Math.max(0.5, num(raw.w, 4))),
     fill: Math.min(1, Math.max(0, num(raw.fill, 0))),
+    fc: typeof raw.fc === 'string' && /^#[0-9a-fA-F]{6}$/.test(raw.fc) ? raw.fc : '',
     dash: bool(raw.dash, false),
-    txt: typeof raw.txt === 'string' ? raw.txt.slice(0, 300) : '',
+    txt: typeof raw.txt === 'string' ? raw.txt.slice(0, 600) : '',
     fs: Math.min(400, Math.max(6, num(raw.fs, 28))),
+    font: typeof raw.font === 'string' && FONT_KEYS.includes(raw.font) ? raw.font : '',
+    b: bool(raw.b, false),
+    i: bool(raw.i, false),
+    u: bool(raw.u, false),
+    ho: bool(raw.ho, false),
     bw: Math.min(200, Math.max(1, num(raw.bw, 5))),
     t: num(raw.t, 0),
   };
@@ -144,13 +151,19 @@ export function normalizeDrawing(id: string, raw: any): Drawing | null {
 
 export function drawingToWire(d: Omit<Drawing, 'id'> | Drawing): Record<string, unknown> {
   const { id: _id, ...rest } = d as Drawing;
-  return stripUndefined({ ...rest, txt: rest.txt || undefined, dash: rest.dash || undefined, fill: rest.fill || undefined });
+  return stripUndefined({
+    ...rest, txt: rest.txt || undefined, dash: rest.dash || undefined, fill: rest.fill || undefined,
+    fc: rest.fc || undefined, font: rest.font || undefined, b: rest.b || undefined, i: rest.i || undefined, u: rest.u || undefined, ho: rest.ho || undefined,
+  });
 }
 
 export function normalizeLive(uid: string, raw: any): LivePlot | null {
   if (!raw || typeof raw !== 'object') return null;
   const ruler = raw.ruler && typeof raw.ruler === 'object'
-    ? { a: { x: num(raw.ruler.ax, 0), y: num(raw.ruler.ay, 0) }, b: { x: num(raw.ruler.bx, 0), y: num(raw.ruler.by, 0) } }
+    ? {
+      a: { x: num(raw.ruler.ax, 0), y: num(raw.ruler.ay, 0) }, b: { x: num(raw.ruler.bx, 0), y: num(raw.ruler.by, 0) },
+      ...(typeof raw.ruler.c === 'string' && /^#[0-9a-fA-F]{6}$/.test(raw.ruler.c) ? { c: raw.ruler.c } : {}),
+    }
     : null;
   const ghosts: Record<string, Vec> = {};
   if (raw.ghosts && typeof raw.ghosts === 'object') {

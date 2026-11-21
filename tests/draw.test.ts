@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_GRID, normalizeAuras, normalizeDrawing, normalizeLive } from '../src/core/model';
 import {
-  beamWidthPx, dashSegments, distToSegment, fitPenPoints, hitDrawing, joinPts, movedPoints, parsePts, pointInPoly,
-  simplify, snapTemplate, templateFt, templateGeom, templateLabel, MAX_PEN_POINTS,
+  beamWidthPx, dashSegments, distToSegment, drawingBounds, fillModeOf, fitPenPoints, handlesOf, hitDrawing, joinPts, movedPoints, parsePts, pointInPoly,
+  resizeDrawing, simplify, sizeFt, snapTemplate, templateFt, templateGeom, templateLabel, textMetrics, withSizeFt, MAX_PEN_POINTS,
 } from '../src/core/draw';
 import type { Drawing } from '../src/types';
 
 const grid = { ...DEFAULT_GRID, cell: 100, ft: 5 };
-const d = (over: Partial<Drawing>): Drawing => ({ id: 'x', uid: 'u', k: 'pen', p: '', color: '#f00', w: 4, fill: 0, dash: false, txt: '', fs: 28, bw: 5, t: 0, ...over });
+const d = (over: Partial<Drawing>): Drawing => ({ id: 'x', uid: 'u', k: 'pen', p: '', color: '#f00', w: 4, fill: 0, fc: '', dash: false, txt: '', fs: 28, font: '', b: false, i: false, u: false, ho: false, bw: 5, t: 0, ...over });
 
 describe('points', () => {
   it('round-trips and ignores junk', () => {
@@ -117,8 +117,16 @@ describe('hit testing', () => {
   });
   it('text is hit inside its box', () => {
     const t = d({ k: 'text', p: '100,100', txt: 'Hello', fs: 30 });
-    expect(hitDrawing(t, { x: 120, y: 90 }, 0, grid)).toBe(true);
-    expect(hitDrawing(t, { x: 400, y: 90 }, 0, grid)).toBe(false);
+    expect(hitDrawing(t, { x: 120, y: 110 }, 0, grid)).toBe(true);
+    expect(hitDrawing(t, { x: 120, y: 90 }, 0, grid)).toBe(false);
+    expect(hitDrawing(t, { x: 400, y: 110 }, 0, grid)).toBe(false);
+  });
+  it('a solid shape is hit inside even when only outlines are asked for; a see-through one is not', () => {
+    const solid = d({ k: 'rect', p: '0,0,100,100', fill: 1 });
+    const light = d({ k: 'rect', p: '0,0,100,100', fill: 0.3 });
+    expect(hitDrawing(solid, { x: 50, y: 50 }, 3, grid, false)).toBe(true);
+    expect(hitDrawing(light, { x: 50, y: 50 }, 3, grid, false)).toBe(false);
+    expect(hitDrawing(light, { x: 50, y: 50 }, 3, grid, true)).toBe(true);
   });
   it('moves every point', () => {
     expect(movedPoints({ p: '0,0,10,10' }, 5, -5)).toBe('5,-5,15,5');
@@ -137,10 +145,88 @@ describe('hit testing', () => {
   });
 });
 
+describe('text', () => {
+  it('measures lines and grows with more of them', () => {
+    const one = textMetrics({ txt: 'Hello', fs: 30, font: '', b: false, i: false });
+    const two = textMetrics({ txt: 'Hello\nWorld!', fs: 30, font: '', b: false, i: false });
+    expect(one.lines).toHaveLength(1);
+    expect(two.lines).toHaveLength(2);
+    expect(two.h).toBeCloseTo(one.h * 2);
+    expect(two.w).toBeGreaterThanOrEqual(one.w);
+  });
+  it('its box starts at the point (top-left) and bold text is wider', () => {
+    const t = d({ k: 'text', p: '100,200', txt: 'Hello', fs: 30 });
+    const b = drawingBounds(t);
+    expect(b.x).toBe(100);
+    expect(b.y).toBe(200);
+    expect(drawingBounds({ ...t, b: true }).w).toBeGreaterThan(b.w);
+  });
+});
+
+describe('handles and resizing', () => {
+  const box = d({ k: 'rect', p: '100,100,300,200' });
+  it('a box has eight handles, a line two, a template one, a pen none', () => {
+    expect(handlesOf(box)).toHaveLength(8);
+    expect(handlesOf(d({ k: 'line', p: '0,0,50,50' })).map((h) => h.id)).toEqual(['a', 'b']);
+    expect(handlesOf(d({ k: 'cone', p: '0,0,100,0' })).map((h) => h.id)).toEqual(['b']);
+    expect(handlesOf(d({ k: 'pen', p: '0,0,5,5,9,9' }))).toEqual([]);
+    expect(handlesOf(d({ k: 'text', p: '10,10', txt: 'Hi' })).map((h) => h.id)).toEqual(['se']);
+  });
+  it('dragging an edge moves only that edge', () => {
+    expect(resizeDrawing(box, 'e', { x: 400, y: 999 }, { grid }).p).toBe('100,100,400,200');
+    expect(resizeDrawing(box, 'n', { x: 999, y: 50 }, { grid }).p).toBe('100,50,300,200');
+  });
+  it('dragging a corner past the opposite one flips the box instead of inverting it', () => {
+    expect(resizeDrawing(box, 'se', { x: 50, y: 20 }, { grid }).p).toBe('50,20,100,100');
+  });
+  it('shift keeps the proportions of a box', () => {
+    // 200 x 100 box, drag the corner to (500, 200): width grows 2x so height must too
+    expect(resizeDrawing(box, 'se', { x: 500, y: 150 }, { grid, shift: true }).p).toBe('100,100,500,300');
+  });
+  it('a line end moves and shift snaps its angle', () => {
+    const ln = d({ k: 'line', p: '0,0,100,0' });
+    expect(resizeDrawing(ln, 'b', { x: 100, y: 100 }, { grid }).p).toBe('0,0,100,100');
+    const locked = parsePts(resizeDrawing(ln, 'b', { x: 100, y: 5 }, { grid, shift: true }).p!);
+    expect(locked[1].y).toBeCloseTo(0, 0);
+    expect(resizeDrawing(ln, 'a', { x: -50, y: 0 }, { grid }).p).toBe('-50,0,100,0');
+  });
+  it('text scales with its corner and stays in range', () => {
+    const t = d({ k: 'text', p: '0,0', txt: 'Hello', fs: 30 });
+    const b = drawingBounds(t);
+    expect(resizeDrawing(t, 'se', { x: b.w * 2, y: b.h * 2 }, { grid }).fs).toBeCloseTo(60, 0);
+    expect(resizeDrawing(t, 'se', { x: 0, y: 0 }, { grid }).fs).toBeGreaterThanOrEqual(6);
+    expect(resizeDrawing(t, 'se', { x: 1e6, y: 1e6 }, { grid }).fs).toBe(400);
+  });
+  it('a template end sets its length (whole squares) and direction', () => {
+    const cone = d({ k: 'cone', p: '0,0,100,0' });
+    expect(resizeDrawing(cone, 'b', { x: 296, y: 0 }, { grid }).p).toBe('0,0,300,0');
+    expect(resizeDrawing(cone, 'b', { x: 296, y: 0 }, { grid, alt: true }).p).toBe('0,0,296,0');
+  });
+  it('sizes in feet and back', () => {
+    expect(sizeFt(box, grid)).toEqual({ w: 10, h: 5 });
+    expect(sizeFt(d({ k: 'line', p: '0,0,300,400' }), grid)).toEqual({ len: 25 });
+    expect(sizeFt(d({ k: 'pen', p: '0,0,3,3' }), grid)).toBeNull();
+    expect(withSizeFt(box, grid, 'w', 20).p).toBe('100,100,500,200');
+    expect(withSizeFt(box, grid, 'h', 15).p).toBe('100,100,300,400');
+    expect(withSizeFt(d({ k: 'line', p: '0,0,300,400' }), grid, 'len', 50).p).toBe('0,0,600,800');
+    expect(withSizeFt(box, grid, 'w', 0)).toEqual({});
+  });
+  it('fill modes', () => {
+    expect(fillModeOf(0)).toBe('none');
+    expect(fillModeOf(0.3)).toBe('light');
+    expect(fillModeOf(1)).toBe('solid');
+  });
+});
+
 describe('normalisers', () => {
   it('fills in defaults and rejects unknown kinds', () => {
     expect(normalizeDrawing('a', { k: 'nope', p: '1,1' })).toBeNull();
-    expect(normalizeDrawing('a', { k: 'line', p: '1,1,2,2' })).toMatchObject({ id: 'a', k: 'line', w: 4, fill: 0, dash: false, bw: 5 });
+    expect(normalizeDrawing('a', { k: 'line', p: '1,1,2,2' })).toMatchObject({ id: 'a', k: 'line', w: 4, fill: 0, dash: false, bw: 5, fc: '', font: '', b: false, i: false, u: false, ho: false });
+  });
+  it('keeps text styling and fill colour, and drops junk', () => {
+    const t = normalizeDrawing('a', { k: 'text', p: '1,1', txt: 'Hi\nthere', font: 'serif', b: true, i: true, u: true, ho: true, fc: '#00ff00', fs: 40 })!;
+    expect(t).toMatchObject({ txt: 'Hi\nthere', font: 'serif', b: true, i: true, u: true, ho: true, fc: '#00ff00', fs: 40 });
+    expect(normalizeDrawing('a', { k: 'text', p: '1,1', font: 'comic-sans-xl', fc: 'red' })).toMatchObject({ font: '', fc: '' });
   });
   it('auras survive the database turning arrays into objects', () => {
     const list = normalizeAuras({ 0: { r: 10, color: '#fff' }, 1: { r: 30, shape: 'square', edge: false, dm: true, a: 0.5 } });
@@ -152,6 +238,8 @@ describe('normalisers', () => {
   it('live plotting needs something to show', () => {
     expect(normalizeLive('u', {})).toBeNull();
     expect(normalizeLive('u', { ruler: { ax: 1, ay: 2, bx: 3, by: 4 } })).toMatchObject({ ruler: { a: { x: 1, y: 2 }, b: { x: 3, y: 4 } } });
+    expect(normalizeLive('u', { ruler: { ax: 1, ay: 2, bx: 3, by: 4, c: '#ff0000' } })!.ruler!.c).toBe('#ff0000');
+    expect(normalizeLive('u', { ruler: { ax: 1, ay: 2, bx: 3, by: 4, c: 'nope' } })!.ruler!.c).toBeUndefined();
     expect(normalizeLive('u', { ghosts: { t1: { x: 5, y: 6 } } })!.ghosts.t1).toEqual({ x: 5, y: 6 });
   });
 });

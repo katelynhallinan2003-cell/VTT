@@ -8,7 +8,7 @@ import { UiState } from '../state/ui';
 import type { AuthUser, LibraryItem, Rect, Token, Vec } from '../types';
 import { Toasts, copyText, toast, useClient, useTheme, useUi } from './common';
 import { AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewSceneModal, ScenesModal, SettingsModal } from './modals';
-import { DrawFlyout, RulerFlyout, TemplateFlyout, TestMoveBar, TextBox } from './drawTools';
+import { DrawFlyout, DrawInspector, RulerFlyout, TemplateFlyout, TestMoveBar, TextEditor } from './drawTools';
 import { Dock, Rail, TokenTag } from './panels';
 import { InitRollModal, InitStrip } from './initiative';
 import { TokenEditorModal } from './tokenEditor';
@@ -222,7 +222,8 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {d.tool === 'template' && <TemplateFlyout ui={ui} client={client} />}
       {d.tool === 'ruler' && <RulerFlyout ui={ui} client={client} />}
       <TestMoveBar ui={ui} board={board} />
-      <TextBox ui={ui} board={board} />
+      <TextEditor ui={ui} client={client} board={board} />
+      <DrawInspector ui={ui} client={client} board={board} />
 
       {d.tool === 'fog' && client.isDM && (
         <div class="flyout">

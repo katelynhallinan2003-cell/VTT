@@ -282,11 +282,17 @@ input[type=text], input[type=number], input[type=password], select { border-radi
 .tok-list .icon-btn.on, .tok-list .icon-btn:hover { opacity: 1; }
 .sect .sect { margin-left: 4px; }
 
-.paint-layer { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.paint-layer, .image-layer, .sel-layer { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.brush-cursor { position: absolute; left: 0; top: 0; border-radius: 50%; border: 1.5px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.7), inset 0 0 0 1px rgba(0,0,0,.35); pointer-events: none; box-sizing: border-box; z-index: 5; }
+.crop-tools .num { min-width: 34px; text-align: right; }
+.sel-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; width: 100%; }
 .colorpick { display: inline-flex; align-items: center; gap: 6px; }
 .crop-tools.stack-tools { flex-wrap: wrap; width: 300px; }
-.crop-tools.brush-row { flex-wrap: wrap; width: 300px; min-height: 68px; align-content: flex-start; }
+.crop-tools.brush-row { flex-wrap: wrap; width: 300px; min-height: 96px; align-content: flex-start; }
 .crop-tools.stack-tools .seg { margin-bottom: 0; }
+.crop-tools.stack-tools .seg.wrap { display: flex; flex-wrap: wrap; width: 100%; }
+.crop-tools.stack-tools .seg.wrap button { flex: 1 0 30%; padding: 6px 4px; }
+.seg button:disabled { opacity: .45; cursor: default; }
 .crop-tools.stack-tools input[type=range] { min-width: 80px; }
 
 /* drawing tools */

@@ -164,7 +164,7 @@ await dm.locator('.modal .crop-tools input[type=color]').last().evaluate((el) =>
 await sleep(200);
 const frameBg = await dm.locator('.modal .crop-frame').evaluate((el) => getComputedStyle(el).backgroundColor);
 check('colour behind the picture shows in the frame', frameBg === 'rgb(47, 158, 68)', frameBg);
-await dm.locator('.modal .seg button', { hasText: 'Paint' }).click();
+await dm.locator('.modal .seg button', { hasText: /^Paint$/ }).click();
 const box = await dm.locator('.modal .crop-frame').boundingBox();
 await dm.mouse.move(box.x + 40, box.y + 100);
 await dm.mouse.down();
@@ -178,7 +178,7 @@ const painted = await dm.locator('.modal .paint-layer').evaluate((c) => {
 });
 check('painting puts pixels on the paint layer', painted > 500, `${painted}px`);
 await dm.screenshot({ path: '/tmp/shots/51-editor-paint.png' });
-await dm.locator('.modal .seg button', { hasText: 'Erase' }).click();
+await dm.locator('.modal .seg button', { hasText: /^Erase paint$/ }).click();
 const box2 = await dm.locator('.modal .crop-frame').boundingBox();
 check('switching to Erase does not move the picture', Math.abs(box2.y - box.y) < 1 && Math.abs(box2.x - box.x) < 1, `${box.y} -> ${box2.y}`);
 await dm.mouse.move(box.x + 40, box.y + 100);
@@ -191,7 +191,7 @@ const afterErase = await dm.locator('.modal .paint-layer').evaluate((c) => {
   return n;
 });
 check('erase removes paint', afterErase < painted, `${painted} -> ${afterErase}`);
-await dm.locator('.modal .seg button', { hasText: 'Paint' }).click();
+await dm.locator('.modal .seg button', { hasText: /^Paint$/ }).click();
 await dm.mouse.move(box.x + 100, box.y + 40);
 await dm.mouse.down();
 await dm.mouse.move(box.x + 100, box.y + 120, { steps: 6 });

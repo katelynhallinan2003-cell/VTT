@@ -7,8 +7,9 @@ import { PERM_LABELS, PRESETS, detectPreset } from '../core/permissions';
 import { makeSampleMap } from '../core/sample';
 import { addLibraryItem, removeLibraryItem, watchLibrary } from '../state/account';
 import type { TableClient } from '../state/client';
+import type { UiState } from '../state/ui';
 import type { LibraryItem, Permissions, TokenShape, Vec } from '../types';
-import { Field, Modal, SliderField, Toggle, copyText, toast, useClient, useTheme } from './common';
+import { Field, Modal, SliderField, Toggle, copyText, toast, useClient, useTheme, useUi } from './common';
 import { THEMES, getAccent, getTheme, setAccent, setTheme } from './theme';
 import { TokenCropper, NO_FRAMING, type Framing, type PaintApi } from './tokenCropper';
 import { addRecent, getRecent, uploadImage } from './uploads';
@@ -167,7 +168,7 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
 }
 
 // ================================================================== new scene
-export function NewSceneModal(props: { client: TableClient; onClose: () => void }) {
+export function NewSceneModal(props: { client: TableClient; onClose: () => void; onCreated?: () => void }) {
   const { client } = props;
   const lib = useLibrary(client, 'maps');
   const [name, setName] = useState('');
@@ -197,6 +198,7 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void 
         mapUrl = url.trim(); w = img.naturalWidth; h = img.naturalHeight;
       }
       await client.createScene({ name: name || fileName.replace(/\.\w+$/, '') || picked?.name || 'New scene', mapUrl, mapW: w, mapH: h, makeActive });
+      props.onCreated?.();
       props.onClose();
     } catch (e) {
       toast(asErr(e), 'error');
@@ -333,7 +335,7 @@ export function LibraryModal(props: { client: TableClient; onClose: () => void; 
 }
 
 // ================================================================== settings
-export function SettingsModal(props: { client: TableClient; onClose: () => void; onSignOut?: () => void }) {
+export function SettingsModal(props: { client: TableClient; ui: UiState; onClose: () => void; onSignOut?: () => void }) {
   const { client } = props;
   useClient(client);
   const [name, setName] = useState(client.meta?.name ?? '');
@@ -415,11 +417,14 @@ export function SettingsModal(props: { client: TableClient; onClose: () => void;
         </div>
       </Field>
 
+      <h3>Mouse</h3>
+      <MouseSettings ui={props.ui} />
+
       <h3>Keyboard &amp; mouse</h3>
       <ul class="keys">
-        <li><kbd>Middle-drag</kbd>, <kbd>Right-drag</kbd> or <kbd>Space</kbd>+drag — pan</li>
+        <li><kbd>Right-drag</kbd> or <kbd>Middle-drag</kbd> (your choice above) or <kbd>Space</kbd>+drag — pan</li>
         <li><kbd>Wheel</kbd> — zoom, <kbd>0</kbd> — fit the map</li>
-        <li>Hold <kbd>left mouse</kbd> on the map or a token for a moment — ping</li>
+        <li><kbd>Middle-click</kbd> or hold <kbd>left mouse</kbd> for a moment (your choice above) — ping</li>
         <li><kbd>Shift</kbd>+click — multi-select, drag on empty space — box select</li>
         <li><kbd>Alt</kbd> while dragging — move without snapping</li>
         <li><kbd>Arrows</kbd> — nudge a square, <kbd>Del</kbd> — delete</li>
@@ -482,6 +487,28 @@ export function ClaimModal(props: { client: TableClient; onClose: () => void; on
   );
 }
 
+/** Which mouse button pans and how pinging works. Saved in this browser only. */
+function MouseSettings(props: { ui: UiState }) {
+  const d = useUi(props.ui);
+  const panMiddle = d.panButton === 'middle';
+  return (
+    <>
+      <Field label="Pan the view with">
+        <div class="seg">
+          <button class={d.panButton === 'right' ? 'on' : ''} onClick={() => props.ui.set({ panButton: 'right' })}>Right mouse</button>
+          <button class={d.panButton === 'middle' ? 'on' : ''} onClick={() => props.ui.set({ panButton: 'middle' })}>Middle mouse</button>
+        </div>
+      </Field>
+      <Field label="Ping with" hint={panMiddle ? 'The middle button is used for panning, so pinging uses a held left click.' : 'Hold-to-ping waits a moment so it does not fire when you click or drag.'}>
+        <div class="seg">
+          <button class={!panMiddle && d.pingMode === 'middle' ? 'on' : ''} disabled={panMiddle} onClick={() => props.ui.set({ pingMode: 'middle' })}>Middle click</button>
+          <button class={panMiddle || d.pingMode === 'hold' ? 'on' : ''} onClick={() => props.ui.set({ pingMode: 'hold' })}>Hold left mouse</button>
+        </div>
+      </Field>
+    </>
+  );
+}
+
 /** Change your own display name and colour (used for pings). Works for the DM too. */
 export function MyProfile(props: { client: TableClient }) {
   const { client } = props;
@@ -505,16 +532,16 @@ export function MyProfile(props: { client: TableClient }) {
   );
 }
 
-export function PlayersModal(props: { client: TableClient; onClose: () => void }) {
+/** Who is at the table, plus your own name and colour. Lives in the right-hand Players tab. */
+export function PlayersPanel(props: { client: TableClient }) {
   const { client } = props;
   useClient(client);
   const list = [...client.players.values()].sort((a, b) => Number(b.dm) - Number(a.dm) || a.joinedAt - b.joinedAt);
   return (
-    <Modal title="Players & names" onClose={props.onClose} width={480}
-      footer={<button class="btn" onClick={props.onClose}>Done</button>}>
-      <h3>You</h3>
+    <>
+      <h4>You</h4>
       <MyProfile client={client} />
-      <h3>At this table</h3>
+      <h4>At this table</h4>
       {list.map((p) => (
         <div key={p.uid} class={`player-row ${p.online ? '' : 'off'}`}>
           <span class="dot" style={{ background: p.color }} />
@@ -530,7 +557,7 @@ export function PlayersModal(props: { client: TableClient; onClose: () => void }
         </div>
       ))}
       {list.length === 0 && <p class="muted">Nobody has joined yet.</p>}
-      {client.isDM && <p class="muted">Removing someone only clears them from this list and frees their tokens. They can use the link to join again.</p>}
-    </Modal>
+      {client.isDM && <p class="muted small">Removing someone only clears them from this list and frees their tokens. They can use the link to join again.</p>}
+    </>
   );
 }

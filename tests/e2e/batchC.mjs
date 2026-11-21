@@ -97,7 +97,7 @@ await dm.evaluate((i) => window.__vtt.client.updateTokens([i], { hp: 12, hpShow:
 await sleep(300);
 
 // ---- initiative
-await dm.locator('.dock-tabs button', { hasText: 'Initiative' }).click();
+await dm.locator('.rail-tab', { hasText: 'Initiative' }).click();
 check('the Initiative tab starts empty', (await dm.locator('.init-row').count()) === 0);
 await dm.getByRole('button', { name: /Roll for initiative/ }).first().click();
 await dm.waitForSelector('.roll-list');
@@ -187,7 +187,7 @@ await sleep(500);
 check('ending combat clears the order for everyone', (await dm.locator('.init-row').count()) === 0 && (await pl.locator('.initstrip').count()) === 0);
 
 // ---- fog sight
-await dm.locator('.dock-tabs button', { hasText: 'Scene' }).click();
+await dm.locator('.rail-tab', { hasText: 'Scene' }).click();
 await dm.evaluate(() => window.__vtt.client.resetFog('hidden'));
 await sleep(500);
 const lum = async (page, sx, sy) => {

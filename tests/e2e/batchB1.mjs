@@ -37,15 +37,15 @@ const toScreen = (wx, wy) => dm.evaluate(([x, y]) => {
 // white drawing surface by default
 check('scene background is white by default', (await state()).bg === '#ffffff');
 
-// grid panel is simpler: sliders hidden until Fine-tune is opened
+// grid panel is simpler: sliders hidden until Fine tune grid is opened
 await sleep(150);
 const visibleBefore = await dm.locator('.dock input[type=range]:visible').count();
 check('grid sliders are tucked away by default', visibleBefore === 0, `visible sliders=${visibleBefore}`);
 check('draw-a-box and snap stay visible', (await dm.locator('.dock >> text=Draw a box').count()) > 0 && (await dm.locator('.dock >> text=Snap tokens to grid').count()) > 0);
-await dm.locator('.sect-head', { hasText: 'Fine-tune' }).click();
+await dm.locator('.sect-head', { hasText: 'Fine tune grid' }).click();
 await sleep(150);
-check('Fine-tune opens the square size sliders', (await dm.locator('.dock input[type=range]:visible').count()) > 0);
-await dm.locator('.sect-head', { hasText: 'Fine-tune' }).click();
+check('Fine tune grid opens the square size sliders', (await dm.locator('.dock input[type=range]:visible').count()) > 0);
+await dm.locator('.sect-head', { hasText: 'Fine tune grid' }).click();
 await dm.locator('.sect-head', { hasText: 'Distance rules' }).click();
 await sleep(150);
 check('distance rules hold feet per square and diagonals', (await dm.locator('.dock >> text=Diagonals').count()) > 0 || (await dm.locator('.dock >> text=diagonal').count()) > 0);
@@ -105,17 +105,18 @@ check('Ctrl+Z undoes a map move', (await dm.evaluate(() => window.__vtt.client.s
 await dm.keyboard.press('Control+z'); // and the unlock
 await sleep(200);
 
-// middle mouse pans
+// right mouse pans by default
 const cam0 = await dm.evaluate(() => ({ ...window.__vtt.board.cam }));
 await dm.mouse.move(900, 600);
-await dm.mouse.down({ button: 'middle' });
+await dm.mouse.down({ button: 'right' });
 await dm.mouse.move(980, 650, { steps: 5 });
-await dm.mouse.up({ button: 'middle' });
+await dm.mouse.up({ button: 'right' });
 await sleep(200);
 const cam1 = await dm.evaluate(() => ({ ...window.__vtt.board.cam }));
-check('middle-drag pans the view', Math.abs(cam1.tx - cam0.tx) > 40 && Math.abs(cam1.ty - cam0.ty) > 20, `${cam1.tx - cam0.tx},${cam1.ty - cam0.ty}`);
+check('right-drag pans the view', Math.abs(cam1.tx - cam0.tx) > 40 && Math.abs(cam1.ty - cam0.ty) > 20, `${cam1.tx - cam0.tx},${cam1.ty - cam0.ty}`);
 
-// hold to ping — on empty space and on a token
+// hold to ping — an option now (the default is a middle click)
+await dm.evaluate(() => window.__vtt.ui.set({ pingMode: 'hold' }));
 const pings = () => dm.evaluate(() => window.__vtt.board.pings.length);
 const e0 = await pings();
 await dm.mouse.move(1000, 300);
@@ -145,7 +146,7 @@ await dm.keyboard.press('Control+z');
 await sleep(200);
 
 // token list tab
-await dm.locator('.dock-tabs button', { hasText: 'Tokens' }).click();
+await dm.locator('.rail-tab', { hasText: 'Tokens' }).click();
 await sleep(200);
 check('token list shows every token', (await dm.locator('.tok-list .tok-name').count()) === (await state()).tokens.length);
 await dm.locator('.dock input[type=text]').first().fill('Ogre');
@@ -153,7 +154,7 @@ await sleep(150);
 check('token list search filters', (await dm.locator('.tok-list .tok-name').count()) === 1);
 await dm.locator('.dock input[type=text]').first().fill('');
 await dm.screenshot({ path: '/tmp/shots/50-token-list.png' });
-await dm.locator('.dock-tabs button', { hasText: 'Scene' }).click();
+await dm.locator('.rail-tab', { hasText: 'Scene' }).click();
 
 // token editor: colour behind the picture, paint, bake
 await dm.evaluate((id) => window.__vtt.ui.select([id]), a);

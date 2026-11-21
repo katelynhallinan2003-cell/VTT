@@ -5,6 +5,7 @@ export type DrawTool = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 
 export type TemplateKind = 'cone' | 'cube' | 'sphere' | 'beam';
 export type StrokeSize = 'thin' | 'medium' | 'thick';
 export type FogShape = 'rect' | 'poly' | 'brush';
+export type DockTab = 'scene' | 'tokens' | 'init' | 'players';
 
 export interface UiData {
   tool: Tool;
@@ -18,9 +19,8 @@ export interface UiData {
   dmPreview: boolean;
   zoom: number;
   status: string | null;
-  /** the right-hand panel is expanded */
-  dockOpen: boolean;
-  dockTab: 'scene' | 'tokens' | 'init';
+  /** which right-hand panel is open (null = all collapsed to their little side tabs) */
+  dockTab: DockTab | null;
   drawTool: DrawTool;
   tplKind: TemplateKind;
   drawColor: string;
@@ -37,6 +37,10 @@ export interface UiData {
   testCount: number;
   /** show my ruler and test moves to everyone */
   sharePlot: boolean;
+  /** which mouse button pans the view (the other one opens the menu / pings) */
+  panButton: 'right' | 'middle';
+  /** how pinging works: middle click, or holding the left button */
+  pingMode: 'middle' | 'hold';
   /** where the text tool was clicked (screen + world), while the text box is open */
   textAt: { sx: number; sy: number; x: number; y: number } | null;
 }
@@ -48,16 +52,12 @@ function readStr<T extends string>(key: string, dflt: T, allowed: readonly T[]):
   try { const v = localStorage.getItem(key) as T | null; return v && allowed.includes(v) ? v : dflt; } catch { return dflt; }
 }
 
-function readDock(): boolean {
-  try { return localStorage.getItem('vtt-dock') !== '0'; } catch { return true; }
-}
-
 /** Tiny observable store for UI-level state that both the board and the panels need. */
 export class UiState {
   data: UiData = {
     tool: 'select', fogMode: 'r', fogShape: 'rect', brushSize: 2,
     selection: new Set(), mapSelected: false, dmPreview: false, zoom: 1, status: null,
-    dockOpen: readDock(), dockTab: 'scene',
+    dockTab: null,
     drawTool: readStr('vtt-draw-tool', 'pen', ['pen', 'line', 'arrow', 'rect', 'ellipse', 'text', 'erase'] as const),
     tplKind: readStr('vtt-tpl-kind', 'cone', ['cone', 'cube', 'sphere', 'beam'] as const),
     drawColor: (() => { try { return localStorage.getItem('vtt-draw-color') || '#e03131'; } catch { return '#e03131'; } })(),
@@ -68,6 +68,8 @@ export class UiState {
     drawSel: new Set(), testMove: false, testCount: 0,
     sharePlot: readFlag('vtt-share-plot', false),
     textAt: null,
+    panButton: readStr('vtt-pan-button', 'right', ['right', 'middle'] as const),
+    pingMode: readStr('vtt-ping-mode', 'middle', ['middle', 'hold'] as const),
   };
   private listeners = new Set<() => void>();
   private queued = false;
@@ -79,13 +81,14 @@ export class UiState {
 
   set(patch: Partial<UiData>) {
     try {
-      if (patch.dockOpen !== undefined) localStorage.setItem('vtt-dock', patch.dockOpen ? '1' : '0');
       if (patch.drawTool !== undefined) localStorage.setItem('vtt-draw-tool', patch.drawTool);
       if (patch.tplKind !== undefined) localStorage.setItem('vtt-tpl-kind', patch.tplKind);
       if (patch.drawColor !== undefined) localStorage.setItem('vtt-draw-color', patch.drawColor);
       if (patch.drawSize !== undefined) localStorage.setItem('vtt-draw-size', patch.drawSize);
       if (patch.drawFill !== undefined) localStorage.setItem('vtt-draw-fill', patch.drawFill ? '1' : '0');
       if (patch.drawDash !== undefined) localStorage.setItem('vtt-draw-dash', patch.drawDash ? '1' : '0');
+      if (patch.panButton !== undefined) localStorage.setItem('vtt-pan-button', patch.panButton);
+      if (patch.pingMode !== undefined) localStorage.setItem('vtt-ping-mode', patch.pingMode);
       if (patch.sharePlot !== undefined) localStorage.setItem('vtt-share-plot', patch.sharePlot ? '1' : '0');
     } catch { /* ignore */ }
     this.data = { ...this.data, ...patch };

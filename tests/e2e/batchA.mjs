@@ -64,25 +64,25 @@ const t = await dm.evaluate((i) => window.__vtt.client.scene.tokens.get(i), id);
 check('dragging and zooming in the editor saved the framing', t.imgX > 0.1 && t.imgY < -0.05 && t.imgScale > 1.2, `x=${t.imgX.toFixed(2)} y=${t.imgY.toFixed(2)} z=${t.imgScale.toFixed(2)}`);
 
 // players modal + rename
-await dm.locator('button.players').click();
+await dm.locator('.rail-tab', { hasText: 'Players' }).click();
 await dm.waitForSelector('.player-row');
 await dm.locator('.me-edit input[type=text]').fill('Narrator');
 await dm.locator('.me-edit input[type=text]').blur();
 await sleep(200);
 check('DM can rename themselves', await dm.evaluate(() => window.__vtt.client.me.name) === 'Narrator');
 await dm.screenshot({ path: '/tmp/shots/43-players.png' });
-await dm.keyboard.press('Escape');
+await dm.locator('.rail-tab', { hasText: 'Scene' }).click();
 
 // dock: collapse a section, hide the dock
-await dm.locator('.sect-head', { hasText: 'Grid' }).click();
+await dm.locator('.sect-head', { hasText: /^.\s*Grid$/ }).click();
 check('a section can be collapsed', (await dm.locator('.dock >> text=Show grid').count()) === 0);
 await dm.screenshot({ path: '/tmp/shots/44-dock-collapsed.png' });
-await dm.locator('.dock .icon-btn[title="Hide this panel"]').click();
-check('the dock can be hidden', (await dm.locator('.dock').count()) === 0 && (await dm.locator('.dock-tab').count()) === 1);
-await dm.locator('.dock-tab').click();
+await dm.locator('.dock .icon-btn[aria-label="Hide panel"]').click();
+check('the dock can be hidden', (await dm.locator('.dock').count()) === 0 && (await dm.locator('.rail-tab').count()) === 4);
+await dm.locator('.rail-tab', { hasText: 'Scene' }).click();
 check('and shown again', (await dm.locator('.dock').count()) === 1);
-await dm.locator('.sect-head', { hasText: 'Grid' }).click();
-await dm.locator('.sect-head', { hasText: 'Fine-tune' }).click();
+await dm.locator('.sect-head', { hasText: /^.\s*Grid$/ }).click();
+await dm.locator('.sect-head', { hasText: 'Fine tune grid' }).click();
 await sleep(150);
 const sw = await dm.locator('.dock input[type=range]').first().boundingBox();
 check('sliders are a decent width', sw.width > 120, `${Math.round(sw.width)}px`);
@@ -117,24 +117,23 @@ check('player joined', joined === 1, `players=${joined}`);
 // the player renames themselves and picks a new colour later
 await pl.keyboard.press('Escape'); // the "pick your character" offer
 await sleep(150);
-await pl.locator('button.players').click();
+await pl.locator('.rail-tab', { hasText: 'Players' }).click();
 await pl.locator('.me-edit input[type=text]').fill('Aria the Bold');
 await pl.locator('.me-edit input[type=text]').blur();
 await pl.locator('.me-edit .swatch').nth(3).click();
 await sleep(300);
 const ar = await dm.evaluate(() => [...window.__vtt.client.players.values()].find((p) => !p.dm));
 check('player rename + colour reach the DM', ar.name === 'Aria the Bold' && ar.color !== '#ffffff', `${ar.name} ${ar.color}`);
-await pl.keyboard.press('Escape');
+await pl.locator('.rail-tab', { hasText: 'Players' }).click();
 
 // DM removes the player; the player lands back on the join form
-await dm.locator('button.players').click();
+await dm.locator('.rail-tab', { hasText: 'Players' }).click();
 dm.once('dialog', (d) => d.accept());
 await dm.locator('.player-row .btn.danger').first().click();
 await sleep(600);
 const left = await dm.evaluate(() => [...window.__vtt.client.players.values()].filter((p) => !p.dm).length);
 check('DM removed the player', left === 0);
 check('removed player is sent back to the join form', (await pl.getByRole('button', { name: 'Join table' }).count()) === 1);
-await dm.keyboard.press('Escape');
 console.log(errors.filter((e) => !/GL Driver|404/.test(e)).join('\n') || 'no console problems');
 console.log(`${results.filter(Boolean).length}/${results.length} checks passed`);
 await browser.close();

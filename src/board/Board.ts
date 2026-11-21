@@ -26,7 +26,7 @@ export interface BoardCallbacks {
 }
 
 type Drag =
-  | { kind: 'pan'; sx: number; sy: number; tx: number; ty: number; moved: boolean; button: number }
+  | { kind: 'pan'; sx: number; sy: number; tx: number; ty: number; moved: boolean; button: number; noPan?: boolean }
   | { kind: 'tokens'; ids: string[]; anchor: string; start: Vec; origins: Map<string, Vec>; moved: boolean }
   | { kind: 'marquee'; start: Vec; cur: Vec; base: Set<string> }
   | { kind: 'rect'; start: Vec; cur: Vec }
@@ -746,7 +746,10 @@ export class Board {
       if (k > 0.25) {
         const col = num(this.client.me?.color ?? '#ffffff');
         g.circle(this.press.w.x, this.press.w.y, 6 / z).fill({ color: col, alpha: 0.9 });
-        g.arc(this.press.w.x, this.press.w.y, (10 + 14 * k) / z, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k).stroke({ width: 3 / z, color: col, alpha: 0.9 });
+        // move to the start of the arc first, otherwise Pixi joins it to the origin with a line across the whole map
+        const rr = (10 + 14 * k) / z;
+        g.moveTo(this.press.w.x, this.press.w.y - rr);
+        g.arc(this.press.w.x, this.press.w.y, rr, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k).stroke({ width: 3 / z, color: col, alpha: 0.9 });
       }
     }
 
@@ -961,9 +964,19 @@ export class Board {
 
     if (e.button === 1) e.preventDefault();
     canvas.setPointerCapture(e.pointerId);
-    if (e.button === 1 || e.button === 2 || (e.button === 0 && this.spaceDown)) {
+    const panBtn = this.ui.data.panButton === 'middle' ? 1 : 2;
+    if (e.button === panBtn || (e.button === 0 && this.spaceDown)) {
       this.drag = { kind: 'pan', sx: e.clientX, sy: e.clientY, tx: this.cam.tx, ty: this.cam.ty, moved: false, button: e.button };
       this.updateCursor();
+      return;
+    }
+    if (e.button === 1 && this.pingMode() === 'middle') {
+      if (this.client.canDo('ping')) { void this.client.ping(w.x, w.y); this.invalidate(); }
+      return;
+    }
+    if (e.button === 2) {
+      // the right button is free (the view pans with the middle one): a plain click opens the menu
+      this.drag = { kind: 'pan', sx: e.clientX, sy: e.clientY, tx: this.cam.tx, ty: this.cam.ty, moved: false, button: 2, noPan: true };
       return;
     }
     if (e.button !== 0) return;
@@ -1026,8 +1039,13 @@ export class Board {
   }
 
   /** Holding the left button still for a moment pings that spot. Moving more than a few pixels turns it into a normal drag. */
+  /** Middle-click pinging needs the middle button, so it only applies while the middle button is not used for panning. */
+  private pingMode(): 'middle' | 'hold' {
+    return this.ui.data.panButton === 'middle' ? 'hold' : this.ui.data.pingMode;
+  }
+
   private startPress(w: Vec, e: PointerEvent) {
-    if (!this.client.canDo('ping')) return;
+    if (this.pingMode() !== 'hold' || !this.client.canDo('ping')) return;
     this.cancelPress();
     this.press = {
       x: e.clientX, y: e.clientY, w, t0: performance.now(),
@@ -1209,7 +1227,7 @@ export class Board {
         const dx = e.clientX - d.sx;
         const dy = e.clientY - d.sy;
         if (Math.abs(dx) + Math.abs(dy) > 4) d.moved = true;
-        if (d.moved) { this.cam.tx = d.tx + dx; this.cam.ty = d.ty + dy; this.applyCamera(); }
+        if (d.moved && !d.noPan) { this.cam.tx = d.tx + dx; this.cam.ty = d.ty + dy; this.applyCamera(); }
         break;
       }
       case 'tokens': this.dragTokens(d, w, e); break;
@@ -1453,7 +1471,7 @@ export class Board {
 
     switch (e.key.toLowerCase()) {
       case 'v': ui.set({ tool: 'select' }); break;
-      case 'g': if (c.isDM) ui.set({ tool: ui.data.tool === 'grid' ? 'select' : 'grid' }); break;
+      case 'g': if (c.isDM && c.scene?.meta) void c.updateScene({ grid: { visible: !c.scene.meta.grid.visible } }); break;
       case 'f': if (c.isDM) ui.set({ tool: ui.data.tool === 'fog' ? 'select' : 'fog' }); break;
       case 'd': ui.set({ tool: ui.data.tool === 'draw' ? 'select' : 'draw' }); break;
       case 's': ui.set({ tool: ui.data.tool === 'template' ? 'select' : 'template' }); break;

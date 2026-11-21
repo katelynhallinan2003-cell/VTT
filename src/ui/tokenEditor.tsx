@@ -186,7 +186,7 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
               </Field>
             </>
           )}
-          {!multi && <AuraEditor auras={auras} ft={client.grid.ft} isDM={client.isDM} disabled={!editable} onChange={(a) => set({ auras: a })} />}
+          {!multi && <AuraEditor auras={auras} ft={client.grid.ft} isDM={client.isDM} disabled={!editable} defaultColor={ring} onChange={(a) => set({ auras: a })} />}
         </div>
       </div>
     </Modal>

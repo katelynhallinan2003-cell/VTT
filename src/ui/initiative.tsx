@@ -270,7 +270,7 @@ export function InitStrip(props: { client: TableClient; ui: UiState; board: Boar
   let turn: string | null = null;
   let round = 0;
   if (client.isDM) {
-    if (d.dockOpen || !scene.init.entries.length) return null;
+    if (d.dockTab === 'init' || !scene.init.entries.length) return null;
     items = orderOf(scene.init.entries).map((e) => ({ id: e.id, tk: e.tk, name: entryName(e, tokens), i: e.i, secret: e.h || !!(e.tk && tokens.get(e.tk)?.hidden) }));
     turn = scene.init.turn;
     round = scene.init.round;
@@ -284,7 +284,7 @@ export function InitStrip(props: { client: TableClient; ui: UiState; board: Boar
   if (!items.length) return null;
 
   return (
-    <div class="initstrip" onMouseDown={(e) => e.stopPropagation()} aria-label="Initiative order">
+    <div class={`initstrip ${d.dockTab ? 'shift' : ''}`} onMouseDown={(e) => e.stopPropagation()} aria-label="Initiative order">
       <div class="initstrip-head">
         <span>Round <strong>{Math.max(1, round)}</strong></span>
         {client.isDM && <button class="btn small primary" onClick={() => void client.initStep(1)}>Next ▶</button>}

@@ -9,12 +9,12 @@ const OPACITIES: { v: number; label: string }[] = [
 export const NEW_AURA: Aura = { r: 10, color: '#ff6b6b', a: 0.25, shape: 'circle', edge: true, dm: false };
 
 /** Coloured areas that follow a token, measured in feet (auras, emanations, spell effects). */
-export function AuraEditor(props: { auras: Aura[]; ft: number; isDM: boolean; disabled?: boolean; onChange: (a: Aura[]) => void }) {
+export function AuraEditor(props: { auras: Aura[]; ft: number; isDM: boolean; disabled?: boolean; /** colour for a new aura (the token's ring colour) */ defaultColor?: string; compact?: boolean; onChange: (a: Aura[]) => void }) {
   const { auras } = props;
   const upd = (i: number, patch: Partial<Aura>) => props.onChange(auras.map((a, k) => (k === i ? { ...a, ...patch } : a)));
   return (
     <div class="auras">
-      <h3>Auras</h3>
+      {!props.compact && <h3>Auras</h3>}
       {auras.length === 0 && <p class="muted small">Coloured areas around a token, such as a paladin's aura or a lingering spell. They follow the token and are measured in feet.</p>}
       {auras.map((a, i) => (
         <div class="aura-row" key={i}>
@@ -41,7 +41,7 @@ export function AuraEditor(props: { auras: Aura[]; ft: number; isDM: boolean; di
           <button class="btn small" disabled={props.disabled} title="Remove this aura" onClick={() => props.onChange(auras.filter((_, k) => k !== i))}>✕</button>
         </div>
       ))}
-      <button class="btn small" disabled={props.disabled || auras.length >= 6} onClick={() => props.onChange([...auras, { ...NEW_AURA, r: Math.max(5, props.ft * 2) }])}>+ Add aura</button>
+      <button class="btn small" disabled={props.disabled || auras.length >= 6} onClick={() => props.onChange([...auras, { ...NEW_AURA, color: props.defaultColor ?? NEW_AURA.color, r: Math.max(5, props.ft * 2) }])}>+ Add aura</button>
     </div>
   );
 }

@@ -17,7 +17,7 @@ together with a link. Built for one DM and a handful of trusted friends, hosted 
 - **Permissions:** Trusting (default) / Standard / Strict presets plus individual toggles.
 - **Hidden tokens:** DM-only tokens that players cannot even download. Reveal and hide at will.
 - **Fog of war:** manual, VBM-style. Reveal or hide with boxes, free-form shapes or a brush. Undo, hide all, reveal all, and preview as players.
-- **Pings:** hold the left mouse button on the map or a token.
+- **Pings:** middle-click the map or a token (configurable in Settings → Mouse: you can swap pan and ping buttons, or ping by holding the left mouse button).
 - **Undo / redo:** Ctrl+Z / Ctrl+Y for token moves, edits, deletes, map moves, grid changes and fog.
 - **Themes:** light (white drawing surface) and dark, plus a few fun ones, and your own accent colour, all in Settings.
 - **Drawing:** pen, line, arrow, box, circle, text and an eraser, in any colour, thin to thick, filled or dashed. Everyone with the permission can draw; you can move or delete your own (the DM can touch anything).
@@ -29,22 +29,23 @@ together with a link. Built for one DM and a handful of trusted friends, hosted 
 - **Hit points:** set on a token in the editor, shown as a bar on the token, in the initiative list and in the box at the bottom. Type a number and press − or + (Enter hurts, `+5` then Enter heals). Bloodied (half) and near death (a tenth) colour the token's edge. You choose what players see per token: nothing, colour only, or a bar. Players never receive the numbers, only a percentage, and the real values sit in the DM-only part of the database.
 - **Sight and fog:** give a token a sight distance (in feet) and, with "Tokens clear the fog around them" on, the fog opens around it as it moves. "Keep what they have explored" leaves the ground revealed behind them (it needs your browser open, because it is the DM's browser that adds the reveal strokes). Hidden tokens never clear fog, and a test move does not peek ahead.
 - **Token maker:** drag and zoom the picture, colour behind it, colour dropper, and a paint/erase brush.
-- **Scenes:** prepare a scene privately, then show it to players when ready. Tokens and fog are saved per scene.
+- **Scenes:** prepare a scene privately, then show it to players when ready. Tokens and fog are saved per scene. Switch, add and manage scenes from the one dropdown top left.
+- **Side tabs:** Scene, Tokens, Initiative and Players are separate tabs down the right edge. They start folded away; click one to open it, click it again to fold it. The Scene tab opens by itself when you create your first scene. The grid is set from the Scene tab ("Draw a box to set the grid"); the toolbar button just shows or hides it.
 - **Accounts:** Google sign-in for DMs only (allowlist), saved library of maps and token art that follows you between devices.
 
 ## Controls
 
 | | |
 | --- | --- |
-| Pan | middle-drag, right-drag, or Space + drag |
+| Pan | right-drag, or Space + drag (Settings → Mouse can swap this to the middle button) |
 | Zoom | mouse wheel (zooms toward the cursor), `0` fits the map |
 | Select | click, Shift+click, or drag a box on empty space |
 | Move | drag (Alt = no snapping). Arrow keys nudge one square |
-| Ping | hold the left mouse button |
+| Ping | middle click (Settings → Mouse can change this) |
 | Menu | right-click a token (or empty space) |
 | Draw / templates / ruler / test move | `D`, `S`, `R`, `M` |
 | Hit points | select a token, type a number, `Enter` (hurt) or `+` button (heal) |
-| Tools | `V` select, `G` grid (DM), `F` fog (DM), `T` new token |
+| Tools | `V` select, `G` show/hide the grid (DM), `F` fog (DM), `T` new token |
 | Undo / redo | `Ctrl+Z`, `Ctrl+Y` |
 | Copy / cut / paste / delete | `Ctrl+C`, `Ctrl+X`, `Ctrl+V`, `Del` |
 

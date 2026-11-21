@@ -7,9 +7,9 @@ import type { TableClient } from '../state/client';
 import { UiState } from '../state/ui';
 import type { AuthUser, LibraryItem, Rect, Token, Vec } from '../types';
 import { Toasts, copyText, toast, useClient, useTheme, useUi } from './common';
-import { AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewSceneModal, PlayersModal, ScenesModal, SettingsModal } from './modals';
+import { AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewSceneModal, ScenesModal, SettingsModal } from './modals';
 import { DrawFlyout, RulerFlyout, TemplateFlyout, TestMoveBar, TextBox } from './drawTools';
-import { Dock, TokenTag } from './panels';
+import { Dock, Rail, TokenTag } from './panels';
 import { InitRollModal, InitStrip } from './initiative';
 import { TokenEditorModal } from './tokenEditor';
 
@@ -21,7 +21,6 @@ type ModalState =
   | { kind: 'library' }
   | { kind: 'settings' }
   | { kind: 'claim' }
-  | { kind: 'players' }
   | { kind: 'editToken'; ids: string[] }
   | { kind: 'initRoll' }
   | { kind: 'grid'; rect: Rect; derived: { cell: number; ox: number; oy: number } };
@@ -43,9 +42,9 @@ const ICONS = {
   test: 'M6 20a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM18 9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM8 15l8-5',
 };
 
-function ToolBtn(props: { icon: keyof typeof ICONS; label: string; hotkey?: string; on?: boolean; disabled?: boolean; onClick: () => void }) {
+function ToolBtn(props: { icon: keyof typeof ICONS; label: string; hotkey?: string; on?: boolean; /** a plain on/off switch, not the active tool: shown more quietly */ toggle?: boolean; disabled?: boolean; onClick: () => void }) {
   return (
-    <button class={`tool ${props.on ? 'on' : ''}`} disabled={props.disabled} title={`${props.label}${props.hotkey ? ` (${props.hotkey})` : ''}`} aria-label={props.label} onClick={props.onClick}>
+    <button class={`tool ${props.on ? (props.toggle ? 'toggled' : 'on') : ''}`} disabled={props.disabled} title={`${props.label}${props.hotkey ? ` (${props.hotkey})` : ''}`} aria-label={props.label} onClick={props.onClick}>
       <Icon d={ICONS[props.icon]} />
     </button>
   );
@@ -135,8 +134,10 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
     try {
       let w = item.w ?? 0, h = item.h ?? 0;
       if (!w || !h) { const img = await loadImage(item.url, true); w = img.naturalWidth; h = img.naturalHeight; }
+      const firstMap = !client.scene?.meta?.mapUrl;
       if (!client.scene?.meta) await client.createScene({ name: item.name, mapUrl: item.url, mapW: w, mapH: h, makeActive: !client.activeSceneId });
       else await client.setSceneMap(item.url, w, h);
+      if (firstMap) ui.set({ dockTab: 'scene' });
       setModal(null);
     } catch { toast('Could not load that map.', 'error'); }
   }
@@ -183,9 +184,16 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
   }
 
   const live = client.sceneIsActive;
-  const showEmpty = scene?.loaded && !scene.meta;
-  const players = [...client.players.values()];
-  const mySel = scene && d.selection.size > 0;
+  // the DM with no scenes at all gets a big "create your first scene" card (after a short wait, so it does not flash while scenes load)
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    if (!client.metaLoaded) return;
+    const t = setTimeout(() => setSettled(true), 700);
+    return () => clearTimeout(t);
+  }, [client.metaLoaded]);
+  const showEmpty = settled && client.sceneIndex.length === 0 && !client.viewSceneId;
+    const mySel = scene && d.selection.size > 0;
+  const gridOn = !!scene?.meta?.grid.visible;
 
   return (
     <div class="table-root" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
@@ -194,7 +202,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {/* ---------------- left toolbar */}
       <nav class="toolbar">
         <ToolBtn icon="select" label="Select / move" hotkey="V" on={d.tool === 'select'} onClick={() => ui.set({ tool: 'select' })} />
-        {client.isDM && <ToolBtn icon="grid" label="Set grid from a box" hotkey="G" on={d.tool === 'grid'} onClick={() => ui.set({ tool: d.tool === 'grid' ? 'select' : 'grid' })} />}
+        {client.isDM && <ToolBtn icon="grid" label={gridOn ? 'Hide the grid' : 'Show the grid'} hotkey="G" on={gridOn} toggle disabled={!scene?.meta} onClick={() => void client.updateScene({ grid: { visible: !gridOn } })} />}
         {client.isDM && <ToolBtn icon="fog" label="Fog of war" hotkey="F" on={d.tool === 'fog'} onClick={() => ui.set({ tool: d.tool === 'fog' ? 'select' : 'fog' })} />}
         <ToolBtn icon="token" label="Add token" hotkey="T" onClick={() => client.canDo('create') ? openAddToken() : toast('You are not allowed to add tokens.', 'error')} />
         <div class="tool-sep" />
@@ -242,47 +250,41 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
         </div>
       )}
 
-      {/* ---------------- top bar */}
-      <header class="topbar">
+      {/* ---------------- top bar: two small pills, nothing across the middle */}
+      <header class="pill pill-left">
         <button class="brand" onClick={props.onHome} title="Back to start">⬡</button>
-        <div class="title">
-          <strong>{client.meta?.name ?? 'Table'}</strong>
-          {props.demo && <span class="badge warn" title="Data lives in this browser only">demo</span>}
-        </div>
+        {props.demo && <span class="badge warn" title="Data lives in this browser only">demo</span>}
         {client.isDM ? (
-          <div class="scene-pick">
-            <select value={client.viewSceneId ?? ''} onChange={(e) => { const v = (e.target as HTMLSelectElement).value; if (v === '__new') setModal({ kind: 'newScene' }); else client.openScene(v || null); }}>
-              {client.sceneIndex.length === 0 && <option value="">No scenes</option>}
-              {client.sceneIndex.map((s) => <option value={s.id}>{s.name}{client.activeSceneId === s.id ? '  ● live' : ''}</option>)}
+          <>
+            <select class="scene-select" aria-label="Scene" value={client.viewSceneId ?? ''}
+              onChange={(e) => {
+                const el = e.target as HTMLSelectElement;
+                const v = el.value;
+                if (v === '__new') { el.value = client.viewSceneId ?? ''; setModal({ kind: 'newScene' }); }
+                else if (v === '__manage') { el.value = client.viewSceneId ?? ''; setModal({ kind: 'scenes' }); }
+                else client.openScene(v || null);
+              }}>
+              {client.sceneIndex.length === 0 && <option value="">No scenes yet</option>}
+              {client.sceneIndex.map((sc) => <option key={sc.id} value={sc.id}>{sc.name}</option>)}
               <option value="__new">+ New scene…</option>
+              {client.sceneIndex.length > 0 && <option value="__manage">Manage scenes…</option>}
             </select>
-            {client.viewSceneId && !live && <button class="btn small primary" onClick={() => void client.setActiveScene(client.viewSceneId!)}>Show to players</button>}
-            {client.viewSceneId && !live && <span class="badge">private</span>}
-            {live && <span class="badge live">live</span>}
-          </div>
+            {client.viewSceneId && !live && <button class="btn small primary" title="Players are looking at another scene. Switch them to this one." onClick={() => void client.setActiveScene(client.viewSceneId!)}>Show to players</button>}
+          </>
         ) : (
           scene?.meta && <span class="scene-name">{scene.meta.name}</span>
         )}
-        <div class="spacer" />
-        <button class="players" title="Players & names" onClick={() => setModal({ kind: 'players' })}>
-          {players.map((p) => (
-            <span key={p.uid} class={`chip ${p.online ? '' : 'off'}`} title={`${p.name}${p.online ? '' : ' (offline)'}`}>
-              <span class="dot" style={{ background: p.color }} />{p.name}
-            </span>
-          ))}
-          {players.length === 0 && <span class="muted small">Players</span>}
-        </button>
+      </header>
+      <header class="pill pill-right">
         {!client.isDM && <button class="btn small" onClick={() => setModal({ kind: 'claim' })}>My token</button>}
-        {client.isDM && <button class="btn small" onClick={() => setModal({ kind: 'scenes' })}>Scenes</button>}
         {client.isDM && <button class="btn small" onClick={() => setModal({ kind: 'library' })}>Library</button>}
         {client.isDM && <button class="btn small" onClick={() => copyText(`${location.href.split('#')[0]}#/t/${client.tableId}`)}>Copy player link</button>}
         <button class="btn small" onClick={() => setModal({ kind: 'settings' })}>Settings</button>
       </header>
 
-      {/* ---------------- right dock (DM) */}
-      {client.isDM && (d.dockOpen
-        ? <Dock client={client} ui={ui} board={board} onNewScene={() => setModal({ kind: 'newScene' })} onEdit={(ids) => setModal({ kind: 'editToken', ids })} onRoll={() => setModal({ kind: 'initRoll' })} />
-        : <button class="dock-tab" onClick={() => ui.set({ dockOpen: true })}>Scene panel</button>)}
+      {/* ---------------- right side: little tabs, and the panel that opens beside them */}
+      <Rail client={client} ui={ui} />
+      <Dock client={client} ui={ui} board={board} onNewScene={() => setModal({ kind: 'newScene' })} onEdit={(ids) => setModal({ kind: 'editToken', ids })} onRoll={() => setModal({ kind: 'initRoll' })} />
       <InitStrip client={client} ui={ui} board={board} />
       {mySel && <TokenTag client={client} ui={ui} onEdit={(ids) => setModal({ kind: 'editToken', ids })} />}
 
@@ -299,7 +301,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
         </div>
       )}
       {client.metaLoaded && !client.isDM && !client.activeSceneId && <div class="empty-card"><h2>Waiting for the DM…</h2><p>No scene is being shown yet.</p></div>}
-      {scene?.meta && !scene.meta.mapUrl && client.isDM && <div class="hint-chip">This scene has no map yet. Add one in the panel on the right.</div>}
+      {scene?.meta && !scene.meta.mapUrl && client.isDM && <div class="hint-chip">This scene has no map yet. <button class="link" onClick={() => ui.set({ dockTab: 'scene' })}>Add one in the Scene tab</button>.</div>}
       {client.isDM && client.metaLoaded && client.backend.kind === 'firebase' && !client.uploadKey && (
         <div class="banner info">
           Add your imgbb API key to upload maps and tokens.{' '}
@@ -320,11 +322,10 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
 
       {/* ---------------- modals */}
       {modal?.kind === 'addToken' && <AddTokenModal client={client} at={modal.at} initialFile={modal.file} onClose={() => setModal(null)} onCreated={(id) => ui.select([id])} />}
-      {modal?.kind === 'newScene' && <NewSceneModal client={client} onClose={() => setModal(null)} />}
+      {modal?.kind === 'newScene' && <NewSceneModal client={client} onClose={() => setModal(null)} onCreated={() => ui.set({ dockTab: 'scene' })} />}
       {modal?.kind === 'scenes' && <ScenesModal client={client} onClose={() => setModal(null)} onNew={() => setModal({ kind: 'newScene' })} />}
       {modal?.kind === 'library' && <LibraryModal client={client} onClose={() => setModal(null)} onUseMap={useLibraryMap} onAddToken={addLibraryToken} />}
-      {modal?.kind === 'settings' && <SettingsModal client={client} onClose={() => setModal(null)} onSignOut={client.isDM ? props.onSignOut : undefined} />}
-      {modal?.kind === 'players' && <PlayersModal client={client} onClose={() => setModal(null)} />}
+      {modal?.kind === 'settings' && <SettingsModal client={client} ui={ui} onClose={() => setModal(null)} onSignOut={client.isDM ? props.onSignOut : undefined} />}
       {modal?.kind === 'initRoll' && <InitRollModal client={client} onClose={() => setModal(null)} />}
       {modal?.kind === 'editToken' && <TokenEditorModal client={client} ids={modal.ids} onClose={() => setModal(null)} />}
       {modal?.kind === 'claim' && <ClaimModal client={client} onClose={() => setModal(null)} onNewToken={() => openAddToken()} />}

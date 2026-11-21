@@ -4,11 +4,13 @@ import { TOKEN_SIZES } from '../core/model';
 import { throttle } from '../core/throttle';
 import type { Board } from '../board/Board';
 import type { TableClient } from '../state/client';
-import type { UiState } from '../state/ui';
-import type { GridSettings, LabelMode, Token, TokenShape } from '../types';
+import type { DockTab, UiState } from '../state/ui';
+import type { Aura, GridSettings, LabelMode, Token, TokenShape } from '../types';
 import { Field, Section, SliderField, Toggle, toast, useClient, useUi } from './common';
 import { uploadImage } from './uploads';
 import { HpBar, InitiativePanel, parseDamage } from './initiative';
+import { AuraEditor } from './auraEditor';
+import { PlayersPanel } from './modals';
 
 
 /** Wraps a callback in a throttle that always uses the latest closure. */
@@ -35,6 +37,7 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
   const { client, ui } = props;
   useClient(client);
   const d = useUi(ui);
+  const [auraOpen, setAuraOpen] = useState(false);
   const tokens = [...d.selection].map((id) => client.scene?.tokens.get(id)).filter((t): t is Token => !!t);
   if (!tokens.length) return null;
   const ids = tokens.map((t) => t.id);
@@ -46,9 +49,11 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
   const viewerSeesState = !client.isDM && !multi && t0.hpShow !== 'off' && t0.hpPct != null && healthState(t0.hpPct) !== 'ok';
   const sub = multi ? '' : [sizeLabel, viewerSeesState ? HEALTH_LABEL[healthState(t0.hpPct)] : '', t0.hidden ? 'hidden' : '', t0.locked ? 'locked' : ''].filter(Boolean).join(' · ');
   const tracked = client.isDM ? tokens.filter((t) => t.hp != null && t.maxHp != null) : [];
+  const canAura = !multi && editable;
 
   return (
     <div class="tokentag" onMouseDown={(e) => e.stopPropagation()}>
+      {auraOpen && canAura && <AuraPop key={t0.id} client={client} token={t0} />}
       <div>
         <div class="tt-name">{multi ? `${tokens.length} tokens` : t0.name || 'Unnamed token'}</div>
         {sub && <div class="tt-sub">{sub}</div>}
@@ -58,11 +63,29 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
       {!client.isDM && !multi && client.canDo('claim', t0) && (
         <button class="btn small" onClick={() => void client.updateToken(t0.id, { ownerUid: client.uid })}>Take control</button>
       )}
-      {client.isDM && (
-        <button class="btn small" onClick={() => void client.updateTokens(ids, { hidden: !allHidden })}>{allHidden ? 'Reveal' : 'Hide'}</button>
+      {canAura && (
+        <button class={`btn small ${auraOpen ? 'primary' : ''}`} title="Coloured areas that follow this token" onClick={() => setAuraOpen(!auraOpen)}>
+          Aura{t0.auras.length ? ` (${t0.auras.length})` : ''}
+        </button>
       )}
-      <span class="tt-hint">Ctrl+C / V copy · Del delete</span>
+      {client.isDM && (
+        <button class="btn small" title={allHidden ? 'Players can not see it. Click to show it to them.' : 'Hide it from every player (you still see it, dimmed).'}
+          onClick={() => void client.updateTokens(ids, { hidden: !allHidden })}>{allHidden ? 'Show to players' : 'Hide from players'}</button>
+      )}
       <button class="icon-btn" title="Deselect" onClick={() => ui.select([])}>✕</button>
+    </div>
+  );
+}
+
+/** Auras of one token, edited right from the tag at the bottom of the screen. New ones start in the token's ring colour. */
+function AuraPop(props: { client: TableClient; token: Token }) {
+  const { client, token } = props;
+  const [auras, setAuras] = useState<Aura[]>(token.auras);
+  const send = useThrottled((a: Aura[]) => { void client.updateToken(token.id, { auras: a }); }, 120);
+  return (
+    <div class="tt-pop">
+      <AuraEditor compact auras={auras} ft={client.grid.ft} isDM={client.isDM} defaultColor={token.ring}
+        onChange={(a) => { setAuras(a); send(a); }} />
     </div>
   );
 }
@@ -149,7 +172,7 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
         </button>
         <Field label="Grid colour"><input type="color" value={g.color} onInput={(e) => gridT({ color: (e.target as HTMLInputElement).value })} /></Field>
 
-        <Section id="grid-fine" title="Fine-tune" defaultOpen={false}>
+        <Section id="grid-fine" title="Fine tune grid" defaultOpen={false}>
           <SliderField label="Square size" value={g.cell} min={10} max={300} step={0.1} unit="px" onInput={(v) => gridT({ cell: v })} />
           <SliderField label="Offset left / right" value={g.ox} min={0} max={Math.max(1, g.cell)} step={0.1} unit="px" onInput={(v) => gridT({ ox: v })} />
           <SliderField label="Offset up / down" value={g.oy} min={0} max={Math.max(1, g.cell)} step={0.1} unit="px" onInput={(v) => gridT({ oy: v })} />
@@ -181,7 +204,7 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
           </>
         )}
         <div class="row wrap">
-          <button class="btn small" onClick={() => { if (confirm('Cover the whole map in fog again?')) void client.resetFog('hidden'); }}>Hide everything</button>
+          <button class="btn small" onClick={() => void client.resetFog('hidden')}>Hide everything</button>
           <button class="btn small" onClick={() => void client.resetFog('clear')}>Reveal everything</button>
           <button class={`btn small ${d.tool === 'fog' ? 'primary' : ''}`} onClick={() => ui.set({ tool: d.tool === 'fog' ? 'select' : 'fog' })}>Fog tool (F)</button>
         </div>
@@ -245,27 +268,48 @@ export function TokenList(props: { client: TableClient; ui: UiState; board: Boar
   );
 }
 
-/** The right-hand panel (DM): tabs plus a hide button. */
+/** The little tabs on the right edge. Each opens its own panel; click the open one again to fold it away. */
+export function Rail(props: { client: TableClient; ui: UiState }) {
+  const { client, ui } = props;
+  useClient(client);
+  const d = useUi(ui);
+  const online = [...client.players.values()].filter((p) => p.online).length;
+  const tabs: { id: DockTab; label: string; extra?: string }[] = client.isDM
+    ? [{ id: 'scene', label: 'Scene' }, { id: 'tokens', label: 'Tokens' }, { id: 'init', label: 'Initiative' }, { id: 'players', label: 'Players', extra: online ? String(online) : undefined }]
+    : [{ id: 'players', label: 'Players', extra: online ? String(online) : undefined }];
+  return (
+    <div class={`rail ${d.dockTab ? 'open' : ''}`}>
+      {tabs.map((t) => (
+        <button key={t.id} class={`rail-tab ${d.dockTab === t.id ? 'on' : ''}`} aria-pressed={d.dockTab === t.id}
+          title={d.dockTab === t.id ? `Hide ${t.label}` : `Show ${t.label}`}
+          onClick={() => ui.set({ dockTab: d.dockTab === t.id ? null : t.id })}>
+          {t.label}{t.extra && <span class="rail-n">{t.extra}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const DOCK_TITLES: Record<DockTab, string> = { scene: 'Scene', tokens: 'Tokens', init: 'Initiative', players: 'Players' };
+
+/** The panel that opens beside the tabs. */
 export function Dock(props: { client: TableClient; ui: UiState; board: Board | null; onNewScene: () => void; onEdit: (ids: string[]) => void; onRoll: () => void }) {
   const { client, ui } = props;
   useClient(client);
   const d = useUi(ui);
-  if (!client.isDM) return null;
   const tab = d.dockTab;
-  const title = client.scene?.meta?.name ?? 'Scene';
+  if (!tab || (!client.isDM && tab !== 'players')) return null;
+  const sceneName = client.scene?.meta?.name;
   return (
-    <aside class="dock">
+    <aside class={`dock dock-${tab}`}>
       <div class="dock-head">
-        <div class="dock-tabs">
-          <button class={tab === 'scene' ? 'on' : ''} onClick={() => ui.set({ dockTab: 'scene' })} title={title}>Scene</button>
-          <button class={tab === 'tokens' ? 'on' : ''} onClick={() => ui.set({ dockTab: 'tokens' })}>Tokens</button>
-          <button class={tab === 'init' ? 'on' : ''} onClick={() => ui.set({ dockTab: 'init' })}>Initiative</button>
-        </div>
-        <button class="icon-btn" title="Hide this panel" aria-label="Hide panel" onClick={() => ui.set({ dockOpen: false })}>⟩</button>
+        <h3>{DOCK_TITLES[tab]}{tab === 'scene' && sceneName ? <span class="muted"> · {sceneName}</span> : null}</h3>
+        <button class="icon-btn" title="Fold this panel away" aria-label="Hide panel" onClick={() => ui.set({ dockTab: null })}>⟩</button>
       </div>
       {tab === 'scene' && <ScenePanel client={client} ui={ui} board={props.board} onNewScene={props.onNewScene} />}
       {tab === 'tokens' && <TokenList client={client} ui={ui} board={props.board} onEdit={props.onEdit} />}
       {tab === 'init' && <InitiativePanel client={client} ui={ui} board={props.board} onRoll={props.onRoll} onEdit={props.onEdit} />}
+      {tab === 'players' && <PlayersPanel client={client} />}
     </aside>
   );
 }

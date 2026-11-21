@@ -1,5 +1,5 @@
 import type {
-  FogOp, GridSettings, LibraryItem, Permissions, Player, SceneMeta, TableMeta, TableSettings, Token,
+  Aura, Drawing, FogOp, GridSettings, LibraryItem, LivePlot, Permissions, Player, SceneMeta, TableMeta, TableSettings, Token, Vec,
 } from '../types';
 
 export const DEFAULT_GRID: GridSettings = {
@@ -81,6 +81,7 @@ export function normalizeToken(id: string, raw: any, hidden: boolean): Token {
     imgX: num(t.imgX, 0),
     imgY: num(t.imgY, 0),
     imgBg: typeof t.imgBg === 'string' ? t.imgBg : null,
+    auras: normalizeAuras(t.auras),
     ownerUid: typeof t.ownerUid === 'string' ? t.ownerUid : null,
     hidden,
     locked: bool(t.locked, false),
@@ -89,10 +90,64 @@ export function normalizeToken(id: string, raw: any, hidden: boolean): Token {
   };
 }
 
+export function normalizeAuras(raw: any): Aura[] {
+  if (!raw || typeof raw !== 'object') return [];
+  // the database hands arrays back as objects when it thinks they have gaps
+  const list: any[] = Array.isArray(raw) ? raw : Object.keys(raw).sort((a, b) => Number(a) - Number(b)).map((k) => raw[k]);
+  return list.filter((a) => a && typeof a === 'object').slice(0, 6).map((a) => ({
+    r: Math.min(500, Math.max(0, num(a.r, 10))),
+    color: str(a.color, '#ff6b6b'),
+    a: Math.min(1, Math.max(0, num(a.a, 0.25))),
+    shape: a.shape === 'square' ? 'square' : 'circle',
+    edge: bool(a.edge, true),
+    dm: bool(a.dm, false),
+  }));
+}
+
+const DRAW_KINDS = ['pen', 'line', 'arrow', 'rect', 'ellipse', 'text', 'cone', 'cube', 'sphere', 'beam'];
+
+export function normalizeDrawing(id: string, raw: any): Drawing | null {
+  if (!raw || typeof raw.p !== 'string' || !DRAW_KINDS.includes(raw.k)) return null;
+  return {
+    id,
+    uid: str(raw.uid, ''),
+    k: raw.k,
+    p: raw.p,
+    color: str(raw.color, '#e03131'),
+    w: Math.min(200, Math.max(0.5, num(raw.w, 4))),
+    fill: Math.min(1, Math.max(0, num(raw.fill, 0))),
+    dash: bool(raw.dash, false),
+    txt: typeof raw.txt === 'string' ? raw.txt.slice(0, 300) : '',
+    fs: Math.min(400, Math.max(6, num(raw.fs, 28))),
+    bw: Math.min(200, Math.max(1, num(raw.bw, 5))),
+    t: num(raw.t, 0),
+  };
+}
+
+export function drawingToWire(d: Omit<Drawing, 'id'> | Drawing): Record<string, unknown> {
+  const { id: _id, ...rest } = d as Drawing;
+  return stripUndefined({ ...rest, txt: rest.txt || undefined, dash: rest.dash || undefined, fill: rest.fill || undefined });
+}
+
+export function normalizeLive(uid: string, raw: any): LivePlot | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const ruler = raw.ruler && typeof raw.ruler === 'object'
+    ? { a: { x: num(raw.ruler.ax, 0), y: num(raw.ruler.ay, 0) }, b: { x: num(raw.ruler.bx, 0), y: num(raw.ruler.by, 0) } }
+    : null;
+  const ghosts: Record<string, Vec> = {};
+  if (raw.ghosts && typeof raw.ghosts === 'object') {
+    for (const [id, v] of Object.entries(raw.ghosts as Record<string, any>)) {
+      if (v && typeof v === 'object') ghosts[id] = { x: num(v.x, 0), y: num(v.y, 0) };
+    }
+  }
+  if (!ruler && !Object.keys(ghosts).length) return null;
+  return { uid, ruler, ghosts };
+}
+
 /** Serialise a token for the database. `hidden` is implied by which subtree it lives in. */
 export function tokenToWire(t: Token): Record<string, unknown> {
   const { id: _id, hidden: _hidden, ...rest } = t;
-  return stripUndefined({ ...rest, img: t.img ?? undefined, imgBg: t.imgBg ?? undefined, ownerUid: t.ownerUid ?? undefined });
+  return stripUndefined({ ...rest, img: t.img ?? undefined, imgBg: t.imgBg ?? undefined, ownerUid: t.ownerUid ?? undefined, auras: t.auras.length ? t.auras : undefined });
 }
 
 export function normalizeFogOp(raw: any): FogOp | null {

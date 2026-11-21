@@ -8,6 +8,7 @@ import { UiState } from '../state/ui';
 import type { AuthUser, LibraryItem, Rect, Token, Vec } from '../types';
 import { Toasts, copyText, toast, useClient, useTheme, useUi } from './common';
 import { AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewSceneModal, PlayersModal, ScenesModal, SettingsModal } from './modals';
+import { DrawFlyout, RulerFlyout, TemplateFlyout, TestMoveBar, TextBox } from './drawTools';
 import { Dock, TokenTag } from './panels';
 import { TokenEditorModal } from './tokenEditor';
 
@@ -34,6 +35,10 @@ const ICONS = {
   fit: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5',
   undo: 'M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3',
   redo: 'M15 14l5-5-5-5M20 9H10a6 6 0 0 0 0 12h3',
+  draw: 'M4 20l1-4L16 5l3 3L8 19zM14 7l3 3',
+  template: 'M12 4l8 14H4zM4 18a8 3 0 0 0 16 0',
+  ruler: 'M3 17L17 3l4 4L7 21zM7 13l2 2M10 10l2 2M13 7l2 2',
+  test: 'M6 20a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM18 9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM8 15l8-5',
 };
 
 function ToolBtn(props: { icon: keyof typeof ICONS; label: string; hotkey?: string; on?: boolean; disabled?: boolean; onClick: () => void }) {
@@ -191,12 +196,23 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
         {client.isDM && <ToolBtn icon="fog" label="Fog of war" hotkey="F" on={d.tool === 'fog'} onClick={() => ui.set({ tool: d.tool === 'fog' ? 'select' : 'fog' })} />}
         <ToolBtn icon="token" label="Add token" hotkey="T" onClick={() => client.canDo('create') ? openAddToken() : toast('You are not allowed to add tokens.', 'error')} />
         <div class="tool-sep" />
+        <ToolBtn icon="draw" label="Draw and write" hotkey="D" on={d.tool === 'draw'} disabled={!client.canDo('draw')} onClick={() => ui.set({ tool: d.tool === 'draw' ? 'select' : 'draw' })} />
+        <ToolBtn icon="template" label="Spell templates" hotkey="S" on={d.tool === 'template'} disabled={!client.canDo('draw')} onClick={() => ui.set({ tool: d.tool === 'template' ? 'select' : 'template' })} />
+        <ToolBtn icon="ruler" label="Ruler" hotkey="R" on={d.tool === 'ruler'} disabled={!client.canDo('measure')} onClick={() => ui.set({ tool: d.tool === 'ruler' ? 'select' : 'ruler' })} />
+        <ToolBtn icon="test" label="Test move: try a move without making it" hotkey="M" on={d.testMove} onClick={() => ui.set({ testMove: !d.testMove })} />
+        <div class="tool-sep" />
         <ToolBtn icon="undo" label={client.history.undoLabel ? `Undo: ${client.history.undoLabel}` : 'Undo'} hotkey="Ctrl+Z" disabled={!client.history.canUndo} onClick={() => void board?.runHistory('undo')} />
         <ToolBtn icon="redo" label={client.history.redoLabel ? `Redo: ${client.history.redoLabel}` : 'Redo'} hotkey="Ctrl+Y" disabled={!client.history.canRedo} onClick={() => void board?.runHistory('redo')} />
         <div class="tool-sep" />
         <ToolBtn icon="fit" label="Fit map to screen" hotkey="0" onClick={() => board?.fit()} />
         <div class="zoom">{Math.round(d.zoom * 100)}%</div>
       </nav>
+
+      {d.tool === 'draw' && <DrawFlyout ui={ui} client={client} />}
+      {d.tool === 'template' && <TemplateFlyout ui={ui} client={client} />}
+      {d.tool === 'ruler' && <RulerFlyout ui={ui} client={client} />}
+      <TestMoveBar ui={ui} board={board} />
+      <TextBox ui={ui} board={board} />
 
       {d.tool === 'fog' && client.isDM && (
         <div class="flyout">

@@ -11,6 +11,8 @@ await dm.getByRole('button', { name: 'Create table' }).click();
 await dm.waitForSelector('.board-host canvas');
 await dm.getByRole('button', { name: '+ New scene' }).first().click();
 await dm.getByRole('button', { name: 'Use sample dungeon' }).click();
+await dm.getByRole('button', { name: 'Create scene' }).waitFor();
+await dm.locator('.modal .muted', { hasText: 'Sample dungeon.png' }).waitFor();
 await dm.getByRole('button', { name: 'Create scene' }).click();
 await dm.waitForFunction(() => window.__vtt?.board?.mapSprite);
 const ids = await dm.evaluate(async () => {

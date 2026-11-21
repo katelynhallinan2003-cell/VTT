@@ -24,6 +24,10 @@ export const P = {
   sceneToken: (tid: string, sid: string, id: string) => `tables/${tid}/scenes/${sid}/tokens/${id}`,
   sceneFog: (tid: string, sid: string) => `tables/${tid}/scenes/${sid}/fogOps`,
   scenePings: (tid: string, sid: string) => `tables/${tid}/scenes/${sid}/pings`,
+  sceneDraw: (tid: string, sid: string) => `tables/${tid}/scenes/${sid}/draw`,
+  sceneDrawing: (tid: string, sid: string, id: string) => `tables/${tid}/scenes/${sid}/draw/${id}`,
+  sceneLive: (tid: string, sid: string) => `tables/${tid}/scenes/${sid}/live`,
+  sceneLiveOf: (tid: string, sid: string, uid: string) => `tables/${tid}/scenes/${sid}/live/${uid}`,
 
   // DM-only data (sibling of `scenes`, because database read rules cascade downwards).
   dmScene: (tid: string, sid: string) => `tables/${tid}/dm/scenes/${sid}`,

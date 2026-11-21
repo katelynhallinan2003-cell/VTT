@@ -54,6 +54,17 @@
                 }
               }
             },
+            "draw": {
+              "$did": {
+                ".write": "auth != null && root.child('tables').child($tid).child('meta').child('activeScene').val() === $sid && root.child('tables').child($tid).child('settings').child('perm').child('playersDraw').val() === true && ((!data.exists() && newData.child('uid').val() === auth.uid) || (data.exists() && data.child('uid').val() === auth.uid))",
+                ".validate": "newData.hasChildren(['uid', 'k', 'p']) && (root.child('tables').child($tid).child('owner').val() === auth.uid || newData.child('uid').val() === auth.uid)"
+              }
+            },
+            "live": {
+              "$luid": {
+                ".write": "auth != null && root.child('tables').child($tid).child('meta').child('activeScene').val() === $sid && auth.uid === $luid"
+              }
+            },
             "pings": {
               "$pid": {
                 ".write": "auth != null && root.child('tables').child($tid).child('meta').child('activeScene').val() === $sid && root.child('tables').child($tid).child('settings').child('perm').child('playersPing').val() === true",

@@ -1,13 +1,15 @@
 import { Application, Container, Graphics, Sprite, Text, Texture } from 'pixi.js';
 import {
-  clamp, distanceFt, fitCamera, gridFromRect, mapRect, normRect, pointInToken, rectContains, snapTokenCenter, zoomAt,
+  clamp, distanceFt, fitCamera, gridFromRect, mapRect, normRect, pointInToken, rectContains, snapTokenCenter, snapToCellCenter, snapToCorner, zoomAt,
 } from '../core/geometry';
+import { dashSegments, fitPenPoints, hitDrawing, isTemplate, joinPts, snapTemplate, templateLabel } from '../core/draw';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import type { TableClient } from '../state/client';
-import type { UiState } from '../state/ui';
-import type { Ping, Rect, Token, Vec } from '../types';
+import type { StrokeSize, UiState } from '../state/ui';
+import type { DrawKind, Drawing, Ping, Rect, Token, Vec } from '../types';
 import { throttle } from '../core/throttle';
 import { TokenView } from './TokenView';
+import { DrawLayer, paintShape } from './DrawLayer';
 import { canvasTexture, loadTexture, releaseTexture, setTextureFailHandler, type LoadedTexture } from './textures';
 import { diagnoseImage } from '../core/images';
 
@@ -28,11 +30,17 @@ type Drag =
   | { kind: 'marquee'; start: Vec; cur: Vec; base: Set<string> }
   | { kind: 'rect'; start: Vec; cur: Vec }
   | { kind: 'brush'; pts: Vec[] }
-  | { kind: 'map'; start: Vec; orig: Vec; moved: boolean };
+  | { kind: 'map'; start: Vec; orig: Vec; moved: boolean }
+  | { kind: 'shape'; dk: DrawKind; start: Vec; pts: Vec[] }
+  | { kind: 'erase'; ids: Set<string> }
+  | { kind: 'ruler' }
+  | { kind: 'drawmove'; ids: string[]; start: Vec; dx: number; dy: number; moved: boolean };
 
 const num = (c: string) => parseInt(c.replace('#', '').padEnd(6, '0').slice(0, 6), 16) || 0xffffff;
 const SELECT = 0x4da3ff;
 const PRESS_PING_MS = 450;
+const STROKE_CELLS: Record<StrokeSize, number> = { thin: 0.035, medium: 0.07, thick: 0.15 };
+const SHARE_BLUE = 0x4da3ff;
 
 interface PingFx { g: Graphics; label: Text; born: number; x: number; y: number; color: number }
 
@@ -48,8 +56,19 @@ export class Board {
   private gridG = new Graphics();
   private tokenLayer = new Container();
   private fogLayer = new Container();
+  private drawLayer = new DrawLayer();
+  private auraG = new Graphics();
+  private ghostLayer = new Container();
   private overlayG = new Graphics();
   private fxLayer = new Container();
+  private plotLabels: Text[] = [];
+  private ghostViews = new Map<string, TokenView>();
+  private testMoves = new Map<string, { from: Vec; to: Vec }>();
+  private ruler: { a: Vec; b: Vec } | null = null;
+  private liveSent = false;
+  private seenDrawRev = -1;
+  private seenLiveRev = -1;
+  private prevUi = { testMove: false, sharePlot: false, tool: 'select' as string };
   private distText!: Text;
 
   private cam = { zoom: 1, tx: 0, ty: 0 };
@@ -139,12 +158,13 @@ export class Board {
     });
     this.distText.anchor.set(0.5, 1);
     this.distText.visible = false;
-    this.world.addChild(this.mapLayer, this.gridG, this.tokenLayer, this.fogLayer, this.overlayG, this.fxLayer, this.distText);
+    this.ghostLayer.sortableChildren = true;
+    this.world.addChild(this.mapLayer, this.gridG, this.drawLayer.container, this.auraG, this.tokenLayer, this.ghostLayer, this.fogLayer, this.overlayG, this.fxLayer, this.distText);
     app.stage.addChild(this.world);
 
     this.bindInput(app.canvas);
     this.unsubs.push(this.client.onPing((p) => this.addPing(p)));
-    this.unsubs.push(this.ui.subscribe(() => this.invalidate()));
+    this.unsubs.push(this.ui.subscribe(() => { this.onUiChange(); this.invalidate(); }));
     this.resizeObs = new ResizeObserver(() => {
       if (this.destroyed) return;
       this.app.renderer.resize(Math.max(1, this.host.clientWidth), Math.max(1, this.host.clientHeight));
@@ -166,6 +186,7 @@ export class Board {
   destroy() {
     this.destroyed = true;
     this.cancelPress();
+    if (this.liveSent) this.client.setLive({ ruler: null, ghosts: {} });
     setTextureFailHandler(null);
     cancelAnimationFrame(this.raf);
     this.resizeObs?.disconnect();
@@ -235,12 +256,14 @@ export class Board {
     this.reconcile();
     let moving = false;
     for (const v of this.views.values()) if (v.tick(dt)) moving = true;
+    for (const v of this.ghostViews.values()) if (v.tick(dt)) moving = true;
     if (moving) this.dirty = true;
     if (this.pings.length) { this.tickPings(); this.dirty = true; }
     if (this.press) this.dirty = true;
     if (!this.dirty) return;
     this.dirty = false;
     if (this.gridDirty) { this.drawGrid(); this.gridDirty = false; }
+    this.drawAuras();
     this.drawOverlay();
     this.app.render();
   }
@@ -265,6 +288,7 @@ export class Board {
       this.seenGridKey = gridKey;
       for (const v of this.views.values()) v.invalidate();
       this.seenTokensRev = -1;
+      this.seenDrawRev = -1;
     }
     if (c.players.size !== this.seenPlayers) { this.seenPlayers = c.players.size; this.seenTokensRev = -1; }
     if (previewNow !== this.seenPreview) { this.seenPreview = previewNow; this.seenTokensRev = -1; this.seenFogRev = -1; }
@@ -278,6 +302,19 @@ export class Board {
       this.seenFogRev = scene.fogRev;
       this.updateFog();
     }
+    if (scene.drawRev !== this.seenDrawRev) {
+      this.seenDrawRev = scene.drawRev;
+      this.drawLayer.sync(c.drawingsSorted(), c.grid, this.textRes);
+      const stale = [...this.ui.data.drawSel].filter((id) => !scene.draws.has(id));
+      if (stale.length) this.ui.selectDrawings([...this.ui.data.drawSel].filter((id) => scene.draws.has(id)));
+      this.dirty = true;
+    }
+    if (scene.liveRev !== this.seenLiveRev) {
+      this.seenLiveRev = scene.liveRev;
+      this.ghostsDirty = true;
+      this.dirty = true;
+    }
+    if (this.ghostsDirty) { this.ghostsDirty = false; this.syncGhosts(); this.dirty = true; }
   }
 
   private onSceneChanged(scene: TableClient['scene']) {
@@ -288,11 +325,17 @@ export class Board {
     this.drag = null;
     this.polyPts = [];
     this.ui.select([]);
+    this.drawLayer.clear();
+    this.testMoves.clear();
+    this.ruler = null;
+    this.liveSent = false;
+    this.ghostsDirty = true;
+    this.ui.set({ drawSel: new Set(), testCount: 0, textAt: null });
     if (this.mapSprite) { this.mapSprite.destroy(); this.mapSprite = null; }
     if (this.mapUrl) { releaseTexture(this.mapUrl, 'map'); this.mapUrl = null; }
     this.mapTex = null;
     this.cb.onMapError(null);
-    this.seenMetaRev = this.seenTokensRev = this.seenFogRev = -1;
+    this.seenMetaRev = this.seenTokensRev = this.seenFogRev = this.seenDrawRev = this.seenLiveRev = -1;
     this.seenGridKey = '';
     if (this.fogSprite) this.fogSprite.visible = false;
     const saved = scene ? this.cams.get(scene.id) : undefined;
@@ -390,6 +433,19 @@ export class Board {
     for (const [id, v] of this.views) {
       if (!scene.tokens.has(id)) { v.destroy(); this.views.delete(id); }
     }
+    // a test move ends when someone else moves (or removes) that token
+    let testChanged = false;
+    for (const [id, m] of [...this.testMoves]) {
+      const t = scene.tokens.get(id);
+      const v = this.views.get(id);
+      if (!t || !v || Math.hypot(t.x - m.from.x, t.y - m.from.y) > 1) {
+        this.testMoves.delete(id);
+        if (v) { v.testPos = null; v.target = t ? { x: t.x, y: t.y } : v.target; }
+        testChanged = true;
+      }
+    }
+    if (testChanged) this.afterTestChange();
+    this.ghostsDirty = true;
     const sel = [...this.ui.data.selection].filter((id) => this.views.has(id));
     if (sel.length !== this.ui.data.selection.size) this.ui.select(sel);
   }
@@ -401,6 +457,125 @@ export class Board {
       if (pointInToken({ ...v.token, x: v.display.x, y: v.display.y }, grid, p)) return v.token;
     }
     return null;
+  }
+
+  // ------------------------------------------------------------------ ghosts (test-move shadows and other people's test moves)
+  private ghostsDirty = true;
+
+  private syncGhosts() {
+    const scene = this.client.scene;
+    const want = new Map<string, { token: Token; pos: Vec; alpha: number }>();
+    if (scene) {
+      for (const [id, m] of this.testMoves) {
+        const t = scene.tokens.get(id);
+        if (t) want.set(`me:${id}`, { token: t, pos: m.from, alpha: 0.35 });
+      }
+      for (const [uid, lv] of scene.live) {
+        if (uid === this.client.uid) continue;
+        for (const [id, pos] of Object.entries(lv.ghosts)) {
+          const t = scene.tokens.get(id);
+          if (t && this.visibleToViewer(t)) want.set(`${uid}:${id}`, { token: t, pos, alpha: 0.55 });
+        }
+      }
+    }
+    for (const [key, w] of want) {
+      const ctx = { ...this.tokenCtx(w.token), showLabel: false };
+      let v = this.ghostViews.get(key);
+      const fresh = !v;
+      if (!v) {
+        v = new TokenView(() => this.invalidate());
+        this.ghostViews.set(key, v);
+        this.ghostLayer.addChild(v.container);
+      }
+      v.ghostAlpha = w.alpha;
+      v.testPos = { ...w.pos };
+      v.apply(w.token, ctx);
+      if (fresh) v.placeAt(w.pos);
+    }
+    for (const [key, v] of this.ghostViews) {
+      if (!want.has(key)) { v.destroy(); this.ghostViews.delete(key); }
+    }
+  }
+
+  // ------------------------------------------------------------------ auras
+  private drawAuras() {
+    const g = this.auraG;
+    g.clear();
+    const grid = this.client.grid;
+    const dmView = this.client.isDM && !this.ui.data.dmPreview;
+    const z = this.cam.zoom;
+    for (const v of this.views.values()) {
+      const t = v.token;
+      for (const a of t.auras) {
+        if ((a.dm && !dmView) || a.r <= 0) continue;
+        const r = (a.r / grid.ft) * grid.cell + (a.edge ? (t.size * grid.cell) / 2 : 0);
+        const col = num(a.color);
+        if (a.shape === 'square') g.rect(v.display.x - r, v.display.y - r, r * 2, r * 2);
+        else g.circle(v.display.x, v.display.y, r);
+        g.fill({ color: col, alpha: a.a }).stroke({ width: 2 / z, color: col, alpha: Math.min(1, a.a + 0.45) });
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------ test moves and the ruler
+  private onUiChange() {
+    const u = this.ui.data;
+    const prev = this.prevUi;
+    this.prevUi = { testMove: u.testMove, sharePlot: u.sharePlot, tool: u.tool };
+    if (prev.testMove && !u.testMove && this.testMoves.size) this.resetTestMoves();
+    if (u.sharePlot !== prev.sharePlot) this.publishLive(true);
+    if (prev.tool !== u.tool) {
+      this.cancelPress();
+      if (this.ruler && u.tool !== 'ruler') { this.ruler = null; this.publishLive(); }
+    }
+  }
+
+  /** Show (or stop showing) my ruler and test moves to everyone else, according to the share switch. */
+  private publishLive(force = false) {
+    const share = this.ui.data.sharePlot;
+    const ghosts = share ? Object.fromEntries([...this.testMoves].map(([id, m]) => [id, m.to])) : {};
+    const ruler = share ? this.ruler : null;
+    const any = !!ruler || Object.keys(ghosts).length > 0;
+    if (!any && !this.liveSent && !force) return;
+    this.liveSent = any;
+    this.client.setLive({ ruler, ghosts });
+  }
+
+  private afterTestChange() {
+    if (this.ui.data.testCount !== this.testMoves.size) this.ui.set({ testCount: this.testMoves.size });
+    this.ghostsDirty = true;
+    this.publishLive();
+    this.invalidate();
+  }
+
+  /** Try a token out at `to` without moving it for anyone else. */
+  private setTest(id: string, to: Vec) {
+    const v = this.views.get(id);
+    if (!v) return;
+    const cur = this.testMoves.get(id);
+    const from = cur?.from ?? { x: v.token.x, y: v.token.y };
+    if (Math.hypot(to.x - from.x, to.y - from.y) < 1) { this.testMoves.delete(id); v.testPos = null; v.target = { ...from }; }
+    else { this.testMoves.set(id, { from, to: { ...to } }); v.testPos = { ...to }; v.target = { ...to }; }
+  }
+
+  /** Make every test move real (one undo step). */
+  keepTestMoves() {
+    if (!this.testMoves.size) return;
+    const moves = [...this.testMoves].map(([id, m]) => ({ id, x: m.to.x, y: m.to.y }));
+    const before = [...this.testMoves].map(([id, m]) => ({ id, x: m.from.x, y: m.from.y }));
+    for (const id of this.testMoves.keys()) { const v = this.views.get(id); if (v) v.testPos = null; }
+    this.testMoves.clear();
+    void this.client.moveTokens(moves, before);
+    this.afterTestChange();
+    this.cb.onNotice(moves.length > 1 ? 'Moves made' : 'Move made', 'ok');
+  }
+
+  /** Put every tried-out token back where it was. */
+  resetTestMoves() {
+    if (!this.testMoves.size) return;
+    for (const [id, m] of this.testMoves) { const v = this.views.get(id); if (v) { v.testPos = null; v.target = { ...m.from }; } }
+    this.testMoves.clear();
+    this.afterTestChange();
   }
 
   // ------------------------------------------------------------------ grid
@@ -496,6 +671,7 @@ export class Board {
     const g = this.overlayG;
     g.clear();
     this.distText.visible = false;
+    for (const t of this.plotLabels) t.visible = false;
     const z = this.cam.zoom;
     const lw = 2.5 / z;
     const grid = this.client.grid;
@@ -537,7 +713,7 @@ export class Board {
     }
     if (d?.kind === 'tokens' && d.moved) {
       const a = this.views.get(d.anchor);
-      const o = d.origins.get(d.anchor);
+      const o = this.testMoves.get(d.anchor)?.from ?? d.origins.get(d.anchor);
       if (a && o) {
         g.moveTo(o.x, o.y).lineTo(a.display.x, a.display.y).stroke({ width: 2 / z, color: 0xffffff, alpha: 0.7 });
         const ft = distanceFt(grid, o, a.display);
@@ -549,6 +725,103 @@ export class Board {
     }
 
     if (this.ui.data.tool === 'fog') this.drawFogPreview(g, z);
+    this.drawPlots(g, z);
+  }
+
+  // ------------------------------------------------------------------ drawing previews, rulers, test-move lines
+  private plotLabel(i: number, text: string, x: number, y: number, color: number) {
+    let t = this.plotLabels[i];
+    if (!t) {
+      t = new Text({ text: '', style: { fontFamily: 'system-ui, sans-serif', fontWeight: '700', fontSize: 16, fill: 0xffffff, stroke: { color: 0x000000, width: 4, join: 'round' } } });
+      t.anchor.set(0.5, 1);
+      this.fxLayer.addChild(t);
+      this.plotLabels[i] = t;
+    }
+    t.text = text;
+    t.style.fill = color;
+    t.resolution = this.textRes;
+    t.scale.set(1 / this.cam.zoom);
+    t.position.set(x, y);
+    t.visible = true;
+  }
+
+  private paintRuler(g: Graphics, z: number, r: { a: Vec; b: Vec }, color: number, name: string, li: number) {
+    const grid = this.client.grid;
+    g.moveTo(r.a.x, r.a.y).lineTo(r.b.x, r.b.y).stroke({ width: 6 / z, color: 0x000000, alpha: 0.35, cap: 'round' });
+    g.moveTo(r.a.x, r.a.y).lineTo(r.b.x, r.b.y).stroke({ width: 3 / z, color, cap: 'round' });
+    g.circle(r.a.x, r.a.y, 6 / z).fill(color).stroke({ width: 2 / z, color: 0xffffff });
+    g.circle(r.b.x, r.b.y, 6 / z).fill(color).stroke({ width: 2 / z, color: 0xffffff });
+    const ft = distanceFt(grid, r.a, r.b);
+    this.plotLabel(li, `${name ? name + ': ' : ''}${ft} ft`, r.b.x, r.b.y - 12 / z, color);
+  }
+
+  private drawPlots(g: Graphics, z: number) {
+    const c = this.client;
+    const scene = c.scene;
+    if (!scene) return;
+    const grid = c.grid;
+    const u = this.ui.data;
+    const d = this.drag;
+    let li = 0;
+
+    // outlines around selected drawings (shifted while they are being dragged)
+    for (const id of u.drawSel) {
+      const dd = scene.draws.get(id);
+      if (!dd) continue;
+      const b = this.drawLayer.boundsOf(dd, grid);
+      const mv = d?.kind === 'drawmove' && d.ids.includes(id) ? d : null;
+      const pad = 5 / z;
+      g.rect(b.x - pad + (mv?.dx ?? 0), b.y - pad + (mv?.dy ?? 0), b.w + pad * 2, b.h + pad * 2).stroke({ width: 1.5 / z, color: SELECT });
+    }
+
+    // the shape being dragged out
+    if (d?.kind === 'shape') {
+      const isT = isTemplate(d.dk);
+      paintShape(g, {
+        k: d.dk, pts: d.pts, color: u.drawColor, w: isT ? Math.max(2, this.strokePx()) : this.strokePx(),
+        fill: !isT && (d.dk === 'rect' || d.dk === 'ellipse') && u.drawFill ? 0.3 : 0, dash: !isT && u.drawDash, bw: u.tplWidth,
+      }, grid, 0.85);
+      if (isT && d.pts.length >= 2) this.plotLabel(li++, templateLabel(d.dk, grid, d.pts[0], d.pts[1], u.tplWidth), d.pts[1].x, d.pts[1].y - 12 / z, num(u.drawColor));
+    }
+
+    // an erase swipe
+    if (d?.kind === 'erase' && this.pointerW) g.circle(this.pointerW.x, this.pointerW.y, 6 / z).stroke({ width: 1.5 / z, color: 0xff6b6b });
+
+    // my ruler, then everybody else's
+    const myCol = num(c.me?.color ?? '#ffffff');
+    if (this.ruler) this.paintRuler(g, z, this.ruler, myCol, '', li++);
+    for (const [uid, lv] of scene.live) {
+      if (uid === c.uid) continue;
+      const p = c.players.get(uid);
+      const col = num(p?.color ?? '#ffffff');
+      if (lv.ruler) this.paintRuler(g, z, lv.ruler, col, p?.name ?? '', li++);
+      for (const [id, pos] of Object.entries(lv.ghosts)) {
+        const t = scene.tokens.get(id);
+        if (!t || !this.visibleToViewer(t)) continue;
+        this.dashedLine(g, { x: t.x, y: t.y }, pos, col, z);
+        li = this.testLabel(li, { x: t.x, y: t.y }, pos, t, col, p?.name ?? '');
+      }
+    }
+
+    // my test moves: a dashed line from where the token really is to where I am trying it
+    for (const [id, m] of this.testMoves) {
+      if (d?.kind === 'tokens' && d.moved && d.ids.includes(id)) continue; // the live drag draws its own
+      const t = scene.tokens.get(id);
+      if (!t) continue;
+      this.dashedLine(g, m.from, m.to, 0xffffff, z);
+      li = this.testLabel(li, m.from, m.to, t, 0xffffff, '');
+    }
+  }
+
+  private dashedLine(g: Graphics, a: Vec, b: Vec, color: number, z: number) {
+    for (const [p, q] of dashSegments([a, b], 9 / z, 6 / z)) g.moveTo(p.x, p.y).lineTo(q.x, q.y);
+    g.stroke({ width: 2.5 / z, color, alpha: 0.9, cap: 'round' });
+  }
+
+  private testLabel(li: number, from: Vec, to: Vec, t: Token, color: number, name: string): number {
+    const grid = this.client.grid;
+    this.plotLabel(li, `${name ? name + ': ' : ''}${distanceFt(grid, from, to)} ft`, to.x, to.y - (t.size * grid.cell) / 2 - 6 / this.cam.zoom, color);
+    return li + 1;
   }
 
   private drawFogPreview(g: Graphics, z: number) {
@@ -633,6 +906,9 @@ export class Board {
     const tool = this.ui.data.tool;
     if (tool === 'grid' && this.client.isDM) { this.drag = { kind: 'rect', start: w, cur: w }; return; }
     if (tool === 'fog' && this.client.isDM) { this.startFog(w, e); return; }
+    if (tool === 'draw') { this.startDraw(w, e); return; }
+    if (tool === 'template') { this.startTemplate(w, e); return; }
+    if (tool === 'ruler') { this.startRuler(w, e); return; }
 
     // ---- select tool
     const hit = this.hitToken(w);
@@ -657,15 +933,29 @@ export class Board {
       this.startPress(w, e);
       return;
     }
+    const dh = this.hitDrawingAt(w, false);
+    if (dh) {
+      let sel = new Set(this.ui.data.drawSel);
+      if (e.shiftKey) {
+        if (sel.has(dh.id)) sel.delete(dh.id); else sel.add(dh.id);
+        this.ui.selectDrawings(sel);
+        return;
+      }
+      if (!sel.has(dh.id)) sel = new Set([dh.id]);
+      this.ui.selectDrawings(sel);
+      this.drag = { kind: 'drawmove', ids: [...sel], start: w, dx: 0, dy: 0, moved: false };
+      this.startPress(w, e);
+      return;
+    }
     const meta = this.client.scene?.meta;
     if (this.client.isDM && meta && !meta.mapLocked && meta.mapW && rectContains(mapRect(meta), w)) {
-      this.ui.set({ mapSelected: true, selection: new Set() });
+      this.ui.set({ mapSelected: true, selection: new Set(), drawSel: new Set() });
       this.drag = { kind: 'map', start: w, orig: { x: meta.mapX, y: meta.mapY }, moved: false };
       this.startPress(w, e);
       return;
     }
     const base = e.shiftKey ? new Set(this.ui.data.selection) : new Set<string>();
-    if (!e.shiftKey) this.ui.select([]);
+    if (!e.shiftKey) { this.ui.select([]); this.ui.selectDrawings([]); }
     this.drag = { kind: 'marquee', start: w, cur: w, base };
     this.startPress(w, e);
   }
@@ -682,7 +972,7 @@ export class Board {
         this.press = null;
         const d = this.drag;
         if (d?.kind === 'marquee') this.drag = null;
-        else if (d?.kind === 'tokens' || d?.kind === 'map') {
+        else if (d?.kind === 'tokens' || d?.kind === 'map' || d?.kind === 'drawmove') {
           if (d.moved) return;
           if (d.kind === 'tokens') for (const id of d.ids) { const v = this.views.get(id); if (v) v.dragging = false; }
           this.drag = null;
@@ -693,6 +983,115 @@ export class Board {
       }, PRESS_PING_MS),
     };
   }
+
+  // ------------------------------------------------------------------ drawing, templates, ruler
+  private strokePx(): number {
+    return Math.max(1.5, STROKE_CELLS[this.ui.data.drawSize] * this.client.grid.cell);
+  }
+
+  private hitDrawingAt(p: Vec, solid: boolean): Drawing | null {
+    const list = this.client.drawingsSorted();
+    const tol = 6 / this.cam.zoom;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const d = list[i];
+      if (this.client.canEditDrawing(d) && hitDrawing(d, p, tol, this.client.grid, solid)) return d;
+    }
+    return null;
+  }
+
+  private startDraw(w: Vec, e: PointerEvent) {
+    if (!this.client.canDo('draw')) { this.cb.onNotice('Drawing is turned off for players.', 'error'); return; }
+    const tool = this.ui.data.drawTool;
+    if (tool === 'text') { this.ui.set({ textAt: { sx: e.clientX, sy: e.clientY, x: w.x, y: w.y } }); return; }
+    if (tool === 'erase') { this.drag = { kind: 'erase', ids: new Set() }; this.eraseAt(w); return; }
+    this.drag = { kind: 'shape', dk: tool, start: w, pts: tool === 'pen' ? [w] : [w, w] };
+  }
+
+  private startTemplate(w: Vec, e: PointerEvent) {
+    if (!this.client.canDo('draw')) { this.cb.onNotice('Drawing is turned off for players.', 'error'); return; }
+    const grid = this.client.grid;
+    const a = grid.snap && !e.altKey ? snapToCorner(grid, w) : w;
+    this.drag = { kind: 'shape', dk: this.ui.data.tplKind, start: a, pts: [a, a] };
+  }
+
+  private startRuler(w: Vec, e: PointerEvent) {
+    if (!this.client.canDo('measure')) { this.cb.onNotice('The ruler is turned off for players.', 'error'); return; }
+    const p = this.rulerPoint(w, e);
+    this.ruler = { a: p, b: p };
+    this.drag = { kind: 'ruler' };
+    this.publishLive();
+  }
+
+  private rulerPoint(w: Vec, e: PointerEvent): Vec {
+    const g = this.client.grid;
+    return g.snap && !e.altKey ? snapToCellCenter(g, w) : w;
+  }
+
+  private eraseAt(w: Vec) {
+    const d = this.drag;
+    if (d?.kind !== 'erase') return;
+    const hit = this.hitDrawingAt(w, true);
+    if (hit && !d.ids.has(hit.id)) { d.ids.add(hit.id); this.drawLayer.setFaded(d.ids); this.invalidate(); }
+  }
+
+  private moveShape(d: Extract<Drag, { kind: 'shape' }>, w: Vec, e: PointerEvent) {
+    const k = d.dk;
+    if (isTemplate(k)) {
+      const sn = snapTemplate(this.client.grid, d.start, w, { origin: false, length: !e.altKey, angleStep: e.shiftKey ? Math.PI / 12 : undefined });
+      d.pts = [sn.a, sn.b];
+      return;
+    }
+    if (k === 'pen') {
+      const last = d.pts[d.pts.length - 1];
+      if (Math.hypot(last.x - w.x, last.y - w.y) * this.cam.zoom > 2) d.pts.push(w);
+      return;
+    }
+    let b = w;
+    if (e.shiftKey) {
+      const dx = w.x - d.start.x;
+      const dy = w.y - d.start.y;
+      if (k === 'rect' || k === 'ellipse') {
+        const m = Math.max(Math.abs(dx), Math.abs(dy));
+        b = { x: d.start.x + (dx < 0 ? -m : m), y: d.start.y + (dy < 0 ? -m : m) };
+      } else {
+        const L = Math.hypot(dx, dy);
+        const ang = Math.round(Math.atan2(dy, dx) / (Math.PI / 12)) * (Math.PI / 12);
+        b = { x: d.start.x + Math.cos(ang) * L, y: d.start.y + Math.sin(ang) * L };
+      }
+    }
+    d.pts = [d.start, b];
+  }
+
+  private commitShape(d: Extract<Drag, { kind: 'shape' }>) {
+    const u = this.ui.data;
+    const grid = this.client.grid;
+    const k = d.dk;
+    const isT = isTemplate(k);
+    let pts = d.pts;
+    const len = pts.length >= 2 ? Math.hypot(pts[pts.length - 1].x - pts[0].x, pts[pts.length - 1].y - pts[0].y) : 0;
+    if (isT) { if (len < grid.cell * 0.4) return; }
+    else if (k === 'pen') { if (pts.length > 2) pts = fitPenPoints(pts, Math.max(0.6, 1 / this.cam.zoom)); }
+    else if (len * this.cam.zoom < 4) return;
+    const stroke = this.strokePx();
+    void this.client.addDrawing({
+      k, p: joinPts(pts), color: u.drawColor, w: isT ? Math.max(2, stroke) : stroke,
+      fill: !isT && (k === 'rect' || k === 'ellipse') && u.drawFill ? 0.3 : 0,
+      dash: !isT && u.drawDash, txt: '', fs: 28, bw: u.tplWidth,
+    }).catch((err: Error) => this.cb.onNotice(err.message, 'error'));
+  }
+
+  /** Put a line of text on the map (called when the text box is confirmed). */
+  addText(at: Vec, text: string) {
+    const t = text.trim();
+    if (!t) return;
+    const cell = this.client.grid.cell;
+    const u = this.ui.data;
+    const fs = Math.round(cell * (u.drawSize === 'thin' ? 0.32 : u.drawSize === 'thick' ? 0.7 : 0.45));
+    void this.client.addDrawing({ k: 'text', p: joinPts([at]), color: u.drawColor, w: 1, fill: 0, dash: false, txt: t, fs, bw: 5 })
+      .catch((err: Error) => this.cb.onNotice(err.message, 'error'));
+  }
+
+  worldFromClient(clientX: number, clientY: number): Vec { return this.screenToWorld(clientX, clientY); }
 
   private cancelPress() {
     if (this.press) { clearTimeout(this.press.timer); this.press = null; }
@@ -736,7 +1135,7 @@ export class Board {
     if (!d) {
       const hover = this.ui.data.tool === 'select' && !!this.hitToken(w);
       this.updateCursor(hover);
-      if ((this.ui.data.tool === 'fog') ) this.invalidate();
+      if (this.ui.data.tool !== 'select') this.invalidate();
       return;
     }
     this.invalidate();
@@ -757,6 +1156,17 @@ export class Board {
         break;
       }
       case 'rect': d.cur = w; break;
+      case 'shape': this.moveShape(d, w, e); break;
+      case 'erase': this.eraseAt(w); break;
+      case 'ruler': if (this.ruler) { this.ruler.b = this.rulerPoint(w, e); this.publishLive(); } break;
+      case 'drawmove': {
+        const dx = w.x - d.start.x;
+        const dy = w.y - d.start.y;
+        if (!d.moved && Math.hypot(dx, dy) * this.cam.zoom < 4) break;
+        d.moved = true; d.dx = dx; d.dy = dy;
+        this.drawLayer.setOffset(new Set(d.ids), dx, dy);
+        break;
+      }
       case 'brush': {
         const last = d.pts[d.pts.length - 1];
         if (Math.hypot(last.x - w.x, last.y - w.y) > this.client.grid.cell / 8) d.pts.push(w);
@@ -800,7 +1210,7 @@ export class Board {
       v.target = { ...v.display };
       moves.push({ id, x: v.display.x, y: v.display.y });
     }
-    this.sendMoves(moves);
+    if (!this.ui.data.testMove) this.sendMoves(moves);
   }
 
   private onPointerUp(e: PointerEvent) {
@@ -822,6 +1232,16 @@ export class Board {
         break;
       case 'tokens': {
         this.sendMoves.cancel();
+        if (this.ui.data.testMove) {
+          for (const id of d.ids) {
+            const v = this.views.get(id);
+            if (!v) continue;
+            v.dragging = false;
+            if (d.moved) this.setTest(id, { ...v.display });
+          }
+          if (d.moved) this.afterTestChange();
+          break;
+        }
         const moves: { id: string; x: number; y: number }[] = [];
         const before: { id: string; x: number; y: number }[] = [];
         for (const id of d.ids) {
@@ -847,6 +1267,19 @@ export class Board {
       case 'map':
         this.sendMap.flush();
         break;
+      case 'shape': this.commitShape(d); break;
+      case 'erase':
+        this.drawLayer.setFaded(new Set());
+        if (d.ids.size) void this.client.removeDrawings([...d.ids]);
+        break;
+      case 'ruler':
+        if (this.ruler && Math.hypot(this.ruler.b.x - this.ruler.a.x, this.ruler.b.y - this.ruler.a.y) * this.cam.zoom < 6) this.ruler = null;
+        this.publishLive();
+        break;
+      case 'drawmove':
+        this.drawLayer.setOffset(new Set(), 0, 0);
+        if (d.moved) void this.client.moveDrawings(d.ids, d.dx, d.dy);
+        break;
       case 'marquee': break;
     }
   }
@@ -863,7 +1296,9 @@ export class Board {
 
   private onKeyDown(e: KeyboardEvent) {
     const el = e.target as HTMLElement | null;
-    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
+    // typing into a field is not a shortcut, but a ticked checkbox or a clicked button should not eat them
+    if (el && (el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
+    if (el && el.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'color', 'file'].includes((el as HTMLInputElement).type)) return;
     const ui = this.ui;
     const c = this.client;
     const mod = e.ctrlKey || e.metaKey;
@@ -871,16 +1306,26 @@ export class Board {
     if (e.code === 'Space') { this.spaceDown = true; this.updateCursor(); e.preventDefault(); return; }
 
     if (e.key === 'Escape') {
+      if (this.testMoves.size) { this.resetTestMoves(); return; }
+      if (ui.data.textAt) { ui.set({ textAt: null }); return; }
       this.polyPts = [];
       this.drag = null;
       for (const v of this.views.values()) v.dragging = false;
       ui.select([]);
+      ui.selectDrawings([]);
       if (ui.data.tool !== 'select') ui.set({ tool: 'select' });
       this.invalidate();
       return;
     }
+    if (e.key === 'Enter' && this.testMoves.size) { this.keepTestMoves(); return; }
     if (e.key === 'Enter' && ui.data.tool === 'fog' && this.polyPts.length >= 3) { this.finishPoly(); return; }
 
+    if ((e.key === 'Delete' || e.key === 'Backspace') && ui.data.drawSel.size) {
+      void c.removeDrawings([...ui.data.drawSel]);
+      ui.selectDrawings([]);
+      e.preventDefault();
+      return;
+    }
     if ((e.key === 'Delete' || e.key === 'Backspace') && ui.data.selection.size) {
       const ids = [...ui.data.selection].filter((id) => c.canDo('delete', c.scene?.tokens.get(id)));
       if (ids.length) { void c.removeTokens(ids); e.preventDefault(); }
@@ -927,7 +1372,14 @@ export class Board {
         .map((id) => c.scene?.tokens.get(id))
         .filter((t): t is Token => !!t && c.canDo('move', t))
         .map((t) => ({ id: t.id, x: t.x + dx, y: t.y + dy }));
-      if (moves.length) {
+      if (moves.length && ui.data.testMove) {
+        for (const m of moves) {
+          const v = this.views.get(m.id);
+          const cur = this.testMoves.get(m.id)?.to ?? (v ? { x: v.token.x, y: v.token.y } : null);
+          if (cur) this.setTest(m.id, { x: cur.x + dx, y: cur.y + dy });
+        }
+        this.afterTestChange();
+      } else if (moves.length) {
         const before = moves.map((m) => { const t = c.scene!.tokens.get(m.id)!; return { id: t.id, x: t.x, y: t.y }; });
         void c.moveTokens(moves, before);
       }
@@ -938,6 +1390,10 @@ export class Board {
       case 'v': ui.set({ tool: 'select' }); break;
       case 'g': if (c.isDM) ui.set({ tool: ui.data.tool === 'grid' ? 'select' : 'grid' }); break;
       case 'f': if (c.isDM) ui.set({ tool: ui.data.tool === 'fog' ? 'select' : 'fog' }); break;
+      case 'd': ui.set({ tool: ui.data.tool === 'draw' ? 'select' : 'draw' }); break;
+      case 's': ui.set({ tool: ui.data.tool === 'template' ? 'select' : 'template' }); break;
+      case 'r': ui.set({ tool: ui.data.tool === 'ruler' ? 'select' : 'ruler' }); break;
+      case 'm': ui.set({ testMove: !ui.data.testMove }); break;
       case '0': this.fit(); break;
       case '+': case '=': this.zoomBy(1.25); break;
       case '-': this.zoomBy(0.8); break;

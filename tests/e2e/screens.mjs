@@ -16,6 +16,8 @@ await dm.screenshot({ path: '/tmp/shots/22-empty-table.png' });
 await dm.getByRole('button', { name: '+ New scene' }).first().click();
 await dm.screenshot({ path: '/tmp/shots/23-new-scene.png' });
 await dm.getByRole('button', { name: 'Use sample dungeon' }).click();
+await dm.getByRole('button', { name: 'Create scene' }).waitFor();
+await dm.locator('.modal .muted', { hasText: 'Sample dungeon.png' }).waitFor();
 await dm.getByRole('button', { name: 'Create scene' }).click();
 await dm.waitForFunction(() => window.__vtt?.board?.mapSprite);
 const tid = await dm.evaluate(() => location.hash.replace('#/t/', ''));

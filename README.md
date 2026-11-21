@@ -20,6 +20,11 @@ together with a link. Built for one DM and a handful of trusted friends, hosted 
 - **Pings:** hold the left mouse button on the map or a token.
 - **Undo / redo:** Ctrl+Z / Ctrl+Y for token moves, edits, deletes, map moves, grid changes and fog.
 - **Themes:** light (white drawing surface) and dark, plus a few fun ones, and your own accent colour, all in Settings.
+- **Drawing:** pen, line, arrow, box, circle, text and an eraser, in any colour, thin to thick, filled or dashed. Everyone with the permission can draw; you can move or delete your own (the DM can touch anything).
+- **Spell templates:** cone, cube, sphere and line that snap to your grid and read out their size in feet.
+- **Ruler:** measure with your table's diagonal rule. Private until you choose to show it.
+- **Test move:** try a move without making it. The token shows at the new spot, a shadow stays behind, with the distance. Keep it or reset it. Others only see it if you switch on "Show others".
+- **Auras:** coloured areas around a token (radius in feet, from the edge or the centre, round or square, DM-only if you like).
 - **Token maker:** drag and zoom the picture, colour behind it, colour dropper, and a paint/erase brush.
 - **Scenes:** prepare a scene privately, then show it to players when ready. Tokens and fog are saved per scene.
 - **Accounts:** Google sign-in for DMs only (allowlist), saved library of maps and token art that follows you between devices.
@@ -34,6 +39,7 @@ together with a link. Built for one DM and a handful of trusted friends, hosted 
 | Move | drag (Alt = no snapping). Arrow keys nudge one square |
 | Ping | hold the left mouse button |
 | Menu | right-click a token (or empty space) |
+| Draw / templates / ruler / test move | `D`, `S`, `R`, `M` |
 | Tools | `V` select, `G` grid (DM), `F` fog (DM), `T` new token |
 | Undo / redo | `Ctrl+Z`, `Ctrl+Y` |
 | Copy / cut / paste / delete | `Ctrl+C`, `Ctrl+X`, `Ctrl+V`, `Del` |

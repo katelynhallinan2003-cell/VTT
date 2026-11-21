@@ -69,6 +69,19 @@ const rules = {
                 },
               },
             },
+            // drawings: players with the draw permission can add their own and change or remove only their own
+            draw: {
+              $did: {
+                '.write': `auth != null && ${ACTIVE} && ${perm('playersDraw')} && ((!data.exists() && newData.child('uid').val() === auth.uid) || (data.exists() && data.child('uid').val() === auth.uid))`,
+                '.validate': `newData.hasChildren(['uid', 'k', 'p']) && (${OWNER} || newData.child('uid').val() === auth.uid)`,
+              },
+            },
+            // short-lived plotting (ruler, test moves): everyone writes only their own entry
+            live: {
+              $luid: {
+                '.write': `auth != null && ${ACTIVE} && auth.uid === $luid`,
+              },
+            },
             pings: {
               $pid: {
                 '.write': `auth != null && ${ACTIVE} && ${perm('playersPing')}`,

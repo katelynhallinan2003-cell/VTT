@@ -34,9 +34,9 @@ export const PERM_LABELS: Record<keyof Permissions, { label: string; hint: strin
   playersMoveAnyToken: { label: 'Move and edit any token', hint: 'Off: players can only touch the token they own.' },
   playersCreateTokens: { label: 'Create tokens', hint: 'Players can add their own tokens to the board.' },
   playersDeleteAnyToken: { label: 'Delete any token', hint: 'Off: players can only delete tokens they own.' },
-  playersPing: { label: 'Ping the map', hint: 'Middle-click to ping.' },
-  playersDraw: { label: 'Draw on the map', hint: 'Coming in phase 2.' },
-  playersMeasure: { label: 'Use the ruler', hint: 'Coming in phase 2.' },
+  playersPing: { label: 'Ping the map', hint: 'Hold the left mouse button on the map.' },
+  playersDraw: { label: 'Draw and place spell templates', hint: 'Players can add, move and erase their own drawings.' },
+  playersMeasure: { label: 'Use the ruler', hint: 'Measure distances on the map.' },
 };
 
 export function detectPreset(perm: Permissions): PermPreset {

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { TOKEN_SIZES } from '../core/model';
 import type { TableClient } from '../state/client';
-import type { LabelMode, Token, TokenShape } from '../types';
+import type { Aura, LabelMode, Token, TokenShape } from '../types';
 import { Field, Modal, SliderField, Toggle, toast, useClient } from './common';
+import { AuraEditor } from './auraEditor';
 import { NO_FRAMING, PickImage, TokenCropper, type PaintApi } from './tokenCropper';
 import { uploadImage } from './uploads';
 
@@ -56,6 +57,7 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
   const ringW = (draft.ringW ?? t0.ringW) as number;
   const size = (val('size') ?? t0.size) as number;
   const name = (draft.name ?? t0.name) as string;
+  const auras = ('auras' in draft ? draft.auras : t0.auras) as Aura[];
   const imgBg = ('imgBg' in draft ? draft.imgBg : t0.imgBg) ?? null;
   const [paintTouched, setPaintTouched] = useState(false);
   const dirty = Object.keys(draft).length > 0 || !!file || paintTouched;
@@ -148,6 +150,7 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
               <Toggle checked={!!(val('locked') ?? false)} onChange={(v) => set({ locked: v })} label="Locked in place" hint="Players can't move or edit it." />
             </>
           )}
+          {!multi && <AuraEditor auras={auras} ft={client.grid.ft} isDM={client.isDM} disabled={!editable} onChange={(a) => set({ auras: a })} />}
         </div>
       </div>
     </Modal>

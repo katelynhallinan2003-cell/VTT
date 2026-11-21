@@ -78,12 +78,61 @@ export interface Token {
   imgY: number;
   /** colour filling the token shape behind the picture (visible where the picture does not reach) */
   imgBg: string | null;
+  /** coloured areas around the token: auras and emanations */
+  auras: Aura[];
   ownerUid: string | null;
   /** DM-only token (stored in the DM-only subtree, invisible to players) */
   hidden: boolean;
   locked: boolean;
   z: number;
   label: LabelMode;
+}
+
+/** An area around a token, measured in feet. */
+export interface Aura {
+  /** radius in feet */
+  r: number;
+  color: string;
+  /** fill opacity 0..1 */
+  a: number;
+  shape: 'circle' | 'square';
+  /** measured from the edge of the token (5e emanation) instead of its centre */
+  edge: boolean;
+  /** only the DM sees it */
+  dm: boolean;
+}
+
+export type DrawKind = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'cone' | 'cube' | 'sphere' | 'beam';
+
+/** Something drawn on the map: freehand, a shape, text or a spell template. */
+export interface Drawing {
+  id: string;
+  /** who made it */
+  uid: string;
+  k: DrawKind;
+  /** points as "x,y,x,y,...": every point for pen strokes, start and end for shapes and templates */
+  p: string;
+  color: string;
+  /** stroke width in world pixels */
+  w: number;
+  /** fill opacity 0..1 */
+  fill: number;
+  dash: boolean;
+  /** text content (text only) */
+  txt: string;
+  /** font size in world pixels (text only) */
+  fs: number;
+  /** width of a line template, in feet */
+  bw: number;
+  t: number;
+}
+
+/** What someone is plotting right now (ruler, test moves). Short-lived, only shared when they choose to. */
+export interface LivePlot {
+  uid: string;
+  ruler: { a: Vec; b: Vec } | null;
+  /** token id -> where they are trying that token out */
+  ghosts: Record<string, Vec>;
 }
 
 export type FogMode = 'r' | 'h'; // reveal | hide

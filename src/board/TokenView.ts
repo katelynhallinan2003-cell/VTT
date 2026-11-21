@@ -31,6 +31,10 @@ export class TokenView {
   display = { x: 0, y: 0 };
   target = { x: 0, y: 0 };
   dragging = false;
+  /** where this token is being tried out (a test move); the real position is untouched */
+  testPos: { x: number; y: number } | null = null;
+  /** draw as a see-through copy (shadows and other people's test moves) */
+  ghostAlpha: number | null = null;
 
   private base = new Graphics();
   private sprite: Sprite | null = null;
@@ -86,9 +90,9 @@ export class TokenView {
     this.label.visible = ctx.showLabel && token.label !== 'none' && !!token.name;
     if (this.label.resolution !== ctx.textRes) this.label.resolution = ctx.textRes;
     this.container.zIndex = token.z;
-    this.container.alpha = token.hidden ? 0.5 : 1;
+    this.container.alpha = this.ghostAlpha ?? (token.hidden ? 0.5 : 1);
     if (!this.dragging) {
-      this.target = { x: token.x, y: token.y };
+      this.target = this.testPos ? { ...this.testPos } : { x: token.x, y: token.y };
       if (!this.placed) { this.display = { ...this.target }; this.placed = true; }
     }
     this.container.position.set(this.display.x, this.display.y);
@@ -132,6 +136,14 @@ export class TokenView {
 
     this.label.style.fontSize = Math.max(11, ctx.grid.cell * 0.22);
     this.label.position.set(0, r + 2);
+  }
+
+  /** Jump straight to a spot without sliding there. */
+  placeAt(p: { x: number; y: number }) {
+    this.display = { ...p };
+    this.target = { ...p };
+    this.placed = true;
+    this.container.position.set(p.x, p.y);
   }
 
   /** Force a redraw next apply (e.g. when the grid size changed). */

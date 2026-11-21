@@ -1,13 +1,15 @@
 import type { Backend, Unsub } from '../backend/types';
 import { SERVER_TS } from '../backend/types';
 import {
-  normalizeFogOp, normalizeMeta, normalizePlayer, normalizeSceneMeta, normalizeSettings, normalizeToken,
-  stripUndefined, tokenToWire, DEFAULT_GRID, DM_COLOR,
+  drawingToWire, normalizeDrawing, normalizeFogOp, normalizeLive, normalizeMeta, normalizePlayer, normalizeSceneMeta,
+  normalizeSettings, normalizeToken, stripUndefined, tokenToWire, DEFAULT_GRID, DM_COLOR,
 } from '../core/model';
 import { can, detectPreset, PRESETS, type Action } from '../core/permissions';
 import { mapRect, snapTokenCenter } from '../core/geometry';
+import { movedPoints } from '../core/draw';
+import { throttle } from '../core/throttle';
 import type {
-  FogOp, GridSettings, Permissions, PermPreset, Ping, Player, Role, SceneIndexEntry, SceneMeta,
+  Drawing, FogOp, LivePlot, GridSettings, Permissions, PermPreset, Ping, Player, Role, SceneIndexEntry, SceneMeta,
   TableMeta, TableSettings, Token, Vec,
 } from '../types';
 import { History } from './history';
@@ -21,6 +23,11 @@ export interface SceneState {
   tokensRev: number;
   fogOps: Map<string, FogOp>;
   fogRev: number;
+  draws: Map<string, Drawing>;
+  drawRev: number;
+  /** what other people are plotting right now */
+  live: Map<string, LivePlot>;
+  liveRev: number;
   metaRev: number;
 }
 
@@ -133,6 +140,7 @@ export class TableClient {
   }
 
   stop() {
+    this.clearLive();
     this.stopped = true;
     for (const u of this.unsubs) u();
     for (const u of this.sceneUnsubs) u();
@@ -183,12 +191,13 @@ export class TableClient {
     this.sceneUnsubs = [];
     this.seenPings.clear();
     this.history.clear();
+    this.clearLive();
     this.viewSceneId = sid;
     if (!sid) { this.scene = null; this.bump(); return; }
 
     const s: SceneState = {
       id: sid, loaded: false, meta: null, tokens: new Map(), tokensRev: 0,
-      fogOps: new Map(), fogRev: 0, metaRev: 0,
+      fogOps: new Map(), fogRev: 0, draws: new Map(), drawRev: 0, live: new Map(), liveRev: 0, metaRev: 0,
     };
     this.scene = s;
     const b = this.backend;
@@ -229,6 +238,28 @@ export class TableClient {
       added: fogSet, changed: fogSet,
       removed: (k) => { if (live()) { s.fogOps.delete(k); s.fogRev++; this.bump(); } },
     }, sceneFail('fog')));
+
+    const drawSet = (k: string, v: any) => {
+      if (!live()) return;
+      const d = normalizeDrawing(k, v);
+      if (d) s.draws.set(k, d); else s.draws.delete(k);
+      s.drawRev++; this.bump();
+    };
+    this.sceneUnsubs.push(b.listenChildren(P.sceneDraw(tid, sid), {
+      added: drawSet, changed: drawSet,
+      removed: (k) => { if (live()) { s.draws.delete(k); s.drawRev++; this.bump(); } },
+    }, sceneFail('drawings')));
+
+    const liveSet = (k: string, v: any) => {
+      if (!live()) return;
+      const l = normalizeLive(k, v);
+      if (l) s.live.set(k, l); else s.live.delete(k);
+      s.liveRev++; this.bump();
+    };
+    this.sceneUnsubs.push(b.listenChildren(P.sceneLive(tid, sid), {
+      added: liveSet, changed: liveSet,
+      removed: (k) => { if (live()) { s.live.delete(k); s.liveRev++; this.bump(); } },
+    }, sceneFail('live plotting')));
 
     this.sceneUnsubs.push(b.listenChildren(P.scenePings(tid, sid), {
       added: (k, v) => this.onPingAdded(k, v),
@@ -447,6 +478,125 @@ export class TableClient {
     }
     if (made.length) this.recordCreated(made, made.length > 1 ? 'Paste tokens' : 'Paste token');
     return out;
+  }
+
+  // ---------------------------------------------------------------- drawings
+  canEditDrawing(d: Drawing): boolean { return this.isDM || (this.canDo('draw') && d.uid === this.uid); }
+
+  /** Drawings in the order they were made (keys sort by time). */
+  drawingsSorted(): Drawing[] {
+    return [...(this.scene?.draws.values() ?? [])].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  }
+
+  private drawPath(id: string) { return P.sceneDrawing(this.tableId, this.viewSceneId!, id); }
+
+  async addDrawing(d: Omit<Drawing, 'id' | 'uid' | 't'>, opts: { record?: boolean } = {}): Promise<string> {
+    if (!this.viewSceneId) throw new Error('No scene is open');
+    if (!this.canDo('draw')) throw new Error('You are not allowed to draw here.');
+    const id = this.backend.newKey();
+    const full: Drawing = { ...d, id, uid: this.uid, t: this.backend.now() };
+    await this.backend.set(this.drawPath(id), drawingToWire(full));
+    if (opts.record !== false) this.recordDrawn([full], d.k === 'cone' || d.k === 'cube' || d.k === 'sphere' || d.k === 'beam' ? 'Place template' : 'Draw');
+    return id;
+  }
+
+  private async restoreDrawings(list: Drawing[]) {
+    const updates: Record<string, any> = {};
+    for (const d of list) updates[this.drawPath(d.id)] = drawingToWire(d);
+    if (Object.keys(updates).length) await this.backend.update(updates);
+  }
+  private async deleteDrawingsRaw(ids: string[]) {
+    const updates: Record<string, any> = {};
+    for (const id of ids) updates[this.drawPath(id)] = null;
+    if (Object.keys(updates).length) await this.backend.update(updates);
+  }
+  private recordDrawn(list: Drawing[], label: string) {
+    const snaps = list.map((d) => ({ ...d }));
+    this.history.push({ label, undo: () => this.deleteDrawingsRaw(snaps.map((d) => d.id)), redo: () => this.restoreDrawings(snaps) });
+  }
+
+  async removeDrawings(ids: string[], label = 'Erase drawing'): Promise<void> {
+    const snaps = ids.map((id) => this.scene?.draws.get(id)).filter((d): d is Drawing => !!d && this.canEditDrawing(d)).map((d) => ({ ...d }));
+    if (!snaps.length) return;
+    await this.deleteDrawingsRaw(snaps.map((d) => d.id));
+    this.history.push({ label: snaps.length > 1 ? `${label}s` : label, undo: () => this.restoreDrawings(snaps), redo: () => this.deleteDrawingsRaw(snaps.map((d) => d.id)) });
+  }
+
+  /** Remove every drawing that matches (for "clear mine", "clear templates"…). Undoable. */
+  async clearDrawings(match: (d: Drawing) => boolean, label = 'Clear drawings'): Promise<number> {
+    const ids = this.drawingsSorted().filter((d) => this.canEditDrawing(d) && match(d)).map((d) => d.id);
+    if (!ids.length) return 0;
+    await this.removeDrawings(ids, label.replace(/s$/, ''));
+    return ids.length;
+  }
+
+  /** Slide drawings by (dx, dy). `record` makes it one undo step. */
+  async moveDrawings(ids: string[], dx: number, dy: number, record = true): Promise<void> {
+    const before = ids.map((id) => this.scene?.draws.get(id)).filter((d): d is Drawing => !!d && this.canEditDrawing(d)).map((d) => ({ id: d.id, p: d.p }));
+    if (!before.length) return;
+    const after = before.map((b) => ({ id: b.id, p: movedPoints(b, dx, dy) }));
+    const write = (list: { id: string; p: string }[]) => {
+      const updates: Record<string, any> = {};
+      for (const d of list) updates[`${this.drawPath(d.id)}/p`] = d.p;
+      return this.backend.update(updates);
+    };
+    await write(after);
+    if (record) this.history.push({ label: before.length > 1 ? 'Move drawings' : 'Move drawing', undo: () => write(before), redo: () => write(after) });
+  }
+
+  async updateDrawings(ids: string[], patch: Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'dash' | 'txt' | 'bw'>>): Promise<void> {
+    const cur = ids.map((id) => this.scene?.draws.get(id)).filter((d): d is Drawing => !!d && this.canEditDrawing(d));
+    if (!cur.length) return;
+    const prev = cur.map((d) => ({ id: d.id, vals: Object.fromEntries(Object.keys(patch).map((k) => [k, (d as any)[k]])) }));
+    const write = (list: { id: string; vals: Record<string, unknown> }[]) => {
+      const updates: Record<string, any> = {};
+      for (const d of list) for (const [k, v] of Object.entries(d.vals)) updates[`${this.drawPath(d.id)}/${k}`] = v === '' || v === false || v === 0 ? null : v;
+      return this.backend.update(updates);
+    };
+    const next = cur.map((d) => ({ id: d.id, vals: patch as Record<string, unknown> }));
+    await write(next);
+    this.history.push({ label: 'Edit drawing', key: `draw:${ids.join('+')}:${Object.keys(patch).sort().join(',')}`, undo: () => write(prev), redo: () => write(next) });
+  }
+
+  // ---------------------------------------------------------------- live plotting (ruler, test moves)
+  private liveMine: { ruler: { a: Vec; b: Vec } | null; ghosts: Record<string, Vec> } = { ruler: null, ghosts: {} };
+  private liveSid: string | null = null;
+  private liveArmed = false;
+  private pushLive = throttle(() => { void this.writeLive(); }, 90);
+
+  /** Share (or stop sharing) what you are plotting. Pass only the parts that changed. */
+  setLive(patch: { ruler?: { a: Vec; b: Vec } | null; ghosts?: Record<string, Vec> }) {
+    if (!this.viewSceneId) return;
+    if (patch.ruler !== undefined) this.liveMine.ruler = patch.ruler;
+    if (patch.ghosts !== undefined) this.liveMine.ghosts = patch.ghosts;
+    this.liveSid = this.viewSceneId;
+    this.pushLive();
+  }
+
+  private async writeLive() {
+    const sid = this.liveSid;
+    if (!sid) return;
+    const path = P.sceneLiveOf(this.tableId, sid, this.uid);
+    const { ruler, ghosts } = this.liveMine;
+    const gh = Object.fromEntries(Object.entries(ghosts).map(([id, v]) => [id, { x: Math.round(v.x * 10) / 10, y: Math.round(v.y * 10) / 10 }]));
+    try {
+      if (!ruler && !Object.keys(gh).length) { await this.backend.remove(path); return; }
+      if (!this.liveArmed) { this.backend.onDisconnectSet(path, null); this.liveArmed = true; }
+      await this.backend.set(path, stripUndefined({
+        ruler: ruler ? { ax: Math.round(ruler.a.x), ay: Math.round(ruler.a.y), bx: Math.round(ruler.b.x), by: Math.round(ruler.b.y) } : undefined,
+        ghosts: Object.keys(gh).length ? gh : undefined,
+      }));
+    } catch (e) { console.warn('live plotting', (e as Error).message); }
+  }
+
+  /** Forget what we shared (leaving a scene). */
+  private clearLive() {
+    this.pushLive.cancel();
+    const sid = this.liveSid;
+    this.liveMine = { ruler: null, ghosts: {} };
+    this.liveSid = null;
+    this.liveArmed = false;
+    if (sid && this.started) void this.backend.remove(P.sceneLiveOf(this.tableId, sid, this.uid)).catch(() => undefined);
   }
 
   // ---------------------------------------------------------------- pings

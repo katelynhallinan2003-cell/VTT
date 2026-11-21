@@ -178,6 +178,8 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void 
   const [saveLib, setSaveLib] = useState(true);
   const [makeActive, setMakeActive] = useState(!client.activeSceneId);
   const [busy, setBusy] = useState(false);
+  /** the demo's sample map is drawn on request, so Create waits for it */
+  const [preparing, setPreparing] = useState(false);
 
   async function create() {
     setBusy(true);
@@ -204,14 +206,14 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void 
 
   return (
     <Modal title="New scene" onClose={props.onClose} width={560}
-      footer={<><button class="btn" onClick={props.onClose}>Cancel</button><button class="btn primary" disabled={busy} onClick={create}>{busy ? 'Uploading…' : 'Create scene'}</button></>}>
+      footer={<><button class="btn" onClick={props.onClose}>Cancel</button><button class="btn primary" disabled={busy || preparing} onClick={create}>{busy ? 'Uploading…' : 'Create scene'}</button></>}>
       <Field label="Scene name"><input type="text" value={name} autoFocus onInput={(e) => setName((e.target as HTMLInputElement).value)} placeholder="Goblin cave" /></Field>
       <h3>Map image</h3>
       <p class="muted">Maps keep their full resolution (up to your host's size limit). You can skip this and add a map later.</p>
       <div class="row wrap">
         <FilePick label="Upload map…" onFile={(f) => { setFile(f); setFileName(f.name); setPicked(null); setUrl(''); }} />
         {client.backend.kind === 'mock' && (
-          <button class="btn" onClick={async () => { const s = await makeSampleMap(); setFile(s.blob); setFileName('Sample dungeon.png'); setPicked(null); setUrl(''); if (!name) setName('Sample dungeon'); }}>Use sample dungeon</button>
+          <button class="btn" disabled={preparing} onClick={async () => { setPreparing(true); try { const s = await makeSampleMap(); setFile(s.blob); setFileName('Sample dungeon.png'); setPicked(null); setUrl(''); if (!name) setName('Sample dungeon'); } finally { setPreparing(false); } }}>Use sample dungeon</button>
         )}
         {file && <span class="muted">{fileName}</span>}
       </div>
@@ -422,7 +424,9 @@ export function SettingsModal(props: { client: TableClient; onClose: () => void;
         <li><kbd>Alt</kbd> while dragging — move without snapping</li>
         <li><kbd>Arrows</kbd> — nudge a square, <kbd>Del</kbd> — delete</li>
         <li><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo, <kbd>Ctrl</kbd>+<kbd>Y</kbd> redo, <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>X</kbd> / <kbd>V</kbd> copy, cut, paste tokens</li>
-        <li><kbd>V</kbd> select · <kbd>G</kbd> grid · <kbd>F</kbd> fog (DM)</li>
+        <li><kbd>V</kbd> select · <kbd>D</kbd> draw · <kbd>S</kbd> spell templates · <kbd>R</kbd> ruler · <kbd>M</kbd> test move</li>
+        <li><kbd>G</kbd> grid · <kbd>F</kbd> fog (DM) · <kbd>Esc</kbd> back to select / put test moves back · <kbd>Enter</kbd> keep test moves</li>
+        <li>While drawing: <kbd>Shift</kbd> locks angles and makes squares, <kbd>Alt</kbd> turns off snapping</li>
       </ul>
 
       {props.onSignOut && <div class="row"><button class="btn danger" onClick={props.onSignOut}>Sign out</button></div>}

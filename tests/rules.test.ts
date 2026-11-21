@@ -267,3 +267,45 @@ describe('security rules: strict preset', () => {
     expect(can(db, p1, 'write', `${T}/scenes/S1/tokens/mine/x`, 9)).toBe(true);
   });
 });
+
+describe('security rules: drawings and live plotting', () => {
+  const draw = { uid: 'p1', k: 'pen', p: '0,0,10,10' };
+  const withDraw = () => {
+    const db: any = makeDb();
+    db.tables.T1.scenes.S1.draw = { mine: { ...draw }, theirs: { ...draw, uid: 'p2' } };
+    return db;
+  };
+  it('players with the draw permission add drawings as themselves, and only edit or remove their own', () => {
+    const db = withDraw();
+    expect(can(db, p1, 'write', `${T}/scenes/S1/draw/new`, draw)).toBe(true);
+    expect(can(db, p1, 'write', `${T}/scenes/S1/draw/new`, { ...draw, uid: 'p2' })).toBe(false);
+    expect(can(db, p1, 'write', `${T}/scenes/S1/draw/mine`, { ...draw, p: '1,1,2,2' })).toBe(true);
+    expect(can(db, p1, 'write', `${T}/scenes/S1/draw/mine`, null)).toBe(true);
+    expect(can(db, p1, 'write', `${T}/scenes/S1/draw/theirs`, { ...draw, uid: 'p2', p: '1,1,2,2' })).toBe(false);
+    expect(can(db, p1, 'write', `${T}/scenes/S1/draw/theirs`, null)).toBe(false);
+  });
+  it('a player cannot hand their drawing to someone else or make a malformed one', () => {
+    const db = withDraw();
+    expect(can(db, p1, 'write', `${T}/scenes/S1/draw/mine`, { ...draw, uid: 'p2' })).toBe(false);
+    expect(can(db, p1, 'write', `${T}/scenes/S1/draw/bad`, { uid: 'p1', k: 'pen' })).toBe(false);
+  });
+  it('the DM can change and remove anyone\'s drawing', () => {
+    const db = withDraw();
+    expect(can(db, dm, 'write', `${T}/scenes/S1/draw/theirs`, { ...draw, uid: 'p2', p: '5,5,6,6' })).toBe(true);
+    expect(can(db, dm, 'write', `${T}/scenes/S1/draw/theirs`, null)).toBe(true);
+  });
+  it('drawing is off when the table says so, and not allowed on a scene that is not live', () => {
+    const off = withDraw();
+    off.tables.T1.settings.perm = { ...allTrue, playersDraw: false };
+    expect(can(off, p1, 'write', `${T}/scenes/S1/draw/new`, draw)).toBe(false);
+    expect(can(withDraw(), p1, 'write', `${T}/scenes/S2/draw/new`, draw)).toBe(false);
+    expect(can(off, dm, 'write', `${T}/scenes/S1/draw/new`, { ...draw, uid: 'dm-uid' })).toBe(true);
+  });
+  it('everyone writes only their own live plotting entry', () => {
+    const db = withDraw();
+    expect(can(db, p1, 'write', `${T}/scenes/S1/live/p1`, { ruler: { ax: 0, ay: 0, bx: 5, by: 5 } })).toBe(true);
+    expect(can(db, p1, 'write', `${T}/scenes/S1/live/p2`, { ruler: { ax: 0, ay: 0, bx: 5, by: 5 } })).toBe(false);
+    expect(can(db, p1, 'read', `${T}/scenes/S1/live`)).toBe(true);
+    expect(can(db, p1, 'write', `${T}/scenes/S2/live/p1`, { ruler: { ax: 0, ay: 0, bx: 5, by: 5 } })).toBe(false);
+  });
+});

@@ -1,5 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useReducer, useState } from 'preact/hooks';
+import { onThemeChange } from './theme';
 import type { Unsub } from '../backend/types';
 import type { TableClient } from '../state/client';
 import type { UiState } from '../state/ui';
@@ -10,6 +11,30 @@ export function useRerender(subscribe: (fn: () => void) => Unsub, deps: unknown[
 }
 export const useClient = (c: TableClient) => useRerender((fn) => c.subscribe(fn), [c]);
 export const useUi = (u: UiState) => { useRerender((fn) => u.subscribe(fn), [u]); return u.data; };
+
+export const useTheme = () => useRerender((fn) => onThemeChange(fn), []);
+
+// ---------------------------------------------------------------- collapsible sections
+function readFlag(key: string, fallback: boolean): boolean {
+  try { const v = localStorage.getItem(key); return v === null ? fallback : v === '1'; } catch { return fallback; }
+}
+export function writeFlag(key: string, value: boolean) { try { localStorage.setItem(key, value ? '1' : '0'); } catch { /* ignore */ } }
+export { readFlag };
+
+/** A titled block that can be folded away. Open/closed state is remembered per browser. */
+export function Section(props: { id: string; title: string; defaultOpen?: boolean; extra?: ComponentChildren; children: ComponentChildren }) {
+  const key = 'vtt-sect-' + props.id;
+  const [open, setOpen] = useState(() => readFlag(key, props.defaultOpen ?? true));
+  return (
+    <section class="sect">
+      <button class="sect-head" aria-expanded={open} onClick={() => { setOpen(!open); writeFlag(key, !open); }}>
+        <span class="chev">{open ? '▾' : '▸'}</span>{props.title}
+        {props.extra && <span class="sect-extra" onClick={(e) => e.stopPropagation()}>{props.extra}</span>}
+      </button>
+      {open && <div class="sect-body">{props.children}</div>}
+    </section>
+  );
+}
 
 // ---------------------------------------------------------------- toasts
 interface ToastItem { id: number; msg: string; kind: 'info' | 'error' | 'ok' }
@@ -40,7 +65,7 @@ export function Modal(props: { title: string; onClose: () => void; width?: numbe
   }, [props.onClose]);
   return (
     <div class="modal-back" onMouseDown={(e) => { if (e.target === e.currentTarget) props.onClose(); }}>
-      <div class="modal" style={{ width: props.width ?? 520 }} role="dialog" aria-label={props.title}>
+      <div class="modal" style={{ width: `${props.width ?? 520}px` }} role="dialog" aria-label={props.title}>
         <div class="modal-head">
           <h2>{props.title}</h2>
           <button class="icon-btn" onClick={props.onClose} aria-label="Close">✕</button>

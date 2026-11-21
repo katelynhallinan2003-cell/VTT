@@ -6,9 +6,11 @@ import { loadImage } from '../core/images';
 import type { TableClient } from '../state/client';
 import { UiState } from '../state/ui';
 import type { AuthUser, LibraryItem, Rect, Token, Vec } from '../types';
-import { Toasts, copyText, toast, useClient, useUi } from './common';
-import { AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewSceneModal, ScenesModal, SettingsModal } from './modals';
-import { Inspector, ScenePanel } from './panels';
+import { Toasts, copyText, toast, useClient, useTheme, useUi } from './common';
+import { AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewSceneModal, PlayersModal, ScenesModal, SettingsModal } from './modals';
+import { ScenePanel, TokenTag } from './panels';
+import { getTheme, setTheme } from './theme';
+import { TokenEditorModal } from './tokenEditor';
 
 type ModalState =
   | null
@@ -18,6 +20,8 @@ type ModalState =
   | { kind: 'library' }
   | { kind: 'settings' }
   | { kind: 'claim' }
+  | { kind: 'players' }
+  | { kind: 'editToken'; ids: string[] }
   | { kind: 'grid'; rect: Rect; derived: { cell: number; ox: number; oy: number } };
 
 const Icon = (props: { d: string; size?: number }) => (
@@ -39,10 +43,11 @@ function ToolBtn(props: { icon: keyof typeof ICONS; label: string; hotkey?: stri
   );
 }
 
-export function TableView(props: { client: TableClient; user: AuthUser; demo: boolean; onSignOut: () => void; onHome: () => void }) {
+export function TableView(props: { client: TableClient; user: AuthUser; demo: boolean; onSignOut: () => void; onHome: () => void; onRemoved?: () => void }) {
   const { client } = props;
   useClient(client);
   const ui = useMemo(() => new UiState(), []);
+  useTheme();
   const d = useUi(ui);
   const hostRef = useRef<HTMLDivElement>(null);
   const [board, setBoard] = useState<Board | null>(null);
@@ -80,6 +85,14 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
     }
   }, [client.rev]);
 
+  // ---- the DM removed this player from the list: send them back to the join form
+  const hadMe = useRef(false);
+  useEffect(() => {
+    if (client.isDM) return;
+    if (client.me) hadMe.current = true;
+    else if (hadMe.current && client.metaLoaded) props.onRemoved?.();
+  }, [client.rev]);
+
   // ---- hotkeys that open dialogs
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -87,6 +100,10 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
       if (e.ctrlKey || e.metaKey || e.altKey || modalRef.current) return;
       if (e.key.toLowerCase() === 't' && client.canDo('create')) openAddToken();
+      if (e.key.toLowerCase() === 'e') {
+        const ids = [...ui.data.selection].filter((id) => { const t = client.scene?.tokens.get(id); return t && client.canDo('edit', t); });
+        if (ids.length) { e.preventDefault(); setModal({ kind: 'editToken', ids }); }
+      }
     };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
@@ -132,6 +149,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
     if (menuToken) {
       const ids = selectedIds.length && d.selection.has(menuToken.id) ? selectedIds : [menuToken.id];
       const toks = ids.map((i) => scene?.tokens.get(i)).filter((t): t is Token => !!t);
+      if (toks.every((t) => client.canDo('edit', t))) menuItems.push({ label: 'Edit token…', onClick: () => setModal({ kind: 'editToken', ids }) });
       if (client.canDo('create')) menuItems.push({ label: 'Duplicate', onClick: () => void client.duplicateTokens(ids, client.grid.cell).then((n) => ui.select(n)) });
       if (toks.every((t) => client.canDo('edit', t))) {
         menuItems.push({ label: 'Bring to front', onClick: () => void client.bringToFront(ids) });
@@ -223,26 +241,31 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
           scene?.meta && <span class="scene-name">{scene.meta.name}</span>
         )}
         <div class="spacer" />
-        <div class="players">
+        <button class="players" title="Players & names" onClick={() => setModal({ kind: 'players' })}>
           {players.map((p) => (
             <span key={p.uid} class={`chip ${p.online ? '' : 'off'}`} title={`${p.name}${p.online ? '' : ' (offline)'}`}>
               <span class="dot" style={{ background: p.color }} />{p.name}
             </span>
           ))}
-        </div>
+          {players.length === 0 && <span class="muted small">Players</span>}
+        </button>
         {!client.isDM && <button class="btn small" onClick={() => setModal({ kind: 'claim' })}>My token</button>}
         {client.isDM && <button class="btn small" onClick={() => setModal({ kind: 'scenes' })}>Scenes</button>}
         {client.isDM && <button class="btn small" onClick={() => setModal({ kind: 'library' })}>Library</button>}
         {client.isDM && <button class="btn small" onClick={() => copyText(`${location.href.split('#')[0]}#/t/${client.tableId}`)}>Copy player link</button>}
+        <button class="btn small" title="Switch light / dark" onClick={() => setTheme(getTheme() === 'light' ? 'dark' : 'light')}>{getTheme() === 'light' ? '☾' : '☀'}</button>
         <button class="btn small" onClick={() => setModal({ kind: 'settings' })}>Settings</button>
       </header>
 
-      {/* ---------------- right dock */}
-      {mySel ? <Inspector client={client} ui={ui} /> : client.isDM ? <ScenePanel client={client} ui={ui} board={board} onNewScene={() => setModal({ kind: 'newScene' })} /> : null}
+      {/* ---------------- right dock (DM) */}
+      {client.isDM && (d.dockOpen
+        ? <ScenePanel client={client} ui={ui} board={board} onNewScene={() => setModal({ kind: 'newScene' })} />
+        : <button class="dock-tab" onClick={() => ui.set({ dockOpen: true })}>Scene panel</button>)}
+      {mySel && <TokenTag client={client} ui={ui} onEdit={(ids) => setModal({ kind: 'editToken', ids })} />}
 
       {/* ---------------- overlays */}
       {d.status && <div class="status">{d.status}</div>}
-      {mapError && <div class="banner error">{mapError}</div>}
+      {mapError && <div class="banner error">{mapError} <button class="btn small" onClick={() => board?.retryMap()}>Try again</button></div>}
       {client.lastError && client.isDM && <div class="banner error">Database error: {client.lastError}</div>}
       {!client.metaLoaded && <div class="splash-center">Connecting…</div>}
       {showEmpty && client.isDM && (
@@ -266,7 +289,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {/* ---------------- context menu */}
       {menu && menuItems.length > 0 && (
         <div class="ctx-back" onMouseDown={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null); }}>
-          <div class="ctx" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.min(menu.y, window.innerHeight - menuItems.length * 34 - 16) }} onMouseDown={(e) => e.stopPropagation()}>
+          <div class="ctx" style={{ left: `${Math.max(0, Math.min(menu.x, window.innerWidth - 220))}px`, top: `${Math.max(0, Math.min(menu.y, window.innerHeight - menuItems.length * 34 - 16))}px` }} onMouseDown={(e) => e.stopPropagation()}>
             {menuItems.map((it) => <button key={it.label} class={it.danger ? 'danger' : ''} onClick={() => { setMenu(null); it.onClick(); }}>{it.label}</button>)}
           </div>
         </div>
@@ -278,6 +301,8 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {modal?.kind === 'scenes' && <ScenesModal client={client} onClose={() => setModal(null)} onNew={() => setModal({ kind: 'newScene' })} />}
       {modal?.kind === 'library' && <LibraryModal client={client} onClose={() => setModal(null)} onUseMap={useLibraryMap} onAddToken={addLibraryToken} />}
       {modal?.kind === 'settings' && <SettingsModal client={client} onClose={() => setModal(null)} onSignOut={client.isDM ? props.onSignOut : undefined} />}
+      {modal?.kind === 'players' && <PlayersModal client={client} onClose={() => setModal(null)} />}
+      {modal?.kind === 'editToken' && <TokenEditorModal client={client} ids={modal.ids} onClose={() => setModal(null)} />}
       {modal?.kind === 'claim' && <ClaimModal client={client} onClose={() => setModal(null)} onNewToken={() => openAddToken()} />}
       {modal?.kind === 'grid' && (
         <GridDialog onCancel={() => { setModal(null); ui.set({ tool: 'select' }); }}

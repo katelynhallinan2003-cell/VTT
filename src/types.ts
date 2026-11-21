@@ -117,6 +117,8 @@ export interface Player {
   color: string;
   online: boolean;
   joinedAt: number;
+  /** the table's DM (cosmetic badge only; real DM-ness is enforced by the database rules) */
+  dm: boolean;
 }
 
 export interface SceneIndexEntry { id: string; name: string; order: number }

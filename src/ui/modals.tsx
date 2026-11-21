@@ -8,7 +8,9 @@ import { makeSampleMap } from '../core/sample';
 import { addLibraryItem, removeLibraryItem, watchLibrary } from '../state/account';
 import type { TableClient } from '../state/client';
 import type { LibraryItem, Permissions, TokenShape, Vec } from '../types';
-import { Field, Modal, SliderField, Toggle, copyText, toast, useClient } from './common';
+import { Field, Modal, SliderField, Toggle, copyText, toast, useClient, useTheme } from './common';
+import { getTheme, setTheme } from './theme';
+import { TokenCropper, NO_FRAMING, type Framing } from './tokenCropper';
 import { addRecent, getRecent, uploadImage } from './uploads';
 
 const asErr = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -48,6 +50,8 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
   const [saveLib, setSaveLib] = useState(true);
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
+  const [ringW, setRingW] = useState(0.06);
+  const [framing, setFraming] = useState<Framing>({ ...NO_FRAMING });
   const recent = getRecent();
 
   useEffect(() => {
@@ -77,7 +81,7 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
       const grid = client.grid;
       const p = grid.snap ? snapTokenCenter(grid, size, props.at) : props.at;
       const id = await client.addToken({
-        x: p.x, y: p.y, name, img, size, shape, ring, hidden: client.isDM && hidden,
+        x: p.x, y: p.y, name, img, size, shape, ring, ringW, ...framing, hidden: client.isDM && hidden,
         ownerUid: client.isDM ? (owner || null) : client.uid,
       });
       props.onCreated(id);
@@ -89,16 +93,14 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
   }
 
   return (
-    <Modal title="Add token" onClose={props.onClose} width={560}
+    <Modal title="Add token" onClose={props.onClose} width={760}
       footer={<><button class="btn" onClick={props.onClose}>Cancel</button><button class="btn primary" disabled={busy} onClick={create}>{busy ? 'Working…' : 'Add to board'}</button></>}>
-      <div class="token-add">
-        <div class="token-preview" style={{ borderColor: ring, borderRadius: shape === 'circle' ? '50%' : shape === 'square' ? '8px' : '0' }}>
-          {chosenUrl ? <img src={chosenUrl} alt="" /> : <span>{(name || '?').charAt(0).toUpperCase()}</span>}
-        </div>
-        <div class="grow">
+      <div class="two-col">
+        <TokenCropper src={chosenUrl} shape={shape} ring={ring} ringW={ringW} name={name} framing={framing} onChange={setFraming} />
+        <div>
           <Field label="Name"><input type="text" value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} placeholder="Goblin 1" autoFocus /></Field>
           <div class="row">
-            <Field label="Size">
+            <Field label="Size" hint="Scales to your grid squares automatically.">
               <select value={size} onChange={(e) => setSize(Number((e.target as HTMLSelectElement).value))}>
                 {TOKEN_SIZES.map((s) => <option value={s.size}>{s.label}</option>)}
               </select>
@@ -110,16 +112,17 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
             </Field>
             <Field label="Ring"><input type="color" value={ring} onInput={(e) => setRing((e.target as HTMLInputElement).value)} /></Field>
           </div>
+          <SliderField label="Ring thickness" value={Math.round(ringW * 100)} min={0} max={20} step={1} unit="%" onInput={(v) => setRingW(v / 100)} />
         </div>
       </div>
 
       <h3>Image</h3>
       <div class="row wrap">
-        <FilePick onFile={(f) => { setFile(f); setPicked(null); if (!name) setName(f.name.replace(/\.\w+$/, '')); }} />
+        <FilePick onFile={(f) => { setFile(f); setPicked(null); setFraming({ ...NO_FRAMING }); if (!name) setName(f.name.replace(/\.\w+$/, '')); }} />
         {file && <span class="muted">{file.name}</span>}
       </div>
       <Field label="…or paste an image link" hint="Direct link to a .png / .jpg / .webp image.">
-        <input type="text" value={url} placeholder="https://…" onInput={(e) => { setUrl((e.target as HTMLInputElement).value); setFile(null); setPicked(null); }} />
+        <input type="text" value={url} placeholder="https://…" onInput={(e) => { setUrl((e.target as HTMLInputElement).value); setFile(null); setPicked(null); setFraming({ ...NO_FRAMING }); }} />
       </Field>
       {(lib.length > 0 || recent.length > 0) && (
         <>
@@ -127,7 +130,7 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
           <div class="thumbs small">
             {(lib.length ? lib.map((l) => ({ url: l.url, name: l.name })) : recent).slice(0, 24).map((l) => (
               <button key={l.url} class={`thumb ${picked === l.url ? 'on' : ''}`} title={l.name}
-                onClick={() => { setPicked(l.url); setFile(null); setUrl(''); if (!name) setName(l.name); }}>
+                onClick={() => { setPicked(l.url); setFile(null); setUrl(''); setFraming({ ...NO_FRAMING }); if (!name) setName(l.name); }}>
                 <img src={l.url} alt={l.name} loading="lazy" />
               </button>
             ))}
@@ -325,7 +328,8 @@ export function SettingsModal(props: { client: TableClient; onClose: () => void;
   const [showKey, setShowKey] = useState(false);
   const link = `${location.href.split('#')[0]}#/t/${client.tableId}`;
   const perm = client.settings.perm;
-  const me = client.me;
+  useTheme();
+  const theme = getTheme();
 
   const setPerm = (patch: Partial<Permissions>) => { const next = { ...perm, ...patch }; void client.setPermissions(next, detectPreset(next)); };
 
@@ -376,25 +380,15 @@ export function SettingsModal(props: { client: TableClient; onClose: () => void;
         </>
       )}
 
-      {!client.isDM && me && (
-        <>
-          <h3>Me</h3>
-          <Field label="Name"><input type="text" defaultValue={me.name} onBlur={(e) => { const v = (e.target as HTMLInputElement).value.trim(); if (v && v !== me.name) void client.updatePlayer({ name: v }); }} /></Field>
-          <Field label="Colour">
-            <div class="swatches">
-              {PLAYER_COLORS.map((c) => <button key={c} class={`swatch ${me.color === c ? 'on' : ''}`} style={{ background: c }} onClick={() => void client.updatePlayer({ color: c })} aria-label={c} />)}
-            </div>
-          </Field>
-        </>
-      )}
+      <h3>You</h3>
+      <MyProfile client={client} />
 
-      <h3>Players at this table</h3>
-      <ul class="list">
-        {[...client.players.values()].map((p) => (
-          <li key={p.uid}><span class="dot" style={{ background: p.color }} /> <span class="grow">{p.name}{p.uid === client.uid ? ' (you)' : ''}</span><span class={`badge ${p.online ? 'live' : ''}`}>{p.online ? 'online' : 'offline'}</span></li>
-        ))}
-        {client.players.size === 0 && <li class="muted">Nobody has joined yet.</li>}
-      </ul>
+      <h3>Appearance</h3>
+      <div class="seg">
+        <button class={theme === 'light' ? 'on' : ''} onClick={() => setTheme('light')}>Light</button>
+        <button class={theme === 'dark' ? 'on' : ''} onClick={() => setTheme('dark')}>Dark</button>
+      </div>
+      <p class="muted">Applies to this browser only. The map background colour is set per scene in the scene panel.</p>
 
       <h3>Keyboard &amp; mouse</h3>
       <ul class="keys">
@@ -456,6 +450,59 @@ export function ClaimModal(props: { client: TableClient; onClose: () => void; on
           </button>
         ))}
       </div>
+    </Modal>
+  );
+}
+
+/** Change your own display name and colour (used for pings). Works for the DM too. */
+export function MyProfile(props: { client: TableClient }) {
+  const { client } = props;
+  useClient(client);
+  const me = client.me;
+  if (!me) return <p class="muted">You haven't joined this table yet.</p>;
+  return (
+    <div class="me-edit">
+      <Field label="Name" hint="Shown on your pings and in the player list.">
+        <input key={me.name} type="text" defaultValue={me.name} maxLength={30}
+          onBlur={(e) => { const v = (e.target as HTMLInputElement).value.trim(); if (v && v !== me.name) void client.updatePlayer({ name: v }); }}
+          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
+      </Field>
+      <Field label="Colour">
+        <div class="swatches">
+          {PLAYER_COLORS.map((c) => <button key={c} class={`swatch ${me.color === c ? 'on' : ''}`} style={{ background: c }} onClick={() => void client.updatePlayer({ color: c })} aria-label={c} />)}
+          <input type="color" value={me.color} title="Pick any colour" onChange={(e) => void client.updatePlayer({ color: (e.target as HTMLInputElement).value })} />
+        </div>
+      </Field>
+    </div>
+  );
+}
+
+export function PlayersModal(props: { client: TableClient; onClose: () => void }) {
+  const { client } = props;
+  useClient(client);
+  const list = [...client.players.values()].sort((a, b) => Number(b.dm) - Number(a.dm) || a.joinedAt - b.joinedAt);
+  return (
+    <Modal title="Players & names" onClose={props.onClose} width={480}
+      footer={<button class="btn" onClick={props.onClose}>Done</button>}>
+      <h3>You</h3>
+      <MyProfile client={client} />
+      <h3>At this table</h3>
+      {list.map((p) => (
+        <div key={p.uid} class={`player-row ${p.online ? '' : 'off'}`}>
+          <span class="dot" style={{ background: p.color }} />
+          <span class="pname">{p.name}{p.uid === client.uid ? ' (you)' : ''}</span>
+          {p.dm && <span class="badge">DM</span>}
+          <span class={`badge ${p.online ? 'live' : ''}`}>{p.online ? 'online' : 'offline'}</span>
+          {client.isDM && p.uid !== client.uid && (
+            <button class="btn small danger" title="Remove from the list. Their tokens become unclaimed."
+              onClick={() => { if (!p.online || confirm(`${p.name} is online right now. Remove them anyway? They can rejoin from the link.`)) void client.removePlayer(p.uid); }}>
+              Remove
+            </button>
+          )}
+        </div>
+      ))}
+      {list.length === 0 && <p class="muted">Nobody has joined yet.</p>}
+      {client.isDM && <p class="muted">Removing someone only clears them from this list and frees their tokens. They can use the link to join again.</p>}
     </Modal>
   );
 }

@@ -167,4 +167,31 @@ describe('TableClient over the mock backend', () => {
     expect(dm.scene!.tokens.get(b)!.name).toBe('Goblin 2');
     expect(dm.scene!.tokens.get(b)!.x).toBe(70);
   });
+
+  it('gives the DM a default name that can be changed, and pings use it', async () => {
+    const { dm, pl } = await setup();
+    await waitFor(() => !!dm.me, 'DM record');
+    expect(dm.me!.name).toBe('DM');
+    expect(dm.me!.dm).toBe(true);
+    await dm.updatePlayer({ name: 'Narrator', color: '#123456' });
+    await waitFor(() => pl.players.get('dm')?.name === 'Narrator', 'DM rename on player');
+    const seen: string[] = [];
+    pl.onPing((p) => seen.push(p.name));
+    await dm.ping(10, 10);
+    await waitFor(() => seen.length > 0, 'ping');
+    expect(seen[0]).toBe('Narrator');
+  });
+
+  it('lets the DM remove a player and frees their tokens', async () => {
+    const { dm, pl } = await setup();
+    const id = await dm.addToken({ x: 70, y: 70, name: 'Aria', ownerUid: 'p1' });
+    await waitFor(() => dm.scene?.tokens.get(id)?.ownerUid === 'p1', 'owned token');
+    await waitFor(() => dm.players.has('p1'), 'player listed');
+    await dm.removePlayer('p1');
+    await waitFor(() => !dm.players.has('p1'), 'player removed');
+    await waitFor(() => dm.scene?.tokens.get(id)?.ownerUid === null, 'token unclaimed');
+    // a player can rejoin with the same link
+    await pl.joinAsPlayer('Aria again', '#00ff00');
+    await waitFor(() => dm.players.get('p1')?.name === 'Aria again', 'rejoined');
+  });
 });

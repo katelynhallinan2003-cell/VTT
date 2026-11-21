@@ -196,6 +196,7 @@ function TableScreen(props: { tid: string; backend: Backend; demo: boolean }) {
       user={phase.user}
       demo={props.demo}
       onHome={goHome}
+      onRemoved={() => { void getTableName(backend, tid).then((n) => setPhase({ s: 'join', client: phase.client, user: phase.user, tableName: n ?? 'Table' })); }}
       onSignOut={async () => { await backend.signOut(); goHome(); }}
     />
   );

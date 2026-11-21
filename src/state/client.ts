@@ -2,7 +2,7 @@ import type { Backend, Unsub } from '../backend/types';
 import { SERVER_TS } from '../backend/types';
 import {
   normalizeFogOp, normalizeMeta, normalizePlayer, normalizeSceneMeta, normalizeSettings, normalizeToken,
-  stripUndefined, tokenToWire, DEFAULT_GRID,
+  stripUndefined, tokenToWire, DEFAULT_GRID, DM_COLOR,
 } from '../core/model';
 import { can, detectPreset, PRESETS, type Action } from '../core/permissions';
 import { mapRect } from '../core/geometry';
@@ -138,15 +138,18 @@ export class TableClient {
   }
 
   private armPresence() {
-    if (this.role !== 'player') return;
-    const p = this.players.get(this.uid);
-    // only once the player has actually joined (their record exists)
-    void this.backend.get(P.player(this.tableId, this.uid)).then((cur) => {
-      if (!cur) return;
-      void this.backend.update({ [`${P.player(this.tableId, this.uid)}/online`]: true });
-      this.backend.onDisconnectSet(`${P.player(this.tableId, this.uid)}/online`, false);
+    const path = P.player(this.tableId, this.uid);
+    void this.backend.get(path).then(async (cur) => {
+      if (this.isDM && !cur) {
+        // the DM is a named participant too (so pings and chat-free labels can say who did what)
+        await this.backend.set(path, { name: 'DM', color: DM_COLOR, online: true, dm: true, joinedAt: SERVER_TS });
+      } else if (cur) {
+        await this.backend.update({ [`${path}/online`]: true });
+      } else {
+        return; // a player who has not joined yet
+      }
+      this.backend.onDisconnectSet(`${path}/online`, false);
     }).catch(() => undefined);
-    void p;
   }
 
   private setIndex(id: string, v: any) {
@@ -452,6 +455,13 @@ export class TableClient {
     const existing = await this.backend.get(path);
     await this.backend.set(path, { name, color, online: true, joinedAt: existing?.joinedAt ?? SERVER_TS });
     this.backend.onDisconnectSet(`${path}/online`, false);
+  }
+  /** DM: remove someone from the table list (their tokens become unclaimed). */
+  async removePlayer(uid: string): Promise<void> {
+    if (!this.isDM || uid === this.uid) return;
+    const updates: Record<string, any> = { [P.player(this.tableId, uid)]: null };
+    for (const t of this.scene?.tokens.values() ?? []) if (t.ownerUid === uid) updates[`${this.tokenPath(t)}/ownerUid`] = null;
+    await this.backend.update(updates);
   }
   async updatePlayer(patch: Partial<Pick<Player, 'name' | 'color'>>): Promise<void> {
     const path = P.player(this.tableId, this.uid);

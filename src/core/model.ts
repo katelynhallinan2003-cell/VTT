@@ -15,6 +15,9 @@ export const TOKEN_SIZES: { label: string; size: number }[] = [
   { label: 'Gargantuan', size: 4 },
 ];
 
+export const DEFAULT_BG = '#eceae4';
+export const DM_COLOR = '#ffe119';
+
 export const PLAYER_COLORS = [
   '#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#2ec4b6',
   '#f032e6', '#bcbd22', '#ffe119', '#9a6324', '#ffffff', '#808080',
@@ -50,7 +53,7 @@ export function normalizeSceneMeta(raw: any): SceneMeta {
     mapY: num(m.mapY, 0),
     mapScale: Math.max(0.01, num(m.mapScale, 1)),
     mapLocked: bool(m.mapLocked, true),
-    bg: str(m.bg, '#1b1d23'),
+    bg: str(m.bg, DEFAULT_BG),
     grid: normalizeGrid(m.grid),
     fog: {
       enabled: bool(m.fog?.enabled, false),
@@ -113,6 +116,7 @@ export function normalizePlayer(uid: string, raw: any): Player {
     color: str(raw?.color, '#ffffff'),
     online: bool(raw?.online, false),
     joinedAt: num(raw?.joinedAt, 0),
+    dm: bool(raw?.dm, false),
   };
 }
 

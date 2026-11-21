@@ -316,6 +316,15 @@ export class Board {
     this.updateFog();
   }
 
+  /** Try loading the map picture again (the banner's "Try again" button). */
+  retryMap() {
+    const url = this.mapUrl;
+    const sid = this.client.scene?.id;
+    if (!url || !sid) return;
+    this.cb.onMapError(null);
+    void this.loadMap(url, sid);
+  }
+
   private async loadMap(url: string, sceneId: string) {
     this.ui.set({ status: 'Loading map…' });
     const tex = await loadTexture(url, 'map');
@@ -349,10 +358,8 @@ export class Board {
   // ------------------------------------------------------------------ tokens
   private tokenCtx(t: Token) {
     const c = this.client;
-    const owner = t.ownerUid ? c.players.get(t.ownerUid) : null;
     return {
       grid: c.grid,
-      ownerColor: owner?.color ?? null,
       showLabel: t.label !== 'dm' || (c.isDM && !this.ui.data.dmPreview),
       textRes: this.textRes,
     };

@@ -4,7 +4,6 @@ import { loadTexture, type LoadedTexture } from './textures';
 
 export interface TokenCtx {
   grid: GridSettings;
-  ownerColor: string | null;
   /** DM sees names of hidden tokens flagged; players never get hidden tokens at all */
   showLabel: boolean;
   textRes: number;
@@ -37,7 +36,6 @@ export class TokenView {
   private sprite: Sprite | null = null;
   private maskG = new Graphics();
   private ring = new Graphics();
-  private dot = new Graphics();
   private initial: Text;
   private label: Text;
   private key = '';
@@ -55,13 +53,13 @@ export class TokenView {
       style: { fontFamily: 'system-ui, sans-serif', fontWeight: '600', fill: 0xffffff, fontSize: 14, stroke: { color: 0x000000, width: 4, join: 'round' } },
     });
     this.label.anchor.set(0.5, 0);
-    this.container.addChild(this.base, this.maskG, this.initial, this.ring, this.dot, this.label);
+    this.container.addChild(this.base, this.maskG, this.initial, this.ring, this.label);
   }
 
   apply(token: Token, ctx: TokenCtx) {
     this.token = token;
     const g = ctx.grid;
-    const key = [token.size, token.shape, token.ring, token.ringW, token.imgScale, token.imgX, token.imgY, token.name ? token.name[0] : '?', g.cell, ctx.ownerColor].join('|');
+    const key = [token.size, token.shape, token.ring, token.ringW, token.imgScale, token.imgX, token.imgY, token.name ? token.name[0] : '?', g.cell].join('|');
     if (key !== this.key) {
       this.key = key;
       this.redraw(token, ctx);
@@ -103,7 +101,6 @@ export class TokenView {
     this.base.clear();
     this.maskG.clear();
     this.ring.clear();
-    this.dot.clear();
     const noImage = !this.tex;
 
     if (t.shape === 'circle') {
@@ -132,9 +129,6 @@ export class TokenView {
     this.initial.text = (t.name || '?').trim().charAt(0).toUpperCase() || '?';
     this.initial.style.fontSize = Math.max(10, D * 0.5);
 
-    if (ctx.ownerColor) {
-      this.dot.circle(r * 0.72, -r * 0.72, Math.max(5, r * 0.17)).fill(hex(ctx.ownerColor)).stroke({ width: Math.max(1.5, r * 0.04), color: 0x101218 });
-    }
     this.label.style.fontSize = Math.max(11, ctx.grid.cell * 0.22);
     this.label.position.set(0, r + 2);
   }

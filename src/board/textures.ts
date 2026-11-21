@@ -21,6 +21,25 @@ export interface LoadedTexture {
   scale: number;
 }
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const RETRY_DELAYS = [1200, 3000, 6000];
+
+/** Freshly uploaded images can take a few seconds to appear on the image host, so try a few times. */
+async function loadImageWithRetry(url: string): Promise<HTMLImageElement> {
+  const remote = !url.startsWith('blob:') && !url.startsWith('data:');
+  let last: unknown;
+  for (let i = 0; i <= (remote ? RETRY_DELAYS.length : 0); i++) {
+    try {
+      // retries add a harmless query so a cached "not found" answer is not reused
+      return await loadImage(i === 0 ? url : `${url}${url.includes('?') ? '&' : '?'}r=${i}`, true);
+    } catch (e) {
+      last = e;
+      if (i < RETRY_DELAYS.length && remote) await sleep(RETRY_DELAYS[i]);
+    }
+  }
+  throw last;
+}
+
 const cache = new Map<string, Promise<LoadedTexture | null>>();
 
 type FailHandler = (kind: 'map' | 'token', url: string) => void;
@@ -41,7 +60,7 @@ export function loadTexture(url: string, kind: 'map' | 'token'): Promise<LoadedT
   if (!p) {
     p = (async () => {
       try {
-        const img = await loadImage(url, true);
+        const img = await loadImageWithRetry(url);
         const nw = img.naturalWidth;
         const nh = img.naturalHeight;
         const limit = kind === 'map'

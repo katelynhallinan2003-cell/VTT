@@ -6,6 +6,7 @@ import type { DrawTool, StrokeSize, TemplateKind, UiState } from '../state/ui';
 import { ZONE_PRESETS, zoneColor, zonesOf } from '../core/height';
 import { areasSelected } from '../core/terrain';
 import { isHex } from '../core/hex';
+import { WALL_KINDS, WALL_NAME, wallVisDefault, type WallKind } from '../core/walls';
 import type { Drawing } from '../types';
 import { Toggle, toast, useClient, useUi } from './common';
 
@@ -215,6 +216,101 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient }) {
         <span class="hint">{n ? `${n} height area${n > 1 ? 's' : ''} on this map` : 'No height areas yet'}</span>
         <span class="grow" />
         {n > 0 && <button class="btn small danger" onClick={async () => { const c = await client.clearDrawings((x) => x.hz != null || x.k === 'terrain', 'Clear all heights'); ui.selectDrawings([]); toast(c ? `Cleared the height areas` : 'No heights to clear', 'info', 1800); }}>Clear all heights</button>}
+      </div>
+    </div>
+  );
+}
+
+const WALL_HINT: Record<WallKind, string> = {
+  wall: 'Stops sight, movement and spells.',
+  door: 'Blocks everything while it is closed. Click its diamond to open it.',
+  window: 'You can see and cast through it, but not walk through.',
+};
+
+export function WallFlyout(props: { ui: UiState; client: TableClient }) {
+  const { ui, client } = props;
+  const d = useUi(ui);
+  useClient(client);
+  const meta = client.scene?.meta;
+  const walls = client.wallsList();
+  const sel = [...d.wallSel].map((id) => client.scene?.walls.get(id)).filter((w): w is NonNullable<typeof w> => !!w);
+  const ids = sel.map((w) => w.id);
+  const doors = sel.filter((w) => w.k === 'door');
+  const kinds = new Set(sel.map((w) => w.k));
+  const allVis = sel.length > 0 && sel.every((w) => w.vis);
+  const shownVis = d.wallVis ?? wallVisDefault(d.wallKind);
+  const sightOn = !!meta?.fog.enabled && !!meta?.fog.vision;
+  return (
+    <div class="flyout">
+      <div class="flyout-title">Walls</div>
+      <div class="seg">
+        {([['draw', 'Draw'], ['edit', 'Edit']] as const).map(([k, label]) => <button key={k} class={d.wallMode === k ? 'on' : ''} onClick={() => ui.set({ wallMode: k, wallSel: new Set() })}>{label}</button>)}
+      </div>
+      {d.wallMode === 'draw' ? (
+        <>
+          <div class="seg">
+            {WALL_KINDS.map((k) => <button key={k} class={d.wallKind === k ? 'on' : ''} title={WALL_HINT[k]} onClick={() => ui.set({ wallKind: k, wallVis: null })}>{WALL_NAME[k]}</button>)}
+          </div>
+          <p class="hint">{WALL_HINT[d.wallKind]}</p>
+          <Toggle checked={shownVis} onChange={(v) => ui.set({ wallVis: v })} label="Draw it for the players" hint="Off: only you see it, but it still blocks. Plain walls start off (the map already shows them)." />
+          <span class="field-label">Shape</span>
+          <div class="seg">
+            <button class={d.wallShape === 'line' ? 'on' : ''} onClick={() => ui.set({ wallShape: 'line' })}>Line by line</button>
+            <button class={d.wallShape === 'box' ? 'on' : ''} onClick={() => ui.set({ wallShape: 'box' })}>Box (a room)</button>
+          </div>
+          <span class="field-label">Snap ends to</span>
+          <div class="seg wrap">
+            {([['corner', 'Corners'], ['half', 'Halves too'], ['off', 'Free']] as const).map(([k, label]) => <button key={k} class={d.wallSnap === k ? 'on' : ''} onClick={() => ui.set({ wallSnap: k })}>{label}</button>)}
+          </div>
+          <p class="hint">
+            {d.wallShape === 'box'
+              ? 'Drag out a room, or click two opposite corners.'
+              : 'Click points and the walls run on; double-click, Enter, Esc or right-click to stop. Or drag one wall at a time.'}
+            {' '}Ends snap onto other walls. Shift: straight or 45°. Alt: no snapping. A door or window drawn along a wall cuts a gap in it.
+          </p>
+        </>
+      ) : (
+        <div class="ht-card">
+          <div class="row">
+            <strong>{sel.length ? (sel.length === 1 ? `Selected ${WALL_NAME[sel[0].k].toLowerCase()}` : `${sel.length} walls selected`) : 'Nothing selected'}</strong>
+            <span class="grow" />
+            {walls.length > sel.length && <button class="btn small" onClick={() => ui.set({ wallSel: new Set(walls.map((w) => w.id)) })}>Select all</button>}
+          </div>
+          {sel.length > 0 ? (
+            <>
+              <div class="seg">
+                {WALL_KINDS.map((k) => <button key={k} class={kinds.size === 1 && kinds.has(k) ? 'on' : ''} onClick={() => void client.updateWalls(ids, { k }, 'Change wall type')}>{WALL_NAME[k]}</button>)}
+              </div>
+              <Toggle checked={allVis} onChange={(v) => void client.updateWalls(ids, { vis: v }, v ? 'Show wall to players' : 'Hide wall from players')} label="Drawn for the players" />
+              {doors.length > 0 && (
+                <div class="seg">
+                  <button class={doors.every((w) => !w.open) ? 'on' : ''} onClick={() => void client.updateWalls(doors.map((w) => w.id), { open: false }, 'Close door')}>Closed</button>
+                  <button class={doors.every((w) => w.open) ? 'on' : ''} onClick={() => void client.updateWalls(doors.map((w) => w.id), { open: true }, 'Open door')}>Open</button>
+                </div>
+              )}
+              <div class="row wrap">
+                <button class="btn small danger" onClick={() => { void client.removeWalls(ids); ui.set({ wallSel: new Set() }); }}>Delete {sel.length > 1 ? 'walls' : WALL_NAME[sel[0].k].toLowerCase()}</button>
+              </div>
+            </>
+          ) : <p class="hint">Click a wall, or drag a box around several. Drag a dot to move one end (every wall that meets there follows), or drag the wall itself to move it. Shift-click adds more. Delete removes them. Double-click a door to open it.</p>}
+        </div>
+      )}
+      <div class="ht-card">
+        <strong>On this map</strong>
+        <Toggle checked={!!meta?.wallStop} onChange={(v) => void client.updateScene({ wallStop: v })} label="Walls stop the players' tokens" hint="Off: players can drag tokens through walls (they still block sight and spells)." />
+        <Toggle checked={d.wallIgnore} onChange={(v) => ui.set({ wallIgnore: v })} label="I can walk through walls" hint="Only for you. Holding W while you drag also lets you through." />
+        <Toggle checked={d.showWalls} onChange={(v) => ui.set({ showWalls: v })} label="Show walls when this tool is closed" hint="Only changes what you see." />
+        {!sightOn && (
+          <div>
+            <p class="hint">Walls shape what tokens can see once their sight is on.</p>
+            <button class="btn small" onClick={() => void client.updateScene({ fog: { enabled: true, vision: true } })}>Turn on fog and token sight</button>
+          </div>
+        )}
+      </div>
+      <div class="row wrap">
+        <span class="hint">{walls.length ? `${walls.length} wall${walls.length > 1 ? 's' : ''} on this map` : 'No walls yet'}</span>
+        <span class="grow" />
+        {walls.length > 0 && <button class="btn small danger" onClick={async () => { await client.removeWalls(walls.map((w) => w.id)); ui.set({ wallSel: new Set() }); toast('Cleared all the walls (Ctrl+Z brings them back)', 'info', 2200); }}>Clear all walls</button>}
       </div>
     </div>
   );

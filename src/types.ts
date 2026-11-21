@@ -61,6 +61,8 @@ export interface SceneMeta {
   mapLocked: boolean;
   /** a grid printed on the map picture, and whether it is hidden on screen (the picture itself is never changed) */
   mapGrid: GridCut | null;
+  /** walls stop tokens being dragged through them (for players; the DM can hold W to pass) */
+  wallStop: boolean;
   bg: string;
   grid: GridSettings;
   fog: FogSettings;

@@ -7,7 +7,7 @@ import {
 import {
   applyDamage, cleanHp, EXPLORE_MIN_CELLS, EXPLORE_JUMP_CELLS, EXPLORE_TELEPORT_CELLS, EXPLORE_TELEPORT_MS, emptyInit, moveEntry, nextTurn, orderOf, pctOf, prevTurn, sightRadiusPx, sortByInit, toPub,
 } from '../core/combat';
-import { lineOp } from '../core/fog';
+import { lineOp, polyOp } from '../core/fog';
 import { addFx, fxToWire, tickFx } from '../core/effects';
 import { can, detectPreset, PRESETS, type Action } from '../core/permissions';
 import { mapRect, snapTokenCenter } from '../core/geometry';
@@ -18,6 +18,7 @@ import type {
   Drawing, Effect, FogOp, InitEntry, InitPub, InitState, LivePlot, GridSettings, Permissions, PermPreset, Ping, Player, Role, SceneIndexEntry,
   SceneMeta, TableMeta, TableSettings, Token, Vec,
 } from '../types';
+import { carveWalls, normalizeWall, routeReveal, sightSegs, wallToWire, type Wall } from '../core/walls';
 import { History } from './history';
 import { P } from './paths';
 
@@ -29,6 +30,9 @@ export interface SceneState {
   tokensRev: number;
   fogOps: Map<string, FogOp>;
   fogRev: number;
+  /** walls, doors and windows (the DM draws them; everyone reads them) */
+  walls: Map<string, Wall>;
+  wallRev: number;
   draws: Map<string, Drawing>;
   drawRev: number;
   /** what other people are plotting right now */
@@ -54,7 +58,7 @@ export type ScenePatch = Partial<Omit<SceneMeta, 'grid' | 'fog'>> & {
 };
 
 let tokenClipboard: Token[] = [];
-const UNDOABLE_SCENE_KEYS = new Set(['mapX', 'mapY', 'mapScale', 'mapLocked', 'mapGrid', 'bg', 'grid', 'fog']);
+const UNDOABLE_SCENE_KEYS = new Set(['mapX', 'mapY', 'mapScale', 'mapLocked', 'mapGrid', 'wallStop', 'bg', 'grid', 'fog']);
 
 /**
  * Everything the app knows about one table, kept in sync with the backend.
@@ -217,7 +221,7 @@ export class TableClient {
 
     const s: SceneState = {
       id: sid, loaded: false, meta: null, tokens: new Map(), tokensRev: 0,
-      fogOps: new Map(), fogRev: 0, draws: new Map(), drawRev: 0, live: new Map(), liveRev: 0,
+      fogOps: new Map(), fogRev: 0, walls: new Map(), wallRev: 0, draws: new Map(), drawRev: 0, live: new Map(), liveRev: 0,
       init: emptyInit(), initPub: null, initRev: 0, hpDm: new Map(), metaRev: 0,
     };
     this.trails.clear();
@@ -286,6 +290,17 @@ export class TableClient {
       removed: (k) => { if (live()) { s.fogOps.delete(k); s.fogRev++; this.bump(); } },
     }, sceneFail('fog')));
 
+    const wallSet = (k: string, v: any) => {
+      if (!live()) return;
+      const w = normalizeWall(k, v);
+      if (w) s.walls.set(k, w); else s.walls.delete(k);
+      s.wallRev++; this.bump();
+    };
+    this.sceneUnsubs.push(b.listenChildren(P.sceneWalls(tid, sid), {
+      added: wallSet, changed: wallSet,
+      removed: (k) => { if (live()) { s.walls.delete(k); s.wallRev++; this.bump(); } },
+    }, sceneFail('walls')));
+
     const drawSet = (k: string, v: any) => {
       if (!live()) return;
       const d = normalizeDrawing(k, v);
@@ -344,6 +359,9 @@ export class TableClient {
   myTokens(): Token[] {
     return [...(this.scene?.tokens.values() ?? [])].filter((t) => t.ownerUid === this.uid);
   }
+
+  /** Every wall, door and window in the open scene. */
+  wallsList(): Wall[] { return [...(this.scene?.walls.values() ?? [])]; }
 
   /** Fog ops in draw order (push keys sort chronologically). */
   fogOpsSorted(): [string, FogOp][] {
@@ -592,6 +610,94 @@ export class TableClient {
   private recordDrawn(list: Drawing[], label: string) {
     const snaps = list.map((d) => ({ ...d }));
     this.history.push({ label, undo: () => this.deleteDrawingsRaw(snaps.map((d) => d.id)), redo: () => this.restoreDrawings(snaps) });
+  }
+
+  // ---------------------------------------------------------------- walls (DM only)
+  private wallPath(id: string) { return P.sceneWall(this.tableId, this.viewSceneId!, id); }
+  private async putWalls(list: Wall[]) {
+    const updates: Record<string, any> = {};
+    for (const w of list) updates[this.wallPath(w.id)] = wallToWire(w);
+    if (Object.keys(updates).length) await this.backend.update(updates);
+  }
+  private async dropWalls(ids: string[]) {
+    const updates: Record<string, any> = {};
+    for (const id of ids) updates[this.wallPath(id)] = null;
+    if (Object.keys(updates).length) await this.backend.update(updates);
+  }
+
+  /**
+   * Add walls (one call per stroke or box, so Ctrl+Z takes back the whole thing). Returns their ids.
+   * A door or window drawn along a plain wall cuts a gap in it (the wall is split around the new piece).
+   */
+  async addWalls(list: Omit<Wall, 'id'>[], label = 'Draw wall'): Promise<string[]> {
+    if (!this.isDM || !this.viewSceneId || !list.length) return [];
+    const made: Wall[] = list.map((w) => ({ ...w, id: this.backend.newKey() }));
+    const tol = Math.max(2, this.grid.cell * 0.06);
+    const cut = new Map<string, Wall>();
+    const pieces: Wall[] = [];
+    for (const w of made) {
+      if (w.k === 'wall') continue;
+      const live = [...(this.scene?.walls.values() ?? [])].filter((x) => !cut.has(x.id));
+      const r = carveWalls(live, w, tol);
+      for (const id of r.remove) { const old = this.scene?.walls.get(id); if (old) cut.set(id, { ...old }); }
+      for (const p of r.add) pieces.push({ ...p, id: this.backend.newKey() });
+    }
+    const gone = [...cut.values()];
+    const adds = [...made, ...pieces].map((w) => ({ ...w }));
+    await this.putWalls(adds);
+    if (gone.length) await this.dropWalls(gone.map((w) => w.id));
+    this.history.push({
+      label,
+      undo: async () => { await this.dropWalls(adds.map((w) => w.id)); await this.putWalls(gone); },
+      redo: async () => { await this.putWalls(adds); await this.dropWalls(gone.map((w) => w.id)); },
+    });
+    return made.map((w) => w.id);
+  }
+
+  async updateWalls(ids: string[], patch: Partial<Pick<Wall, 'a' | 'b' | 'k' | 'open' | 'vis'>>, label = 'Change wall'): Promise<void> {
+    if (!this.isDM || !this.viewSceneId) return;
+    const before = ids.map((id) => this.scene?.walls.get(id)).filter((w): w is Wall => !!w).map((w) => ({ ...w }));
+    if (!before.length) return;
+    const after = before.map((w) => {
+      const n = { ...w, ...patch };
+      if (n.k !== 'door') n.open = false; // only doors open
+      return n;
+    });
+    await this.putWalls(after);
+    this.history.push({ label, key: `wall:${patch.vis !== undefined ? 'vis' : patch.k !== undefined ? 'k' : 'move'}:${before.map((w) => w.id).join(',')}`, undo: () => this.putWalls(before), redo: () => this.putWalls(after) });
+  }
+
+  /** Move wall ends: each entry says which end of which wall goes where (used to drag a corner that several walls share). */
+  async moveWallEnds(moves: { id: string; end: 'a' | 'b'; to: Vec }[], label = 'Move wall'): Promise<void> {
+    if (!this.isDM || !this.viewSceneId || !moves.length) return;
+    const before: Wall[] = [];
+    const after: Wall[] = [];
+    for (const id of new Set(moves.map((m) => m.id))) {
+      const w = this.scene?.walls.get(id);
+      if (!w) continue;
+      before.push({ ...w });
+      const n = { ...w };
+      for (const m of moves) if (m.id === id) n[m.end] = { ...m.to };
+      after.push(n);
+    }
+    if (!after.length) return;
+    await this.putWalls(after);
+    this.history.push({ label, undo: () => this.putWalls(before), redo: () => this.putWalls(after) });
+  }
+
+  async removeWalls(ids: string[]): Promise<void> {
+    if (!this.isDM || !this.viewSceneId) return;
+    const snaps = ids.map((id) => this.scene?.walls.get(id)).filter((w): w is Wall => !!w).map((w) => ({ ...w }));
+    if (!snaps.length) return;
+    await this.dropWalls(snaps.map((w) => w.id));
+    this.history.push({ label: snaps.length > 1 ? 'Delete walls' : 'Delete wall', undo: () => this.putWalls(snaps), redo: () => this.dropWalls(snaps.map((w) => w.id)) });
+  }
+
+  /** Open or close a door. */
+  async toggleDoor(id: string): Promise<void> {
+    const w = this.scene?.walls.get(id);
+    if (!w || w.k !== 'door') return;
+    await this.updateWalls([id], { open: !w.open }, w.open ? 'Close door' : 'Open door');
   }
 
   async removeDrawings(ids: string[], label = 'Erase drawing'): Promise<void> {
@@ -1014,6 +1120,7 @@ export class TableClient {
     const sid = s.id;
     const updates: Record<string, FogOp> = {};
     let count = 0;
+    const segs = sightSegs(s.walls.values());
     for (const t of s.tokens.values()) {
       const r = sightRadiusPx(t, g);
       const tr = this.trails.get(t.id);
@@ -1022,8 +1129,11 @@ export class TableClient {
       for (const line of lines) {
         // keep the shape of the route but not every little step of it
         const pts = line.filter((p, i) => i === 0 || i === line.length - 1 || Math.hypot(p.x - line[i - 1].x, p.y - line[i - 1].y) >= g.cell * 0.2);
-        updates[`${P.sceneFog(this.tableId, sid)}/${this.backend.newKey()}`] = lineOp('r', pts, r * 2);
-        count++;
+        // with no wall in reach this is the one thick line; with walls it is what the token could see from a spot every square along the way
+        for (const shape of routeReveal(pts, r, segs, g.cell)) {
+          updates[`${P.sceneFog(this.tableId, sid)}/${this.backend.newKey()}`] = shape.t === 'line' ? lineOp('r', shape.pts, shape.w) : polyOp('r', shape.pts);
+          count++;
+        }
       }
       if (lines.length) { const lastLine = lines[lines.length - 1]; tr.anchor = lastLine[lastLine.length - 1]; }
       tr.segs = [];

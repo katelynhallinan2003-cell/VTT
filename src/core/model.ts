@@ -68,6 +68,7 @@ export function normalizeSceneMeta(raw: any): SceneMeta {
     mapScale: Math.max(0.01, num(m.mapScale, 1)),
     mapLocked: bool(m.mapLocked, true),
     mapGrid: normalizeMapGrid(m.mapGrid),
+    wallStop: bool(m.wallStop, true),
     bg: OLD_DEFAULT_BGS.has(str(m.bg, '')) ? DEFAULT_BG : str(m.bg, DEFAULT_BG),
     grid: normalizeGrid(m.grid),
     fog: {

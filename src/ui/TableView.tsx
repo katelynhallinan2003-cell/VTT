@@ -8,7 +8,7 @@ import { UiState } from '../state/ui';
 import type { AuthUser, LibraryItem, Rect, Token, Vec } from '../types';
 import { Toasts, copyText, toast, useClient, useTheme, useUi } from './common';
 import { AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewSceneModal, ScenesModal, SettingsModal } from './modals';
-import { DrawFlyout, DrawInspector, HeightFlyout, RulerFlyout, TemplateFlyout, TestMoveBar, TextEditor } from './drawTools';
+import { DrawFlyout, DrawInspector, HeightFlyout, RulerFlyout, TemplateFlyout, TestMoveBar, TextEditor, WallFlyout } from './drawTools';
 import { Dock, Rail, TokenTag } from './panels';
 import { InitPopup, InitStrip } from './initiative';
 import { EffectsWindow } from './effects';
@@ -41,6 +41,7 @@ const ICONS = {
   ruler: 'M3 17L17 3l4 4L7 21zM7 13l2 2M10 10l2 2M13 7l2 2',
   init: 'M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 8l4 6H8z',
   height: 'M2 20l6-10 4 6 3-4 7 8zM8 10l-1-2M15 12l1-3',
+  wall: 'M3 5h18v14H3zM3 9.7h18M3 14.3h18M9 5v4.7M15 9.7v4.6M9 14.3V19',
   test: 'M6 20a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM18 9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM8 15l8-5',
 };
 
@@ -230,6 +231,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
         <ToolBtn icon="template" label="Spell templates" hotkey="S" on={d.tool === 'template'} disabled={!client.canDo('draw')} onClick={() => ui.set({ tool: d.tool === 'template' ? 'select' : 'template' })} />
         <ToolBtn icon="ruler" label="Ruler" hotkey="R" on={d.tool === 'ruler'} disabled={!client.canDo('measure')} onClick={() => ui.set({ tool: d.tool === 'ruler' ? 'select' : 'ruler' })} />
         {client.isDM && <ToolBtn icon="height" label="Heights: draw high and low ground" hotkey="H" on={d.tool === 'height'} onClick={() => ui.set({ tool: d.tool === 'height' ? 'select' : 'height' })} />}
+        {client.isDM && <ToolBtn icon="wall" label="Walls: draw walls, doors and windows" hotkey="B" on={d.tool === 'wall'} onClick={() => ui.set({ tool: d.tool === 'wall' ? 'select' : 'wall' })} />}
         <ToolBtn icon="test" label="Test move: try a move without making it" hotkey="M" on={d.testMove} onClick={() => ui.set({ testMove: !d.testMove })} />
         {client.isDM && <ToolBtn icon="init" label="Initiative: roll and keep the turn order" hotkey="I" on={d.initOpen} toggle onClick={() => ui.set({ initOpen: !d.initOpen })} />}
         <div class="tool-sep" />
@@ -244,6 +246,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {d.tool === 'template' && <TemplateFlyout ui={ui} client={client} />}
       {d.tool === 'ruler' && <RulerFlyout ui={ui} client={client} />}
       {d.tool === 'height' && client.isDM && <HeightFlyout ui={ui} client={client} />}
+      {d.tool === 'wall' && client.isDM && <WallFlyout ui={ui} client={client} />}
       <TestMoveBar ui={ui} board={board} />
       <TextEditor ui={ui} client={client} board={board} />
       <DrawInspector ui={ui} client={client} board={board} />

@@ -1,8 +1,9 @@
 import type { Unsub } from '../backend/types';
 import { FONT_KEYS, type FillMode, type SphereSnap } from '../core/draw';
 import type { Effect } from '../types';
+import type { WallKind, WallSnap } from '../core/walls';
 
-export type Tool = 'select' | 'grid' | 'fog' | 'draw' | 'template' | 'ruler' | 'height';
+export type Tool = 'select' | 'grid' | 'fog' | 'draw' | 'template' | 'ruler' | 'height' | 'wall';
 export type DrawTool = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'erase';
 export type TemplateKind = 'cone' | 'cube' | 'sphere' | 'emanation' | 'beam';
 export type StrokeSize = 'thin' | 'medium' | 'thick';
@@ -70,6 +71,22 @@ export interface UiData {
   heightAdds: boolean;
   /** show the height zones on the map (the Heights tool shows them anyway) */
   showHeights: boolean;
+  /** the Walls tool: draw new walls, or select and edit the ones that are there */
+  wallMode: 'draw' | 'edit';
+  /** what the next wall drawn is: a wall, a door or a window */
+  wallKind: WallKind;
+  /** whether a new wall is drawn for the players (null = the default for its kind) */
+  wallVis: boolean | null;
+  /** draw walls one segment at a time, or as a box */
+  wallShape: 'line' | 'box';
+  /** where wall ends land: grid corners, corners and half squares, or anywhere */
+  wallSnap: WallSnap;
+  /** the walls selected in the Walls tool */
+  wallSel: Set<string>;
+  /** draw the walls on the map (the Walls tool shows them anyway) */
+  showWalls: boolean;
+  /** the DM walks through walls, and sees through them */
+  wallIgnore: boolean;
   /** DM: the initiative pop-up is open */
   initOpen: boolean;
   /** where the turn order sits on screen: across the top middle, or down the right edge */
@@ -125,6 +142,14 @@ export class UiState {
     heightBrush: (() => { try { const n = Number(localStorage.getItem('vtt-height-brush')); return Number.isFinite(n) && n >= 1 && n <= 8 ? n : 1; } catch { return 1; } })(),
     heightAdds: readFlag('vtt-height-adds', false),
     showHeights: readFlag('vtt-show-heights', true),
+    wallMode: readStr('vtt-wall-mode', 'draw', ['draw', 'edit'] as const),
+    wallKind: readStr('vtt-wall-kind', 'wall', ['wall', 'door', 'window'] as const),
+    wallVis: (() => { try { const v = localStorage.getItem('vtt-wall-vis'); return v === '1' ? true : v === '0' ? false : null; } catch { return null; } })(),
+    wallShape: readStr('vtt-wall-shape', 'line', ['line', 'box'] as const),
+    wallSnap: readStr('vtt-wall-snap', 'half', ['corner', 'half', 'off'] as const),
+    wallSel: new Set(),
+    showWalls: readFlag('vtt-show-walls', true),
+    wallIgnore: false,
     initPos: readStr('vtt-init-pos', 'top', ['top', 'side'] as const),
     panButton: readStr('vtt-pan-button', 'right', ['right', 'middle'] as const),
     pingMode: readStr('vtt-ping-mode', 'middle', ['middle', 'hold'] as const),
@@ -163,6 +188,12 @@ export class UiState {
       if (patch.heightBrush !== undefined) localStorage.setItem('vtt-height-brush', String(patch.heightBrush));
       if (patch.heightAdds !== undefined) localStorage.setItem('vtt-height-adds', patch.heightAdds ? '1' : '0');
       if (patch.showHeights !== undefined) localStorage.setItem('vtt-show-heights', patch.showHeights ? '1' : '0');
+      if (patch.wallMode !== undefined) localStorage.setItem('vtt-wall-mode', patch.wallMode);
+      if (patch.wallKind !== undefined) localStorage.setItem('vtt-wall-kind', patch.wallKind);
+      if (patch.wallVis !== undefined) localStorage.setItem('vtt-wall-vis', patch.wallVis === null ? '' : patch.wallVis ? '1' : '0');
+      if (patch.wallShape !== undefined) localStorage.setItem('vtt-wall-shape', patch.wallShape);
+      if (patch.wallSnap !== undefined) localStorage.setItem('vtt-wall-snap', patch.wallSnap);
+      if (patch.showWalls !== undefined) localStorage.setItem('vtt-show-walls', patch.showWalls ? '1' : '0');
       if (patch.initPos !== undefined) localStorage.setItem('vtt-init-pos', patch.initPos);
       if (patch.sharePlot !== undefined) localStorage.setItem('vtt-share-plot', patch.sharePlot ? '1' : '0');
       if (patch.fxJump !== undefined) localStorage.setItem('vtt-fx-jump', patch.fxJump ? '1' : '0');

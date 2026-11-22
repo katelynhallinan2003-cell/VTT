@@ -48,6 +48,8 @@ Read `CLAUDE.md` (this file) and `WIP.md` before doing anything else in a sessio
 
 ## Design precedents
 
+- **Library picture deletion.** Keep ImgBB's private deletion link with the owning DM's library item. Campaign exports and shared scene and token data carry only picture URLs. The DM confirms hosted deletion on ImgBB before finishing removal in the VTT.
+
 - **Maps without a clear printed grid.** Start gridless with free movement and straight-line measurement. The DM can calibrate ten feet with two points, then choose squares, hex rows, hex columns or no overlay. Changing the overlay preserves the map scale.
 
 - **Where data lives.** Anything the DM alone may see or write goes under `tables/$tid/dm/` (owner-only, free-form: scene index, scene folders, character hit-point memory). Public scene data is under `scenes/$sid`. Things tied to the DM's Google account (image library, saved token templates) are under `users/$uid` and only the allow-listed DM can write there.

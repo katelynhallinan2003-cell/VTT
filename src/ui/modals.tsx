@@ -17,13 +17,14 @@ import { CampaignFileSection } from './campaignFile';
 import { THEMES, getAccent, getTheme, setAccent, setTheme } from './theme';
 import { TokenCropper, NO_FRAMING, type Framing, type PaintApi } from './tokenCropper';
 import { addRecent, dragHasImage, droppedImage, getRecent, uploadImage } from './uploads';
+import { DeletePictureDialog, PictureTrash } from './libraryDelete';
 
 const asErr = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 function useLibrary(client: TableClient, kind: 'maps' | 'tokens'): LibraryItem[] {
-  const [items, setItems] = useState<LibraryItem[]>([]);
-  useEffect(() => (client.isDM ? watchLibrary(client.backend, client.uid, kind, setItems) : undefined), [client, kind]);
-  return items;
+  const [list, setList] = useState<{ client: TableClient; kind: typeof kind; items: LibraryItem[] } | null>(null);
+  useEffect(() => (client.isDM ? watchLibrary(client.backend, client.uid, kind, items => setList({ client, kind, items })) : undefined), [client, kind]);
+  return list?.client === client && list.kind === kind ? list.items : [];
 }
 
 /** Pick an image from disk. */
@@ -105,13 +106,13 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
         img = up.url;
         fr = { ...NO_FRAMING };
         if (client.isDM && saveLib && client.backend.kind !== 'mock') {
-          await addLibraryItem(client.backend, client.uid, 'tokens', { name: name || 'token', url: up.url, thumb: up.thumb, w: up.w, h: up.h });
+          await addLibraryItem(client.backend, client.uid, 'tokens', { name: name || 'token', ...up });
         }
       } else if (file) {
         const up = await uploadImage(client, file, 'token', name || file.name);
         img = up.url;
         if (client.isDM && saveLib && client.backend.kind !== 'mock') {
-          await addLibraryItem(client.backend, client.uid, 'tokens', { name: name || file.name, url: up.url, thumb: up.thumb, w: up.w, h: up.h });
+          await addLibraryItem(client.backend, client.uid, 'tokens', { name: name || file.name, ...up });
         }
       } else if (picked || url.trim()) {
         img = picked ?? url.trim();
@@ -210,6 +211,7 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
   const [fileName, setFileName] = useState(props.initialFile?.name ?? '');
   const [url, setUrl] = useState('');
   const [picked, setPicked] = useState<LibraryItem | null>(null);
+  const [deleting, setDeleting] = useState<LibraryItem | null>(null);
   const [saveLib, setSaveLib] = useState(true);
   const [makeActive, setMakeActive] = useState(!client.activeSceneId);
   const [busy, setBusy] = useState(false);
@@ -267,7 +269,7 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
       if (file) {
         const up = await uploadImage(client, file, 'map', fileName || name);
         mapUrl = up.url; w = up.w; h = up.h;
-        if (saveLib && client.backend.kind !== 'mock') await addLibraryItem(client.backend, client.uid, 'maps', { name: name || fileName || 'Map', url: up.url, thumb: up.thumb, w, h });
+        if (saveLib && client.backend.kind !== 'mock') await addLibraryItem(client.backend, client.uid, 'maps', { name: name || fileName || 'Map', ...up });
       } else if (picked) {
         mapUrl = picked.url; w = picked.w ?? 0; h = picked.h ?? 0;
       } else if (url.trim()) {
@@ -283,6 +285,11 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
     }
   }
 
+  if (deleting) return <DeletePictureDialog item={deleting} onClose={() => setDeleting(null)} onRemove={async () => {
+    await removeLibraryItem(client.backend, client.uid, 'maps', deleting.id);
+    if (picked?.id === deleting.id) setPicked(null);
+    setDeleting(null);
+  }} />;
   return (
     <Modal title="New scene" onClose={props.onClose} width={560}
       footer={<><button class="btn" onClick={props.onClose}>Cancel</button><button class="btn primary" disabled={busy || preparing} onClick={create}>{busy ? 'Uploading…' : 'Create scene'}</button></>}>
@@ -321,9 +328,12 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
           <div class="field-label">From your library</div>
           <div class="thumbs">
             {lib.map((l) => (
-              <button key={l.id} class={`thumb ${picked?.id === l.id ? 'on' : ''}`} title={l.name} onClick={() => { setPicked(l); setFile(null); setUrl(''); }}>
-                <img src={l.thumb ?? l.url} alt={l.name} loading="lazy" />
-              </button>
+              <div key={l.id} class="picture-tile">
+                <button class={`thumb ${picked?.id === l.id ? 'on' : ''}`} title={l.name} onClick={() => { setPicked(l); setFile(null); setUrl(''); }}>
+                  <img src={l.thumb ?? l.url} alt={l.name} loading="lazy" />
+                </button>
+                <PictureTrash name={l.name} disabled={busy} onClick={() => setDeleting(l)} />
+              </div>
             ))}
           </div>
         </>
@@ -434,6 +444,7 @@ export function LibraryModal(props: { client: TableClient; onClose: () => void; 
   const { client } = props;
   useClient(client);
   const [tab, setTab] = useState<'maps' | 'tokens' | 'saved'>('maps');
+  const [deleting, setDeleting] = useState<LibraryItem | null>(null);
   const items = useLibrary(client, tab === 'saved' ? 'tokens' : tab);
   const artTab = tab === 'saved' ? 'tokens' : tab;
   const [busy, setBusy] = useState(false);
@@ -444,7 +455,7 @@ export function LibraryModal(props: { client: TableClient; onClose: () => void; 
     try {
       const up = await uploadImage(client, f, artTab === 'maps' ? 'map' : 'token', f.name);
       if (client.backend.kind === 'mock') toast('Demo mode: pictures are not kept in the library.', 'info');
-      else await addLibraryItem(client.backend, client.uid, artTab, { name: f.name.replace(/\.\w+$/, ''), url: up.url, thumb: up.thumb, w: up.w, h: up.h });
+      else await addLibraryItem(client.backend, client.uid, artTab, { name: f.name.replace(/\.\w+$/, ''), ...up });
     } catch (e) { toast(asErr(e), 'error'); }
     setBusy(false);
   }
@@ -460,6 +471,10 @@ export function LibraryModal(props: { client: TableClient; onClose: () => void; 
     setBusy(false);
   }
 
+  if (deleting) return <DeletePictureDialog item={deleting} onClose={() => setDeleting(null)} onRemove={async () => {
+    await removeLibraryItem(client.backend, client.uid, artTab, deleting.id);
+    setDeleting(null);
+  }} />;
   return (
     <Modal title="My library" onClose={props.onClose} width={640}>
       <div class="tabs">
@@ -482,13 +497,15 @@ export function LibraryModal(props: { client: TableClient; onClose: () => void; 
       {tab !== 'saved' && <div class="thumbs big">
         {items.map((it) => (
           <div key={it.id} class="lib-item">
-            <img src={it.thumb ?? it.url} alt={it.name} loading="lazy" />
+            <div class="picture-tile">
+              <img src={it.thumb ?? it.url} alt={it.name} loading="lazy" />
+              <PictureTrash name={it.name} onClick={() => setDeleting(it)} />
+            </div>
             <div class="lib-name" title={it.name}>{it.name}</div>
             <div class="lib-actions">
               {tab === 'maps'
                 ? <button class="btn small" onClick={() => props.onUseMap(it)}>Use in scene</button>
                 : <button class="btn small" onClick={() => props.onAddToken(it)}>Add to board</button>}
-              <button class="btn small danger" onClick={() => void removeLibraryItem(client.backend, client.uid, artTab, it.id)}>✕</button>
             </div>
           </div>
         ))}

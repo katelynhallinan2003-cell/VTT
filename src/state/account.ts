@@ -67,6 +67,7 @@ export async function addLibraryItem(backend: Backend, uid: string, kind: Librar
   const id = backend.newKey();
   const wire: Record<string, unknown> = { name: item.name, url: item.url, addedAt: SERVER_TS };
   if (item.thumb) wire.thumb = item.thumb;
+  if (item.deleteUrl) wire.deleteUrl = item.deleteUrl;
   if (item.w) wire.w = item.w;
   if (item.h) wire.h = item.h;
   await backend.set(`${P.userLibrary(uid, kind)}/${id}`, wire);

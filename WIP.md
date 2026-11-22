@@ -128,3 +128,6 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
   Added two dotted maps to the corpus and checked for extra lines as well as missing lines.
 - [x] **#15 Calibrate gridless pictures** (added 2026-11-22, completed 2026-11-22): an inconclusive scan turns off the overlay and snapping and invites the DM to mark ten feet with two clicks. Verified the diagonal ruler on the supplied snow map.
 - [x] **#16 Name the four scene overlay choices** (added 2026-11-22, completed 2026-11-22): the setup prompt and Scene panel offer Squares, Hex, rows, Hex, columns and Gridless. Switching overlays keeps the calibrated scale.
+- [x] **#17 Delete pictures from the scene picker** (added 2026-11-22, completed 2026-11-22): a top-right trash button removes a library picture from New scene or My library and clears a deleted selection.
+- [x] **#18 Remove hosted library pictures from ImgBB** (added 2026-11-22, completed 2026-11-22): new library uploads retain the private ImgBB deletion page. The DM confirms at the host and then removes the entry. Older entries can be removed locally.
+- [x] **#19 Compare five grid removal methods** (added 2026-11-22, completed 2026-11-22): rendered five original-size cavern maps and matching crops from the reported rock edge for the DM to choose from.

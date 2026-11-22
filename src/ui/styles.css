@@ -168,6 +168,10 @@ input.num { width: 74px; flex: none; padding: 4px 6px; }
 .thumbs.big { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
 .thumb { aspect-ratio: 1; padding: 0; border: 2px solid transparent; border-radius: 8px; overflow: hidden; background: var(--sunken); cursor: pointer; }
 .thumb.on { border-color: var(--accent); }
+.picture-tile { position: relative; min-width: 0; }
+.picture-tile > .thumb { display: block; width: 100%; }
+.picture-trash { position: absolute; top: 4px; right: 4px; display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 1px solid #ffffff66; border-radius: 6px; background: #20232bea; color: white; cursor: pointer; }
+.picture-trash:hover, .picture-trash:focus-visible { background: #a23337; }
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .lib-item { background: var(--raise); border: 1px solid var(--border); border-radius: 10px; padding: 6px; display: flex; flex-direction: column; gap: 6px; text-align: left; cursor: default; }
 button.lib-item { cursor: pointer; }

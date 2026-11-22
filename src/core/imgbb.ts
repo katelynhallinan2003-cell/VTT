@@ -1,6 +1,11 @@
 import { loadImage } from './images';
 
-export interface UploadResult { url: string; thumb: string; w: number; h: number }
+export interface UploadResult { url: string; thumb: string; w: number; h: number; deleteUrl?: string }
+
+/** ImgBB returns a private management page with an image ID and a deletion token. */
+export function imgbbDeleteUrl(value: unknown): string | undefined {
+  return typeof value === 'string' && /^https:\/\/ibb\.co\/[A-Za-z0-9]+\/[A-Za-z0-9_-]+$/.test(value) ? value : undefined;
+}
 
 /** Upload to imgbb (https://api.imgbb.com/). `key` is the DM's API key, shared with the table. */
 export async function uploadToImgbb(blob: Blob, key: string, name?: string): Promise<UploadResult> {
@@ -30,6 +35,7 @@ export async function uploadToImgbb(blob: Blob, key: string, name?: string): Pro
   return {
     url,
     thumb: d.thumb?.url || d.medium?.url || url,
+    deleteUrl: imgbbDeleteUrl(d.delete_url),
     w: Number(d.width) || 0,
     h: Number(d.height) || 0,
   };

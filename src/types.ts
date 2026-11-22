@@ -385,6 +385,8 @@ export interface LibraryItem {
   name: string;
   url: string;
   thumb?: string;
+  /** Private to the owning DM's library. */
+  deleteUrl?: string;
   w?: number;
   h?: number;
   addedAt: number;

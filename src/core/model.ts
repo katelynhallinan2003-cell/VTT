@@ -3,6 +3,7 @@ import type {
   TableSettings, Token, TokenLight, Vec, ViewCall, Handout,
 } from '../types';
 import { cleanHp, emptyInit, orderOf } from './combat';
+import { imgbbDeleteUrl } from './imgbb';
 import { FONT_KEYS } from './draw';
 import { fxToWire, normalizeFx } from './effects';
 
@@ -378,6 +379,7 @@ export function normalizeLibraryItem(id: string, raw: any): LibraryItem | null {
     name: str(raw.name, 'Untitled'),
     url: raw.url,
     thumb: typeof raw.thumb === 'string' ? raw.thumb : undefined,
+    deleteUrl: imgbbDeleteUrl(raw.deleteUrl),
     w: typeof raw.w === 'number' ? raw.w : undefined,
     h: typeof raw.h === 'number' ? raw.h : undefined,
     addedAt: num(raw.addedAt, 0),

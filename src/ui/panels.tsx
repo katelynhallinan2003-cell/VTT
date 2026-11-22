@@ -4,6 +4,7 @@ import { TOKEN_SIZES } from '../core/model';
 import { gridPeriod, isHex } from '../core/hex';
 import { altitudeOf, altLabel, groundAt, setAltitude, setClearance, zonesOf } from '../core/height';
 import { throttle } from '../core/throttle';
+import { LIGHT_PRESETS } from '../core/light';
 import type { Board } from '../board/Board';
 import type { TableClient } from '../state/client';
 import type { DockTab, UiState } from '../state/ui';
@@ -374,6 +375,60 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
           <button class={`btn small ${d.tool === 'fog' ? 'primary' : ''}`} onClick={() => ui.set({ tool: d.tool === 'fog' ? 'select' : 'fog' })}>Fog tool (F)</button>
         </div>
       </Section>
+
+      <Section id="light" title="Light and darkness">
+        <LightingSection client={client} ui={ui} board={board} meta={meta} />
+      </Section>
+    </>
+  );
+}
+
+const AMBIENT_HINT = {
+  bright: 'Full daylight. Lights do nothing here.',
+  dim: 'Twilight: everything is dimmer, and a light brightens the ground near it.',
+  dark: 'Night or a dungeon: only lit ground, or ground a token has darkvision for, can be seen. A token can still make out what is right beside it.',
+} as const;
+
+/** How bright the scene is, and the lights you can place in it. */
+function LightingSection(props: { client: TableClient; ui: UiState; board: Board | null; meta: SceneMeta }) {
+  const { client, ui, board, meta } = props;
+  const [preset, setPreset] = useState('Torch');
+  const amb = meta.light.ambient;
+  const fogSight = meta.fog.enabled && meta.fog.vision;
+  async function place() {
+    const p = LIGHT_PRESETS.find((l) => l.name === preset) ?? LIGHT_PRESETS[1];
+    const at = board?.viewCenterWorld() ?? { x: 500, y: 500 };
+    const cell = client.grid.cell;
+    // a light sits where you put it, on a square's middle
+    const x = client.grid.ox + (Math.floor((at.x - client.grid.ox) / cell) + 0.5) * cell;
+    const y = client.grid.oy + (Math.floor((at.y - client.grid.oy) / cell) + 0.5) * cell;
+    const hex = client.grid.shape !== 'square';
+    const id = await client.addToken({ x: hex ? at.x : x, y: hex ? at.y : y, name: p.name, size: 0.5, shape: 'none', label: 'dm', light: { ...p.light } });
+    ui.select([id]);
+    toast(`${p.name} placed. Drag it where it should shine, or double-click it to change it.`, 'ok', 3500);
+  }
+  return (
+    <>
+      <Field label="How bright is it here?" hint={AMBIENT_HINT[amb]}>
+        <div class="seg">
+          {([['bright', 'Daylight'], ['dim', 'Twilight'], ['dark', 'Dark']] as const).map(([k, label]) => (
+            <button key={k} class={amb === k ? 'on' : ''} onClick={() => void client.updateScene({ light: { ambient: k } })}>{label}</button>
+          ))}
+        </div>
+      </Field>
+      {amb === 'dark' && !fogSight && (
+        <div class="row wrap">
+          <p class="hint" style={{ margin: 0 }}>Turn on fog and token sight so tokens only see what is lit.</p>
+          <button class="btn small" onClick={() => void client.updateScene({ fog: { enabled: true, vision: true } })}>Turn them on</button>
+        </div>
+      )}
+      <div class="row wrap">
+        <select value={preset} onChange={(e) => setPreset((e.target as HTMLSelectElement).value)} title="The kind of light to place">
+          {LIGHT_PRESETS.map((l) => <option key={l.name} value={l.name}>{l.name} ({l.light.b} + {l.light.d} ft)</option>)}
+        </select>
+        <button class="btn small" disabled={!board} onClick={() => void place()}>Place a light</button>
+      </div>
+      <p class="hint">A placed light is a small marker only you can see. A token can carry a light too: Edit token, then Darkness and light. Tokens with sight see lit ground, and darkvision sees the dark as if it were dim.</p>
     </>
   );
 }

@@ -1,6 +1,6 @@
 import type {
   Aura, Drawing, FogOp, GridSettings, HpShow, InitEntry, InitPub, InitState, LibraryItem, LivePlot, Permissions, Player, SceneMeta, TableMeta,
-  TableSettings, Token, Vec,
+  TableSettings, Token, TokenLight, Vec,
 } from '../types';
 import { cleanHp, emptyInit, orderOf } from './combat';
 import { FONT_KEYS } from './draw';
@@ -79,6 +79,7 @@ export function normalizeSceneMeta(raw: any): SceneMeta {
       vision: bool(m.fog?.vision, false),
       explore: bool(m.fog?.explore, false),
     },
+    light: { ambient: m.light?.ambient === 'dim' || m.light?.ambient === 'dark' ? m.light.ambient : 'bright' },
     createdAt: num(m.createdAt, 0),
   };
 }
@@ -107,6 +108,8 @@ export function normalizeToken(id: string, raw: any, hidden: boolean): Token {
     hpNow: typeof t.hpNow === 'number' && Number.isFinite(t.hpNow) ? Math.min(99999, Math.max(-99999, Math.round(t.hpNow))) : null,
     hpCap: typeof t.hpCap === 'number' && Number.isFinite(t.hpCap) ? Math.min(99999, Math.max(0, Math.round(t.hpCap))) : null,
     sight: Math.min(1000, Math.max(0, num(t.sight, 0))),
+    dv: Math.min(1000, Math.max(0, num(t.dv, 0))),
+    light: normalizeTokenLight(t.light),
     fly: bool(t.fly, false),
     elev: Math.min(5000, Math.max(-1000, Math.round(num(t.elev, 0)))),
     initBonus: Math.min(99, Math.max(-99, Math.round(num(t.initBonus, 0)))),
@@ -117,6 +120,15 @@ export function normalizeToken(id: string, raw: any, hidden: boolean): Token {
     z: num(t.z, 0),
     label: t.label === 'dm' || t.label === 'none' ? t.label : 'all',
   };
+}
+
+/** A light on a token: at least one of the two distances, and a colour. Anything else means no light. */
+export function normalizeTokenLight(raw: any): TokenLight | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const b = Math.min(1000, Math.max(0, num(raw.b, 0)));
+  const d = Math.min(1000, Math.max(0, num(raw.d, 0)));
+  if (!(b + d > 0)) return null;
+  return { b, d, c: typeof raw.c === 'string' && /^#[0-9a-fA-F]{6}$/.test(raw.c) ? raw.c : '#ffd9a0' };
 }
 
 function cleanHpFields(t: any): { hp: number | null; maxHp: number | null } {
@@ -215,6 +227,8 @@ export function tokenToWire(t: Token): Record<string, unknown> {
     hpNow: t.hpNow ?? undefined,
     hpCap: t.hpCap ?? undefined,
     sight: t.sight > 0 ? t.sight : undefined,
+    dv: t.dv > 0 ? t.dv : undefined,
+    light: t.light ?? undefined,
     fly: t.fly ? true : undefined,
     elev: t.fly && t.elev ? t.elev : undefined,
     initBonus: t.initBonus ? t.initBonus : undefined,

@@ -19,6 +19,7 @@ import type {
   SceneMeta, TableMeta, TableSettings, Token, Vec,
 } from '../types';
 import { altitudeOf, groundAt, zonesOf } from '../core/height';
+import { litSeen, lightOf, viewerOf, type LightSrc } from '../core/light';
 import { carveWalls, joinAt, normalizeWall, routeReveal, sightSegs, splitPieces, wallMid, wallToWire, type Wall } from '../core/walls';
 import { History } from './history';
 import { P } from './paths';
@@ -53,13 +54,14 @@ export interface SceneState {
 export type NewDrawing = Omit<Drawing, 'id' | 'uid' | 't' | 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc'> & Partial<Pick<Drawing, 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc'>>;
 export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'hg' | 'ha' | 'he' | 'hc'>>;
 
-export type ScenePatch = Partial<Omit<SceneMeta, 'grid' | 'fog'>> & {
+export type ScenePatch = Partial<Omit<SceneMeta, 'grid' | 'fog' | 'light'>> & {
   grid?: Partial<GridSettings>;
   fog?: Partial<SceneMeta['fog']>;
+  light?: Partial<SceneMeta['light']>;
 };
 
 let tokenClipboard: Token[] = [];
-const UNDOABLE_SCENE_KEYS = new Set(['mapX', 'mapY', 'mapScale', 'mapLocked', 'mapGrid', 'wallStop', 'bg', 'grid', 'fog']);
+const UNDOABLE_SCENE_KEYS = new Set(['mapX', 'mapY', 'mapScale', 'mapLocked', 'mapGrid', 'wallStop', 'bg', 'grid', 'fog', 'light']);
 
 /**
  * Everything the app knows about one table, kept in sync with the backend.
@@ -1169,10 +1171,21 @@ export class TableClient {
     // a wall's top depends on the ground it stands on, and what is higher than that sees over it (only worked out when some wall has a height)
     const zones = [...s.walls.values()].some((w) => w.h > 0) ? zonesOf(s.draws.values(), g) : null;
     const segs = sightSegs(s.walls.values(), (w) => (zones ? groundAt(zones, wallMid(w)) : 0) + w.h);
+    // in the dark a token remembers what its own light, its darkvision and its touch reach as it walks, and what other lights show it where it stands
+    const dark = m.light.ambient === 'dark';
+    const altOf = (t: Token) => (zones ? altitudeOf(t, groundAt(zones, t)).alt : undefined);
+    const lights: LightSrc[] = dark
+      ? [...s.tokens.values()].filter((t) => !t.hidden && t.light).map((t) => lightOf(t, g, { x: t.x, y: t.y }, altOf(t))).filter((l): l is LightSrc => !!l)
+      : [];
     for (const t of s.tokens.values()) {
-      const r = sightRadiusPx(t, g);
+      let r = sightRadiusPx(t, g);
       const tr = this.trails.get(t.id);
       if (!tr || r <= 0 || t.hidden) continue;
+      const viewer = dark ? viewerOf(t, g, { x: t.x, y: t.y }, altOf(t)) : null;
+      if (dark) {
+        if (!viewer) continue;
+        r = Math.min(r, Math.max(viewer.touch, viewer.dv, lights.find((l) => l.id === t.id)?.r ?? 0));
+      }
       const lines = [...tr.segs, ...(tr.pend.length ? [tr.pend] : [])];
       for (const line of lines) {
         // keep the shape of the route but not every little step of it
@@ -1180,6 +1193,12 @@ export class TableClient {
         // with no wall in reach this is the one thick line; with walls it is what the token could see from a spot every square along the way
         for (const shape of routeReveal(pts, r, segs, g.cell, zones ? altitudeOf(t, groundAt(zones, t)).alt : undefined)) {
           updates[`${P.sceneFog(this.tableId, sid)}/${this.backend.newKey()}`] = shape.t === 'line' ? lineOp('r', shape.pts, shape.w) : polyOp('r', shape.pts);
+          count++;
+        }
+      }
+      if (viewer && lines.length) {
+        for (const piece of litSeen(viewer, lights.filter((l) => l.id !== t.id), segs)) {
+          updates[`${P.sceneFog(this.tableId, sid)}/${this.backend.newKey()}`] = polyOp('r', piece);
           count++;
         }
       }
@@ -1234,7 +1253,7 @@ export class TableClient {
     const base = P.sceneMeta(this.tableId, sid);
     const updates: Record<string, any> = {};
     for (const [k, v] of Object.entries(patch)) {
-      if (k === 'grid' || k === 'fog') {
+      if (k === 'grid' || k === 'fog' || k === 'light') {
         for (const [k2, v2] of Object.entries(v as object)) updates[`${base}/${k}/${k2}`] = v2 === undefined ? null : v2;
       } else updates[`${base}/${k}`] = v === undefined ? null : v;
     }
@@ -1248,7 +1267,7 @@ export class TableClient {
     if (undoable && meta) {
       prev = {};
       for (const [k, v] of Object.entries(patch)) {
-        if (k === 'grid' || k === 'fog') {
+        if (k === 'grid' || k === 'fog' || k === 'light') {
           const sub: Record<string, unknown> = {};
           for (const k2 of Object.keys(v as object)) sub[k2] = (meta as any)[k][k2];
           (prev as any)[k] = sub;

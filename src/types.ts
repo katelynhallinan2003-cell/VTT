@@ -49,6 +49,13 @@ export interface FogSettings {
   explore: boolean;
 }
 
+/** How bright the scene is where no light shines: daylight, twilight or darkness. */
+export type Ambient = 'bright' | 'dim' | 'dark';
+
+export interface LightSettings {
+  ambient: Ambient;
+}
+
 export interface SceneMeta {
   name: string;
   mapUrl: string | null;
@@ -66,6 +73,7 @@ export interface SceneMeta {
   bg: string;
   grid: GridSettings;
   fog: FogSettings;
+  light: LightSettings;
   createdAt: number;
 }
 
@@ -110,6 +118,10 @@ export interface Token {
   hpCap: number | null;
   /** how far this token can see, in feet (0 = it does not clear fog by itself) */
   sight: number;
+  /** darkvision: how far it sees in the dark as if it were dim light, in feet (0 = none) */
+  dv: number;
+  /** a light it gives off (a torch, a lantern, a spell), or null */
+  light: TokenLight | null;
   /** off the ground: it holds `elev` feet of altitude instead of standing on whatever height the ground has there */
   fly: boolean;
   /** altitude in feet above the map's base level (only used while `fly` is on) */
@@ -124,6 +136,16 @@ export interface Token {
   locked: boolean;
   z: number;
   label: LabelMode;
+}
+
+/** A light given off by a token. Distances are in feet; the dim ring is the extra distance past the bright one, as in the rulebooks. */
+export interface TokenLight {
+  /** bright light out to this far */
+  b: number;
+  /** dim light for this much further */
+  d: number;
+  /** colour of the glow */
+  c: string;
 }
 
 /** How an effect shows on its token. */

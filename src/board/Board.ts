@@ -10,11 +10,13 @@ import { EMPTY_TERRAIN, MAX_STROKE_CELLS, areaAt, areaLabelAt, areasSelected, ce
 import { cellPoly } from '../core/cells';
 import { findGrid, scaleCut, type GridCut } from '../core/gridcut';
 import { findHexGrid } from '../core/hexcut';
+import { lightOf, viewerOf, type LightSrc, type Viewer } from '../core/light';
+import { LightLayer } from './LightLayer';
 import { DEFAULT_GRID } from '../core/model';
 import { pctOf, toPub, visionCircles } from '../core/combat';
 import type { DrawingPatch, TableClient } from '../state/client';
 import type { StrokeSize, UiState } from '../state/ui';
-import type { DrawKind, Drawing, Ping, Rect, Token, Vec } from '../types';
+import type { Ambient, DrawKind, Drawing, Ping, Rect, Token, Vec } from '../types';
 import { throttle } from '../core/throttle';
 import { TokenView, type TokenCtx } from './TokenView';
 import { DrawLayer, paintShape } from './DrawLayer';
@@ -141,7 +143,9 @@ export class Board {
   private fogTexSize = '';
   /** circles around tokens that can see, cut out of the fog */
   private visionG = new Graphics();
-  private visionMasked = false;
+  private lightLayer = new LightLayer();
+  /** which kind of hole-cutter the fog has now: none, the circles and shapes of what tokens see, or the lit shape used in the dark */
+  private fogMaskKind: '' | 'g' | 's' = '';
   private seenInitRev = -1;
 
   private drag: Drag | null = null;
@@ -222,7 +226,7 @@ export class Board {
     this.distText.anchor.set(0.5, 1);
     this.distText.visible = false;
     this.ghostLayer.sortableChildren = true;
-    this.world.addChild(this.mapLayer, this.gridG, this.terrainLayer.container, this.drawLayer.container, this.wallLayer.container, this.auraG, this.tokenLayer, this.ghostLayer, this.fogLayer, this.overlayG, this.fxLayer, this.distText);
+    this.world.addChild(this.mapLayer, this.gridG, this.terrainLayer.container, this.drawLayer.container, this.wallLayer.container, this.auraG, this.tokenLayer, this.ghostLayer, this.lightLayer.container, this.fogLayer, this.overlayG, this.fxLayer, this.distText);
     app.stage.addChild(this.world);
 
     this.bindInput(app.canvas);
@@ -603,6 +607,7 @@ export class Board {
       textRes: this.textRes,
       health: this.healthFor(t),
       alt: this.heightOf(t),
+      mark: c.isDM && !this.ui.data.dmPreview,
     };
   }
 
@@ -1115,14 +1120,62 @@ export class Board {
     return circles.map((c) => ({ ...c, alt: this.altAt(c.id, { x: c.x, y: c.y }) }));
   }
 
+  /** What shines and who sees, for a scene that is not in full daylight (null in daylight). Positions are where the tokens are drawn now. */
+  private lighting(): { ambient: Ambient; lights: LightSrc[]; viewers: Viewer[]; key: string } | null {
+    const scene = this.client.scene;
+    const meta = scene?.meta;
+    if (!scene || !meta) return null;
+    const ambient = meta.light.ambient;
+    if (ambient === 'bright') return null;
+    const g = meta.grid;
+    const lights: LightSrc[] = [];
+    const viewers: Viewer[] = [];
+    for (const v of this.views.values()) {
+      const t = v.token;
+      // a token hidden from the players is gone for them, light and sight included, so it is gone here too
+      if (t.hidden) continue;
+      const at = v.testPos ? { x: t.x, y: t.y } : v.display;
+      const l = t.light ? lightOf(t, g, at, this.altAt(t.id, at)) : null;
+      if (l) lights.push(l);
+      const w = viewerOf(t, g, at, this.altAt(t.id, at));
+      if (w) viewers.push(w);
+    }
+    const r = (n: number) => Math.round(n * 2) / 2;
+    const key = `${scene.id}|${ambient}|${scene.wallRev}:${this.zones.sig}|${lights.map((l) => `${r(l.x)},${r(l.y)},${r(l.b)},${r(l.r)},${l.c},${l.alt ?? ''}`).join(';')}|${viewers.map((w) => `${r(w.x)},${r(w.y)},${r(w.r)},${r(w.dv)},${r(w.touch)},${w.alt ?? ''}`).join(';')}`;
+    return { ambient, lights, viewers, key };
+  }
+
+  /** The dark wash and the glow of the lights over the map. */
+  private drawDark(L: ReturnType<Board['lighting']>) {
+    const meta = this.client.scene?.meta;
+    if (!L || !meta) { this.lightLayer.hide(); return; }
+    const rect = meta.mapW > 0 ? mapRect(meta) : { x: 0, y: 0, w: 2000, h: 1500 };
+    this.lightLayer.paint({ ambient: L.ambient, rect, lights: L.lights, viewers: L.viewers, segs: this.wallSegs().sight, dm: this.client.isDM && !this.ui.data.dmPreview, key: L.key });
+  }
+
   private drawVision() {
+    const L = this.lighting();
+    this.drawDark(L);
     const sprite = this.fogSprite;
     if (!sprite) return;
+    const meta = this.client.scene?.meta;
+    // in the dark, a token only sees what is lit (or what its darkvision reaches): the fog is cut open in that shape
+    if (L && L.ambient === 'dark' && sprite.visible && meta?.fog.enabled && meta.fog.vision) {
+      this.visionG.clear();
+      if (!L.viewers.length) {
+        if (this.fogMaskKind) { sprite.setMask({ mask: null }); this.fogMaskKind = ''; }
+        return;
+      }
+      const m = this.fogMask;
+      this.lightLayer.paintSeen({ origin: m.origin, scale: m.scale, w: m.canvas.width, h: m.canvas.height }, L.lights, L.viewers, this.wallSegs().sight, L.key);
+      if (this.fogMaskKind !== 's') { sprite.setMask({ mask: this.lightLayer.seenSprite, inverse: true }); this.fogMaskKind = 's'; }
+      return;
+    }
     const g = this.visionG;
     g.clear();
     const circles = sprite.visible ? this.visionNow() : [];
     if (!circles.length) {
-      if (this.visionMasked) { sprite.setMask({ mask: null }); this.visionMasked = false; }
+      if (this.fogMaskKind) { sprite.setMask({ mask: null }); this.fogMaskKind = ''; }
       return;
     }
     // a wall cuts the circle back to what the token could really see from where it stands
@@ -1135,7 +1188,7 @@ export class Board {
       g.circle(c.x, c.y, c.r);
     }
     g.fill(0xffffff);
-    if (!this.visionMasked) { sprite.setMask({ mask: g, inverse: true }); this.visionMasked = true; }
+    if (this.fogMaskKind !== 'g') { sprite.setMask({ mask: g, inverse: true }); this.fogMaskKind = 'g'; }
   }
 
   /** Whose turn is it, as far as this viewer is allowed to know? */
@@ -1291,7 +1344,7 @@ export class Board {
     const sizeKey = `${this.fogMask.canvas.width}x${this.fogMask.canvas.height}`;
     if (!this.fogSprite) {
       this.fogSprite = new Sprite(Texture.EMPTY);
-      this.fogLayer.addChild(this.fogSprite, this.visionG);
+      this.fogLayer.addChild(this.fogSprite, this.visionG, this.lightLayer.seenSprite);
     }
     if (sizeKey !== this.fogTexSize || this.fogSprite.texture === Texture.EMPTY) {
       const old = this.fogSprite.texture;

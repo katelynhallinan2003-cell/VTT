@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { groundAt, zonesOf } from '../core/height';
+import { LIGHT_PRESETS } from '../core/light';
 import { TOKEN_SIZES } from '../core/model';
 import type { TableClient } from '../state/client';
-import type { Aura, HpShow, LabelMode, Token, TokenShape } from '../types';
+import type { Aura, HpShow, LabelMode, Token, TokenLight, TokenShape } from '../types';
 import { Field, Modal, SliderField, Toggle, toast, useClient } from './common';
 import { AuraEditor } from './auraEditor';
 import { NO_FRAMING, PickImage, TokenCropper, type PaintApi } from './tokenCropper';
@@ -72,6 +73,9 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
   const hpVal = ('hp' in draft ? draft.hp : t0.hp) ?? null;
   const maxHpVal = ('maxHp' in draft ? draft.maxHp : t0.maxHp) ?? null;
   const tempVal = ('tempHp' in draft ? draft.tempHp : t0.tempHp) ?? 0;
+  const sameLight = (a: TokenLight | null, b: TokenLight | null) => (!a && !b) || (!!a && !!b && a.b === b.b && a.d === b.d && a.c === b.c);
+  /** undefined: the tokens disagree */
+  const lightNow: TokenLight | null | undefined = 'light' in draft ? draft.light ?? null : tokens.every((t) => sameLight(t.light, t0.light)) ? t0.light : undefined;
   const [paintTouched, setPaintTouched] = useState(false);
   const dirty = Object.keys(draft).length > 0 || !!file || paintTouched;
 
@@ -231,6 +235,40 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
                     onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ sight: v === '' ? 0 : Math.max(0, Number(v)) }); }} />
                   {[0, 30, 60, 120].map((n) => <button key={n} class="btn small" disabled={!editable} onClick={() => set({ sight: n })}>{n === 0 ? 'None' : `${n} ft`}</button>)}
                 </div>
+              </Field>
+              <h4>Darkness and light</h4>
+              <Field label="Darkvision (feet)" hint="Sees this far in the dark as if it were dim light. 0: none. It can only see as far as its sight, above.">
+                <div class="row wrap" style={{ marginBottom: 0 }}>
+                  <input type="number" class="num" min={0} step={5} disabled={!editable} value={(draft.dv ?? same('dv') ?? '') as number | ''}
+                    placeholder={val('dv') === null ? 'Mixed' : '0'}
+                    onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ dv: v === '' ? 0 : Math.max(0, Number(v)) }); }} />
+                  {[0, 30, 60, 120].map((n) => <button key={n} class="btn small" disabled={!editable} onClick={() => set({ dv: n })}>{n === 0 ? 'None' : `${n} ft`}</button>)}
+                </div>
+              </Field>
+              <Field label="Gives off light" hint="Bright out to the first distance, dim for the second one on top of it (a torch: 20 and 20). It matters once the scene is dim or dark (Scene panel).">
+                <div class="row wrap" style={{ marginBottom: 0 }}>
+                  <button class={`btn small ${lightNow === null ? 'primary' : ''}`} disabled={!editable} onClick={() => set({ light: null })}>None</button>
+                  {LIGHT_PRESETS.map((p) => (
+                    <button key={p.name} class={`btn small ${lightNow && sameLight(lightNow, p.light) ? 'primary' : ''}`} disabled={!editable} title={`Bright ${p.light.b} ft, dim ${p.light.d} ft more`}
+                      onClick={() => set({ light: { ...p.light } })}>{p.name}</button>
+                  ))}
+                </div>
+                {lightNow === undefined && <p class="hint">These tokens have different lights. Pick one to give them all the same.</p>}
+                {lightNow && (
+                  <div class="row wrap" style={{ marginTop: '8px', marginBottom: 0 }}>
+                    <label class="field-label">Bright
+                      <input type="number" class="num" min={0} step={5} disabled={!editable} value={lightNow.b}
+                        onInput={(e) => set({ light: { ...lightNow, b: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) } })} /> ft
+                    </label>
+                    <label class="field-label">then dim
+                      <input type="number" class="num" min={0} step={5} disabled={!editable} value={lightNow.d}
+                        onInput={(e) => set({ light: { ...lightNow, d: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) } })} /> ft
+                    </label>
+                    <label class="field-label">Colour
+                      <input type="color" disabled={!editable} value={lightNow.c} onInput={(e) => set({ light: { ...lightNow, c: (e.target as HTMLInputElement).value } })} />
+                    </label>
+                  </div>
+                )}
               </Field>
             </>
           )}

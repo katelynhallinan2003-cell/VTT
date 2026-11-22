@@ -26,8 +26,9 @@ These are standing orders from the user (set 2026-11-22). Follow them without be
 - If the user says something still does not work, move it back to *Open* and note what is left.
 - **Before every report to the user,** re-read their recent messages and check that every issue in them is in `WIP.md`.
 - A plain question that needs no change to the project is not an issue and does not go in the file.
-
-`TASKS.md` is the older ledger from before `WIP.md`. It is kept as history. Do not add to it.
+- An issue that cannot move until the user does something is marked `(waiting on user)`; remind them of these when it is relevant.
+- The *Ideas* section holds suggestions nobody asked for. Do not build them unless the user asks. You may add your
+  own ideas there, never to *Open*.
 
 ## Project habits
 

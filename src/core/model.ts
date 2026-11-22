@@ -1,6 +1,6 @@
 import type {
   Aura, Drawing, FogOp, GridSettings, HpShow, InitEntry, InitPub, InitState, LibraryItem, LivePlot, Permissions, Player, SceneMeta, TableMeta,
-  TableSettings, Token, TokenLight, Vec,
+  TableSettings, Token, TokenLight, Vec, ViewCall, Handout,
 } from '../types';
 import { cleanHp, emptyInit, orderOf } from './combat';
 import { FONT_KEYS } from './draw';
@@ -296,7 +296,15 @@ export function normalizeMeta(raw: any): TableMeta {
     name: str(raw?.name, 'Table'),
     activeScene: typeof raw?.activeScene === 'string' ? raw.activeScene : null,
     createdAt: num(raw?.createdAt, 0),
+    view: normalizeView(raw?.view),
   };
+}
+
+export function normalizeView(raw: any): ViewCall | null {
+  if (!raw || typeof raw !== 'object' || typeof raw.sid !== 'string') return null;
+  const w = num(raw.w, 0), h = num(raw.h, 0);
+  if (!(w > 0 && h > 0)) return null;
+  return { sid: raw.sid, x: num(raw.x, 0), y: num(raw.y, 0), w, h, n: num(raw.n, 0) };
 }
 
 export function normalizePlayer(uid: string, raw: any): Player {
@@ -347,4 +355,34 @@ export function stripUndefined<T extends Record<string, unknown>>(o: T): T {
     else out[k] = v;
   }
   return out as T;
+}
+
+// ---------------------------------------------------------------- handouts
+export function normalizeHandout(id: string, raw: any): Handout {
+  const r = raw ?? {};
+  const toRaw = r.to;
+  const to = toRaw && typeof toRaw === 'object' ? (Array.isArray(toRaw) ? toRaw : Object.keys(toRaw).filter((k) => toRaw[k])).filter((u: unknown): u is string => typeof u === 'string') : null;
+  return {
+    id,
+    title: str(r.title, '').slice(0, 120),
+    text: str(r.text, '').slice(0, 20000),
+    img: typeof r.img === 'string' && r.img ? r.img : null,
+    to: to && to.length ? to : null,
+    shown: bool(r.shown, false),
+    n: num(r.n, 0),
+    createdAt: num(r.createdAt, 0),
+  };
+}
+
+/** The saved form of a handout. `to` is a set of keys, because the database turns lists into objects when it feels like it. */
+export function handoutToWire(h: Handout): Record<string, unknown> {
+  return stripUndefined({
+    title: h.title,
+    text: h.text || undefined,
+    img: h.img ?? undefined,
+    to: h.to ? Object.fromEntries(h.to.map((u) => [u, true])) : undefined,
+    shown: h.shown ? true : undefined,
+    n: h.n || undefined,
+    createdAt: h.createdAt,
+  });
 }

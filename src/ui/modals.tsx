@@ -10,6 +10,7 @@ import type { TableClient } from '../state/client';
 import type { UiState } from '../state/ui';
 import type { GridShape, LibraryItem, Permissions, TokenShape, Vec } from '../types';
 import { Field, Modal, SliderField, Toggle, copyText, toast, useClient, useTheme, useUi } from './common';
+import { CampaignFileSection } from './campaignFile';
 import { THEMES, getAccent, getTheme, setAccent, setTheme } from './theme';
 import { TokenCropper, NO_FRAMING, type Framing, type PaintApi } from './tokenCropper';
 import { addRecent, getRecent, uploadImage } from './uploads';
@@ -394,6 +395,8 @@ export function SettingsModal(props: { client: TableClient; ui: UiState; onClose
             <span class="muted">Uploads a tiny image and checks your browser can use it on the board.</span>
           </div>
           {log && <pre class="log">{log.join('\n')}</pre>}
+
+          <CampaignFileSection client={client} />
         </>
       )}
 

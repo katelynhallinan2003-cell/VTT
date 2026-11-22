@@ -231,6 +231,11 @@ export class Board {
 
     this.bindInput(app.canvas);
     this.unsubs.push(this.client.onPing((p) => this.addPing(p)));
+    this.unsubs.push(this.client.onView((v) => {
+      if (v.sid !== this.client.viewSceneId) return;
+      this.showRect(v);
+      this.cb.onNotice('The DM brought everyone to this spot.', 'info');
+    }));
     this.unsubs.push(this.ui.subscribe(() => { this.onUiChange(); this.invalidate(); }));
     this.resizeObs = new ResizeObserver(() => {
       if (this.destroyed) return;
@@ -322,6 +327,30 @@ export class Board {
     const t0 = performance.now();
     const run = (now: number) => {
       const k = Math.min(1, (now - t0) / 260);
+      const e = 1 - Math.pow(1 - k, 3);
+      this.cam.zoom = from.zoom + (to.zoom - from.zoom) * e;
+      this.cam.tx = from.tx + (to.tx - from.tx) * e;
+      this.cam.ty = from.ty + (to.ty - from.ty) * e;
+      this.applyCamera();
+      if (k < 1) requestAnimationFrame(run);
+    };
+    requestAnimationFrame(run);
+  }
+
+  /** The part of the map this view shows, in world pixels. */
+  viewRect(): Rect {
+    const W = this.host.clientWidth, H = this.host.clientHeight, z = this.cam.zoom;
+    return { x: -this.cam.tx / z, y: -this.cam.ty / z, w: W / z, h: H / z };
+  }
+
+  /** Glide the view so this part of the map fills it (the DM asked everyone to look here). */
+  showRect(rect: Rect) {
+    const to = fitCamera(this.host.clientWidth, this.host.clientHeight, rect, 0);
+    const from = { ...this.cam };
+    const t0 = performance.now();
+    const run = (now: number) => {
+      if (this.destroyed) return;
+      const k = Math.min(1, (now - t0) / 500);
       const e = 1 - Math.pow(1 - k, 3);
       this.cam.zoom = from.zoom + (to.zoom - from.zoom) * e;
       this.cam.tx = from.tx + (to.tx - from.tx) * e;

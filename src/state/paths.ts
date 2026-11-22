@@ -16,6 +16,11 @@ export const P = {
   uploadKey: (tid: string) => `tables/${tid}/upload/key`,
   players: (tid: string) => `tables/${tid}/players`,
   player: (tid: string, uid: string) => `tables/${tid}/players/${uid}`,
+  // Handouts the DM has put in front of the players (the DM's own copies, shown or not, are under dm/).
+  handouts: (tid: string) => `tables/${tid}/handouts`,
+  handout: (tid: string, id: string) => `tables/${tid}/handouts/${id}`,
+  dmHandouts: (tid: string) => `tables/${tid}/dm/handouts`,
+  dmHandout: (tid: string, id: string) => `tables/${tid}/dm/handouts/${id}`,
 
   // Public per-scene data. Players can only read the ACTIVE scene.
   scene: (tid: string, sid: string) => `tables/${tid}/scenes/${sid}`,

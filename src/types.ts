@@ -287,10 +287,36 @@ export interface Permissions {
 }
 export type PermPreset = 'trusting' | 'standard' | 'strict' | 'custom';
 
+/** The DM asking everyone to look at one part of the map: the world rectangle to bring into view, and a number that changes with every ask. */
+export interface ViewCall {
+  sid: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  n: number;
+}
+
+/** A picture and/or some words the DM can put in front of the players. */
+export interface Handout {
+  id: string;
+  title: string;
+  text: string;
+  img: string | null;
+  /** who sees it while it is shown: everyone (null) or only these players */
+  to: string[] | null;
+  /** in front of the players right now */
+  shown: boolean;
+  /** changes each time the DM shows it, so a screen that has it closed opens it again */
+  n: number;
+  createdAt: number;
+}
+
 export interface TableMeta {
   name: string;
   activeScene: string | null;
   createdAt: number;
+  view: ViewCall | null;
 }
 
 export interface TableSettings {

@@ -1,8 +1,8 @@
 import type { Backend, Unsub } from '../backend/types';
 import { SERVER_TS } from '../backend/types';
 import {
-  drawingToWire, initPubToWire, initToWire, normalizeDrawing, normalizeFogOp, normalizeInit, normalizeInitPub, normalizeLive, normalizeMeta,
-  normalizePlayer, normalizeSceneMeta, normalizeSettings, normalizeToken, stripUndefined, tokenToWire, DEFAULT_GRID, DM_COLOR,
+  drawingToWire, handoutToWire, initPubToWire, initToWire, normalizeDrawing, normalizeFogOp, normalizeHandout, normalizeInit, normalizeInitPub, normalizeLive, normalizeMeta,
+  normalizeLibraryItem, normalizePlayer, normalizeSceneMeta, normalizeSettings, normalizeToken, stripUndefined, tokenToWire, DEFAULT_GRID, DM_COLOR,
 } from '../core/model';
 import {
   applyDamage, cleanHp, EXPLORE_MIN_CELLS, EXPLORE_JUMP_CELLS, EXPLORE_TELEPORT_CELLS, EXPLORE_TELEPORT_MS, emptyInit, moveEntry, nextTurn, orderOf, pctOf, prevTurn, publicHp, sightRadiusPx, sortByInit, toPub,
@@ -16,11 +16,13 @@ import { isTemplate, movedPoints } from '../core/draw';
 import { throttle } from '../core/throttle';
 import type {
   Drawing, Effect, FogOp, InitEntry, InitPub, InitState, LivePlot, GridSettings, Permissions, PermPreset, Ping, Player, Role, SceneIndexEntry,
-  SceneMeta, TableMeta, TableSettings, Token, Vec,
+  Handout, Rect, SceneMeta, TableMeta, TableSettings, Token, Vec, ViewCall,
 } from '../types';
 import { altitudeOf, groundAt, zonesOf } from '../core/height';
 import { litSeen, lightOf, viewerOf, type LightSrc } from '../core/light';
 import { carveWalls, joinAt, normalizeWall, routeReveal, sightSegs, splitPieces, wallMid, wallToWire, type Wall } from '../core/walls';
+import { buildCampaign, newLibraryItems, planImport, type CampaignFile, type CampaignLibraryItem } from '../core/campaign';
+import { addLibraryItem } from './account';
 import { History } from './history';
 import { P } from './paths';
 
@@ -86,6 +88,13 @@ export class TableClient {
 
   private listeners = new Set<() => void>();
   private pingListeners = new Set<(p: Ping) => void>();
+  private viewListeners = new Set<(v: ViewCall) => void>();
+  /** what the DM has (all of it) or what the DM is showing this player */
+  handouts = new Map<string, Handout>();
+  private handoutListeners = new Set<(h: Handout) => void>();
+  private handoutSeen = new Map<string, number>();
+  private handoutT0 = 0;
+  private viewCallN = 0;
   private unsubs: Unsub[] = [];
   private sceneUnsubs: Unsub[] = [];
   private notifyQueued = false;
@@ -104,6 +113,57 @@ export class TableClient {
   subscribe(fn: () => void): Unsub {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
+  }
+  /** Told when the DM shows a player a handout while they are here. */
+  onHandout(fn: (h: Handout) => void): Unsub {
+    this.handoutListeners.add(fn);
+    return () => this.handoutListeners.delete(fn);
+  }
+  /** What this person can look at: the handouts being shown to them, newest first (the DM sees all of their own, in the order made). */
+  handoutList(): Handout[] {
+    const all = [...this.handouts.values()];
+    if (this.isDM) return all.sort((a, b) => a.createdAt - b.createdAt);
+    return all.filter((h) => h.shown && (!h.to || h.to.includes(this.uid))).sort((a, b) => b.n - a.n);
+  }
+  /** (DM) make or change a handout. Changing one that is being shown changes it for the players too, without opening it again. */
+  async saveHandout(input: { id?: string; title: string; text: string; img: string | null }): Promise<string> {
+    if (!this.isDM) return '';
+    const cur = input.id ? this.handouts.get(input.id) : undefined;
+    const id = input.id ?? this.backend.newKey();
+    const h: Handout = { id, title: input.title.trim() || 'Handout', text: input.text, img: input.img, to: cur?.to ?? null, shown: cur?.shown ?? false, n: cur?.n ?? 0, createdAt: cur?.createdAt ?? Date.now() };
+    const updates: Record<string, unknown> = { [P.dmHandout(this.tableId, id)]: handoutToWire(h) };
+    if (h.shown) updates[P.handout(this.tableId, id)] = handoutToWire(h);
+    await this.backend.update(updates);
+    return id;
+  }
+  /** (DM) put a handout in front of everyone (`to` null) or only some players. Opens on their screens. */
+  async showHandout(id: string, to: string[] | null): Promise<void> {
+    const cur = this.handouts.get(id);
+    if (!this.isDM || !cur) return;
+    const h: Handout = { ...cur, shown: true, to: to && to.length ? to : null, n: Date.now() };
+    await this.backend.update({ [P.dmHandout(this.tableId, id)]: handoutToWire(h), [P.handout(this.tableId, id)]: handoutToWire(h) });
+  }
+  /** (DM) take a handout away from the players. The DM keeps it. */
+  async hideHandout(id: string): Promise<void> {
+    const cur = this.handouts.get(id);
+    if (!this.isDM || !cur) return;
+    await this.backend.update({ [P.dmHandout(this.tableId, id)]: handoutToWire({ ...cur, shown: false }), [P.handout(this.tableId, id)]: null });
+  }
+  async removeHandout(id: string): Promise<void> {
+    if (!this.isDM) return;
+    await this.backend.update({ [P.dmHandout(this.tableId, id)]: null, [P.handout(this.tableId, id)]: null });
+  }
+  /** Told when the DM asks everyone to look at one part of the map. */
+  onView(fn: (v: ViewCall) => void): Unsub {
+    this.viewListeners.add(fn);
+    return () => this.viewListeners.delete(fn);
+  }
+  /** (DM) bring every player's view to this part of the map. */
+  async callView(rect: Rect): Promise<void> {
+    const sid = this.viewSceneId;
+    if (!this.isDM || !sid) return;
+    const r = (n: number) => Math.round(n);
+    await this.backend.set(`${P.meta(this.tableId)}/view`, { sid, x: r(rect.x), y: r(rect.y), w: Math.max(1, r(rect.w)), h: Math.max(1, r(rect.h)), n: Date.now() });
   }
   onPing(fn: (p: Ping) => void): Unsub {
     this.pingListeners.add(fn);
@@ -131,6 +191,10 @@ export class TableClient {
 
     this.unsubs.push(b.listen(P.meta(tid), (v) => {
       this.meta = v ? normalizeMeta(v) : null;
+      // the DM asked everyone to look somewhere (not on first load: only asks made while we are here count)
+      const call = this.meta?.view ?? null;
+      if (this.metaLoaded && call && call.n !== this.viewCallN && this.role === 'player') for (const fn of [...this.viewListeners]) fn(call);
+      this.viewCallN = call?.n ?? this.viewCallN;
       this.metaLoaded = true;
       this.followActiveScene();
       this.bump();
@@ -146,6 +210,25 @@ export class TableClient {
       changed: (k, v) => { this.players.set(k, normalizePlayer(k, v)); this.bump(); },
       removed: (k) => { this.players.delete(k); this.bump(); },
     }, this.fail('players')));
+
+    // handouts: the DM works on their own copies, a player gets only what is being shown
+    this.handoutT0 = performance.now();
+    const handoutRow = (k: string, v: any) => {
+      const h = normalizeHandout(k, v);
+      this.handouts.set(k, h);
+      const prev = this.handoutSeen.get(k);
+      this.handoutSeen.set(k, h.n);
+      // a player's screen opens a handout when it is shown to them while they are here (not for ones already out when they arrived)
+      if (this.role === 'player' && h.shown && h.n && prev !== h.n && performance.now() - this.handoutT0 > 1500 && (!h.to || h.to.includes(this.uid))) {
+        for (const fn of [...this.handoutListeners]) fn(h);
+      }
+      this.bump();
+    };
+    this.unsubs.push(b.listenChildren(this.role === 'dm' ? P.dmHandouts(tid) : P.handouts(tid), {
+      added: handoutRow,
+      changed: handoutRow,
+      removed: (k) => { this.handouts.delete(k); this.handoutSeen.delete(k); this.bump(); },
+    }, this.fail('handouts')));
 
     this.unsubs.push(b.listen(P.uploadKey(tid), (v) => {
       this.uploadKey = typeof v === 'string' && v ? v : null;
@@ -175,6 +258,8 @@ export class TableClient {
     this.sceneUnsubs = [];
     this.listeners.clear();
     this.pingListeners.clear();
+    this.viewListeners.clear();
+    this.handoutListeners.clear();
   }
 
   private armPresence() {
@@ -1302,6 +1387,67 @@ export class TableClient {
     if (this.activeSceneId === sid) updates[P.activeScene(tid)] = rest[0]?.id ?? null;
     await this.backend.update(updates);
     if (this.viewSceneId === sid) this.openScene(rest[0]?.id ?? null);
+  }
+
+  // ---------------------------------------------------------------- the whole campaign in one file (DM)
+  /** Everything about this table that is worth keeping: scenes (with hidden tokens and hit points), handouts, and optionally your map and token library. */
+  async exportCampaign(opts: { library: boolean }): Promise<CampaignFile> {
+    if (!this.isDM) throw new Error('Only the DM can save the campaign.');
+    const tid = this.tableId;
+    const scenes: { name: string; active: boolean; pub: any; dm: any }[] = [];
+    for (const e of [...this.sceneIndex].sort((a, b) => a.order - b.order)) {
+      const [pub, dm] = await Promise.all([this.backend.get(P.scene(tid, e.id)), this.backend.get(P.dmScene(tid, e.id))]);
+      if (!pub || !pub.meta) continue;
+      scenes.push({ name: e.name, active: e.id === this.activeSceneId, pub, dm: dm ?? {} });
+    }
+    let library: { maps: CampaignLibraryItem[]; tokens: CampaignLibraryItem[] } | null = null;
+    if (opts.library) {
+      const read = async (kind: 'maps' | 'tokens'): Promise<CampaignLibraryItem[]> => {
+        const v = await this.backend.get(P.userLibrary(this.uid, kind));
+        return Object.entries<any>(v ?? {})
+          .map(([id, raw]) => normalizeLibraryItem(id, raw))
+          .filter((x): x is NonNullable<typeof x> => !!x)
+          .sort((a, b) => a.addedAt - b.addedAt)
+          .map((x) => ({ name: x.name, url: x.url, ...(x.thumb ? { thumb: x.thumb } : {}), ...(x.w ? { w: x.w } : {}), ...(x.h ? { h: x.h } : {}) }));
+      };
+      library = { maps: await read('maps'), tokens: await read('tokens') };
+    }
+    return buildCampaign({
+      name: this.meta?.name ?? 'Campaign',
+      settings: { perm: this.settings.perm, preset: this.settings.preset },
+      scenes,
+      handouts: [...this.handouts.values()],
+      library,
+      now: Date.now(),
+    });
+  }
+
+  /** Adds a saved campaign to this table. Nothing already here is changed: scenes and handouts come in as new ones. */
+  async importCampaign(file: CampaignFile, opts: { library: boolean; permissions: boolean }): Promise<{ scenes: number; handouts: number; library: number; firstScene: string | null }> {
+    if (!this.isDM) throw new Error('Only the DM can add a campaign.');
+    const tid = this.tableId;
+    const plan = planImport(file, {
+      tid, uid: this.uid, newKey: () => this.backend.newKey(), now: Date.now(),
+      existingNames: this.sceneIndex.map((s) => s.name),
+      orderBase: Math.max(0, ...this.sceneIndex.map((s) => s.order)),
+      hasActive: !!this.activeSceneId && this.sceneIndex.some((s) => s.id === this.activeSceneId),
+    });
+    const updates = { ...plan.updates };
+    if (plan.activate) updates[P.activeScene(tid)] = plan.activate;
+    const st = file.table.settings as any;
+    if (opts.permissions && st?.perm && typeof st.perm === 'object') {
+      const perm = normalizeSettings({ perm: st.perm }, PRESETS).perm;
+      updates[P.settings(tid)] = { perm, preset: detectPreset(perm) };
+    }
+    if (Object.keys(updates).length) await this.backend.update(updates);
+    let added = 0;
+    if (opts.library && file.library) {
+      for (const kind of ['maps', 'tokens'] as const) {
+        const have = Object.values<any>((await this.backend.get(P.userLibrary(this.uid, kind))) ?? {}).filter((x) => x && typeof x.url === 'string');
+        for (const it of newLibraryItems(have, file.library[kind])) { await addLibraryItem(this.backend, this.uid, kind, it); added++; }
+      }
+    }
+    return { scenes: plan.sceneIds.length, handouts: plan.handoutIds.length, library: added, firstScene: plan.sceneIds[0] ?? null };
   }
 
   async setActiveScene(sid: string): Promise<void> {

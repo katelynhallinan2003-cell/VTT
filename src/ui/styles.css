@@ -538,3 +538,19 @@ input[type=text], input[type=number], input[type=password], select { border-radi
 /* Heights panel: the card for the selected (or next) ground */
 .ht-card { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--line, #3a3f4b); border-radius: 8px; background: rgba(255,255,255,0.03); }
 .ht-card .btn[disabled], .ht-card .seg button[disabled] { opacity: 0.45; cursor: not-allowed; }
+
+/* ---- handouts */
+.handout-img { display: block; max-width: 100%; max-height: 60vh; margin: 0 auto 10px; border-radius: 6px; object-fit: contain; }
+.handout-img.small { max-height: 140px; margin: 8px 0 0; }
+.handout-text { white-space: pre-wrap; line-height: 1.5; margin: 0; }
+.handout-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line, rgba(128,128,128,.25)); }
+.handout-row-main { display: flex; align-items: center; gap: 10px; cursor: pointer; min-width: 0; flex: 1; }
+.handout-thumb { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; flex: none; background: rgba(128,128,128,.18); }
+.handout-thumb.text { display: grid; place-items: center; font-size: 20px; }
+.handout-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.handout-state.on { color: var(--accent, #2f81f7); }
+.handout-actions { display: flex; gap: 6px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
+
+/* campaign file (Settings) */
+.campaign-confirm { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--sunken); display: grid; gap: 6px; }
+.campaign-error { margin: 8px 0 0; color: var(--danger); }

@@ -6,6 +6,7 @@ import { loadImage } from '../core/images';
 import type { TableClient } from '../state/client';
 import { UiState } from '../state/ui';
 import type { AuthUser, LibraryItem, Rect, Token, Vec } from '../types';
+import { HandoutsModal } from './handouts';
 import { Toasts, copyText, toast, useClient, useTheme, useUi } from './common';
 import { AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewSceneModal, ScenesModal, SettingsModal } from './modals';
 import { DrawFlyout, DrawInspector, HeightFlyout, RulerFlyout, TemplateFlyout, TestMoveBar, TextEditor, WallFlyout } from './drawTools';
@@ -22,6 +23,7 @@ type ModalState =
   | { kind: 'library' }
   | { kind: 'settings' }
   | { kind: 'claim' }
+  | { kind: 'handouts'; openId?: string | null }
   | { kind: 'editToken'; ids: string[] }
   | { kind: 'grid'; rect: Rect; derived: { cell: number; ox: number; oy: number } };
 
@@ -99,6 +101,17 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
     if (!client.isDM) return;
     client.onFxEnded = (lines) => { for (const l of lines) toast(l, 'info', 3200); };
     return () => { client.onFxEnded = null; };
+  }, [client]);
+
+  // ---- a handout the DM just showed: say so, and open it unless something else is open
+  useEffect(() => {
+    if (client.isDM) return;
+    return client.onHandout((h) => {
+      // it opens over nothing, or over the handouts window (so a second one is not missed); another window is left alone
+      const busy = modalRef.current && modalRef.current.kind !== 'handouts';
+      toast(busy ? `The DM shared a handout: ${h.title || 'Handout'}. Open Handouts to read it.` : `The DM shared a handout: ${h.title || 'Handout'}`, 'info', 4000);
+      if (!busy) setModal({ kind: 'handouts', openId: h.id });
+    });
   }, [client]);
 
   // ---- offer to claim a token the first time a player sees unclaimed tokens
@@ -305,6 +318,12 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       <header class="pill pill-right">
         {!client.isDM && <button class="btn small" onClick={() => setModal({ kind: 'claim' })}>My token</button>}
         {client.isDM && <button class="btn small" onClick={() => setModal({ kind: 'library' })}>Library</button>}
+        {(client.isDM || client.handoutList().length > 0) && (
+          <button class="btn small" title={client.isDM ? 'Pictures and words to put in front of your players' : 'What the DM has shown you'} onClick={() => setModal({ kind: 'handouts' })}>
+            Handouts{!client.isDM && client.handoutList().length ? ` (${client.handoutList().length})` : ''}
+          </button>
+        )}
+        {client.isDM && <button class="btn small" title="Moves every player's view to the part of the map you are looking at" onClick={() => { const r = boardRef.current?.viewRect(); if (r) { void client.callView(r); toast('Everyone is being brought to this view', 'ok', 2200); } }}>Bring players here</button>}
         {client.isDM && <button class="btn small" onClick={() => copyText(`${location.href.split('#')[0]}#/t/${client.tableId}`)}>Copy player link</button>}
         <button class="btn small" onClick={() => setModal({ kind: 'settings' })}>Settings</button>
       </header>
@@ -357,6 +376,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {modal?.kind === 'library' && <LibraryModal client={client} onClose={() => setModal(null)} onUseMap={useLibraryMap} onAddToken={addLibraryToken} />}
       {modal?.kind === 'settings' && <SettingsModal client={client} ui={ui} onClose={() => setModal(null)} onSignOut={client.isDM ? props.onSignOut : undefined} />}
       {modal?.kind === 'editToken' && <TokenEditorModal client={client} ids={modal.ids} onClose={() => setModal(null)} />}
+      {modal?.kind === 'handouts' && <HandoutsModal key={modal.openId ?? 'list'} client={client} openId={modal.openId ?? null} onClose={() => setModal(null)} />}
       {modal?.kind === 'claim' && <ClaimModal client={client} onClose={() => setModal(null)} onNewToken={() => openAddToken()} />}
       {modal?.kind === 'grid' && (
         <GridDialog shape={client.grid.shape} onCancel={() => { setModal(null); ui.set({ tool: 'select' }); }}

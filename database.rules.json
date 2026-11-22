@@ -28,6 +28,10 @@
           ".read": "auth != null",
           ".write": "auth != null && root.child('tables').child($tid).child('owner').val() === auth.uid"
         },
+        "handouts": {
+          ".read": "auth != null",
+          ".write": "auth != null && root.child('tables').child($tid).child('owner').val() === auth.uid"
+        },
         "upload": {
           ".read": "auth != null",
           ".write": "auth != null && root.child('tables').child($tid).child('owner').val() === auth.uid"

@@ -48,6 +48,8 @@ const rules = {
         },
         meta: readAllWriteOwner,
         settings: readAllWriteOwner,
+        // handouts the DM is showing (the DM's own copies live under dm/, which players cannot read)
+        handouts: readAllWriteOwner,
         upload: readAllWriteOwner,
         players: {
           '.read': 'auth != null',

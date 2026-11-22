@@ -33,7 +33,7 @@ function FilePick(props: { onFile: (f: File) => void; label?: string; accept?: s
     <>
       <input ref={ref} type="file" accept={props.accept ?? 'image/*'} hidden
         onChange={(e) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) props.onFile(f); (e.target as HTMLInputElement).value = ''; }} />
-      <button class="btn" onClick={() => ref.current?.click()}>{props.label ?? 'Choose image…'}</button>
+      <button class="btn" onClick={() => ref.current?.click()}>{props.label ?? 'Choose a picture…'}</button>
     </>
   );
 }
@@ -58,6 +58,8 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
   const [ringW, setRingW] = useState(0.06);
   const [framing, setFraming] = useState<Framing>({ ...NO_FRAMING });
   const [imgBg, setImgBg] = useState<string | null>(null);
+  /** painting, erasing, cutting out and the colour behind the picture stay tucked away until asked for */
+  const [tools, setTools] = useState(false);
   const paintApi = useRef<PaintApi | null>(null);
   const recent = getRecent();
 
@@ -69,6 +71,26 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
   }, [file]);
 
   const chosenUrl = file ? preview : (picked ?? (url.trim() || null));
+
+  // a picture dropped anywhere on the page while this window is open becomes the token's picture (what was typed stays)
+  useEffect(() => {
+    const over = (e: DragEvent) => { if (dragHasImage(e)) { e.preventDefault(); e.stopPropagation(); } };
+    const drop = (e: DragEvent) => {
+      if (!dragHasImage(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const got = droppedImage(e);
+      if (got === 'other') { toast('That file is not a picture.', 'error'); return; }
+      if (got === 'none') return;
+      setFraming({ ...NO_FRAMING });
+      setPicked(null);
+      if ('file' in got) { setFile(got.file); setUrl(''); setName((n) => n || got.file.name.replace(/\.\w+$/, '')); }
+      else { setFile(null); setUrl(got.url); }
+    };
+    window.addEventListener('dragover', over, true);
+    window.addEventListener('drop', drop, true);
+    return () => { window.removeEventListener('dragover', over, true); window.removeEventListener('drop', drop, true); };
+  }, []);
 
   async function create() {
     setBusy(true);
@@ -93,7 +115,7 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
         }
       } else if (picked || url.trim()) {
         img = picked ?? url.trim();
-        await loadImage(img, true).catch(() => { throw new Error('That image link could not be loaded.'); });
+        await loadImage(img, true).catch(() => { throw new Error('That picture link could not be loaded.'); });
         addRecent({ url: img, name: name || 'token' });
       }
       const grid = client.grid;
@@ -114,11 +136,39 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
     <Modal title="Add token" onClose={props.onClose} width={760}
       footer={<><button class="btn" onClick={props.onClose}>Cancel</button><button class="btn primary" disabled={busy} onClick={create}>{busy ? 'Working…' : 'Add to board'}</button></>}>
       <div class="two-col">
-        <TokenCropper src={chosenUrl} shape={shape} ring={ring} ringW={ringW} name={name} framing={framing} onChange={setFraming} bg={imgBg} onBg={setImgBg} paintApi={paintApi} />
+        <div>
+          <TokenCropper src={chosenUrl} shape={shape} ring={ring} ringW={ringW} name={name} framing={framing} onChange={setFraming} bg={imgBg} onBg={setImgBg} paintApi={paintApi} tools={tools} />
+          <div class="row wrap" style={{ marginTop: '10px', justifyContent: 'center' }}>
+            <button class={`btn small ${tools ? 'primary' : ''}`} title="Paint on the picture, erase parts of it, cut out with auto select, and set the colour behind it" onClick={() => setTools((v) => !v)}>
+              {tools ? 'Hide picture tools' : 'Picture tools…'}
+            </button>
+          </div>
+        </div>
         <div>
           <Field label="Name"><input type="text" value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} placeholder="Goblin 1" autoFocus /></Field>
+          <div class="field-label">Picture</div>
+          <div class="row wrap">
+            <FilePick onFile={(f) => { setFile(f); setPicked(null); setFraming({ ...NO_FRAMING }); if (!name) setName(f.name.replace(/\.\w+$/, '')); }} />
+            {file && <span class="muted">{file.name}</span>}
+          </div>
+          <Field label="…or paste a link to a picture">
+            <input type="text" value={url} placeholder="https://…" onInput={(e) => { setUrl((e.target as HTMLInputElement).value); setFile(null); setPicked(null); setFraming({ ...NO_FRAMING }); }} />
+          </Field>
+          {(lib.length > 0 || recent.length > 0) && (
+            <>
+              <div class="field-label">{lib.length ? 'From your library' : 'Recently used'}</div>
+              <div class="thumbs small">
+                {(lib.length ? lib.map((l) => ({ url: l.url, name: l.name })) : recent).slice(0, 24).map((l) => (
+                  <button key={l.url} class={`thumb ${picked === l.url ? 'on' : ''}`} title={l.name}
+                    onClick={() => { setPicked(l.url); setFile(null); setUrl(''); setFraming({ ...NO_FRAMING }); if (!name) setName(l.name); }}>
+                    <img src={l.url} alt={l.name} loading="lazy" />
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
           <div class="row">
-            <Field label="Size" hint="Scales to your grid squares automatically.">
+            <Field label="Size">
               <select value={size} onChange={(e) => setSize(Number((e.target as HTMLSelectElement).value))}>
                 {TOKEN_SIZES.map((s) => <option value={s.size}>{s.label}</option>)}
               </select>
@@ -130,35 +180,13 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
             </Field>
             <Field label="Ring"><input type="color" value={ring} onInput={(e) => setRing((e.target as HTMLInputElement).value)} /></Field>
           </div>
-          <SliderField label="Ring thickness" value={Math.round(ringW * 100)} min={0} max={20} step={1} unit="%" onInput={(v) => setRingW(v / 100)} />
+          {tools && <SliderField label="Ring thickness" value={Math.round(ringW * 100)} min={0} max={20} step={1} unit="%" onInput={(v) => setRingW(v / 100)} />}
         </div>
       </div>
-
-      <h3>Image</h3>
-      <div class="row wrap">
-        <FilePick onFile={(f) => { setFile(f); setPicked(null); setFraming({ ...NO_FRAMING }); if (!name) setName(f.name.replace(/\.\w+$/, '')); }} />
-        {file && <span class="muted">{file.name}</span>}
-      </div>
-      <Field label="…or paste an image link" hint="Direct link to a .png / .jpg / .webp image.">
-        <input type="text" value={url} placeholder="https://…" onInput={(e) => { setUrl((e.target as HTMLInputElement).value); setFile(null); setPicked(null); setFraming({ ...NO_FRAMING }); }} />
-      </Field>
-      {(lib.length > 0 || recent.length > 0) && (
-        <>
-          <div class="field-label">{lib.length ? 'From your library' : 'Recently used'}</div>
-          <div class="thumbs small">
-            {(lib.length ? lib.map((l) => ({ url: l.url, name: l.name })) : recent).slice(0, 24).map((l) => (
-              <button key={l.url} class={`thumb ${picked === l.url ? 'on' : ''}`} title={l.name}
-                onClick={() => { setPicked(l.url); setFile(null); setUrl(''); setFraming({ ...NO_FRAMING }); if (!name) setName(l.name); }}>
-                <img src={l.url} alt={l.name} loading="lazy" />
-              </button>
-            ))}
-          </div>
-        </>
-      )}
       {client.isDM && (
         <div class="stack">
           <Toggle checked={hidden} onChange={setHidden} label="Start hidden from players" />
-          {file && <Toggle checked={saveLib} onChange={setSaveLib} label="Save this image to my library" />}
+          {file && client.backend.kind !== 'mock' && <Toggle checked={saveLib} onChange={setSaveLib} label="Save this picture to my library" />}
           <Field label="Assign to player">
             <select value={owner} onChange={(e) => setOwner((e.target as HTMLSelectElement).value)}>
               <option value="">Nobody (unclaimed)</option>
@@ -243,7 +271,7 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
       } else if (picked) {
         mapUrl = picked.url; w = picked.w ?? 0; h = picked.h ?? 0;
       } else if (url.trim()) {
-        const img = await loadImage(url.trim(), true).catch(() => { throw new Error('That image link could not be loaded.'); });
+        const img = await loadImage(url.trim(), true).catch(() => { throw new Error('That picture link could not be loaded.'); });
         mapUrl = url.trim(); w = img.naturalWidth; h = img.naturalHeight;
       }
       await client.createScene({ name: name || fileName.replace(/\.\w+$/, '') || picked?.name || 'New scene', mapUrl, mapW: w, mapH: h, makeActive, folder: folderId, /* the demo map is made by the app and its grid is known */ gridTried: fileName === 'Sample dungeon.png' });
@@ -267,8 +295,8 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
           </select>
         </Field>
       )}
-      <h3>Map image</h3>
-      <p class="muted">Maps keep their full resolution (up to your host's size limit). You can skip this and add a map later.</p>
+      <h3>Map picture</h3>
+      <p class="muted">Optional: you can add a map later. Maps keep their full resolution.</p>
       <div class={`dropzone ${dragOver ? 'over' : ''} ${file ? 'has' : ''}`}>
         {file && preview && !dragOver && (
           <div class="dropzone-file">
@@ -287,7 +315,7 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
           </div>
         )}
       </div>
-      <Field label="…or paste an image link"><input type="text" value={url} placeholder="https://…" onInput={(e) => { setUrl((e.target as HTMLInputElement).value); setFile(null); setPicked(null); }} /></Field>
+      <Field label="…or paste a link to a picture"><input type="text" value={url} placeholder="https://…" onInput={(e) => { setUrl((e.target as HTMLInputElement).value); setFile(null); setPicked(null); }} /></Field>
       {lib.length > 0 && (
         <>
           <div class="field-label">From your library</div>
@@ -302,7 +330,7 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
       )}
       <div class="stack">
         {file && client.backend.kind !== 'mock' && <Toggle checked={saveLib} onChange={setSaveLib} label="Save this map to my library" />}
-        <Toggle checked={makeActive} onChange={setMakeActive} label="Summon players to it as soon as it is made" hint="On: everyone at the table is moved onto this scene the moment you create it. Off: it stays private while you set it up, and you move the players over later with the Summon players button." />
+        <Toggle checked={makeActive} onChange={setMakeActive} label="Summon players to it as soon as it is made" hint="On: everyone is moved onto this scene straight away. Off: it stays private until you press Summon players." />
       </div>
     </Modal>
   );
@@ -326,7 +354,7 @@ export function NewFolderModal(props: { client: TableClient; onClose: () => void
   return (
     <Modal title="New folder" onClose={props.onClose} width={400}
       footer={<><button class="btn" onClick={props.onClose}>Cancel</button><button class="btn primary" disabled={!name.trim() || busy} onClick={create}>Create folder</button></>}>
-      <Field label="Folder name" hint="For example “Act 1”, “Waterdeep” or “Random encounters”. Scenes can be moved in and out of it any time.">
+      <Field label="Folder name" hint="Scenes can be moved in and out of it at any time.">
         <input type="text" value={name} autoFocus maxLength={60} placeholder="Act 1" onInput={(e) => setName((e.target as HTMLInputElement).value)}
           onKeyDown={(e) => { if (e.key === 'Enter') void create(); }} />
       </Field>
@@ -415,7 +443,7 @@ export function LibraryModal(props: { client: TableClient; onClose: () => void; 
     setBusy(true);
     try {
       const up = await uploadImage(client, f, artTab === 'maps' ? 'map' : 'token', f.name);
-      if (client.backend.kind === 'mock') toast('Demo mode: images are not saved to the library (they only live in this tab).', 'info');
+      if (client.backend.kind === 'mock') toast('Demo mode: pictures are not kept in the library.', 'info');
       else await addLibraryItem(client.backend, client.uid, artTab, { name: f.name.replace(/\.\w+$/, ''), url: up.url, thumb: up.thumb, w: up.w, h: up.h });
     } catch (e) { toast(asErr(e), 'error'); }
     setBusy(false);
@@ -428,7 +456,7 @@ export function LibraryModal(props: { client: TableClient; onClose: () => void; 
       const img = await loadImage(u, true);
       await addLibraryItem(client.backend, client.uid, artTab, { name: u.split('/').pop()?.replace(/\.\w+$/, '') || 'Image', url: u, w: img.naturalWidth, h: img.naturalHeight });
       setUrl('');
-    } catch { toast('That image link could not be loaded.', 'error'); }
+    } catch { toast('That picture link could not be loaded.', 'error'); }
     setBusy(false);
   }
 
@@ -441,16 +469,16 @@ export function LibraryModal(props: { client: TableClient; onClose: () => void; 
       </div>
       {tab === 'saved' && (
         <>
-          <p class="muted">Tokens you have saved with all their settings: picture, size, sight, light, auras and hit points. Select a token and press <strong>Save to library</strong>. Add one to any scene whenever you want, as many times as you like.</p>
+          <p class="muted">Tokens kept with all their settings. To save one, select it on the board and press <strong>Save to library</strong>.</p>
           <SavedTokenGrid client={client} empty="Nothing saved yet. Select a token on the board and press Save to library." action={() => 'Add to board'} onAction={(e) => props.onAddSaved(e)} />
         </>
       )}
       {tab !== 'saved' && <div class="row wrap">
-        <FilePick label={busy ? 'Uploading…' : 'Upload image…'} onFile={upload} />
-        <input type="text" class="grow" placeholder="…or paste an image link" value={url} onInput={(e) => setUrl((e.target as HTMLInputElement).value)} onKeyDown={(e) => { if (e.key === 'Enter') void addUrl(); }} />
+        <FilePick label={busy ? 'Uploading…' : 'Upload picture…'} onFile={upload} />
+        <input type="text" class="grow" placeholder="…or paste a link to a picture" value={url} onInput={(e) => setUrl((e.target as HTMLInputElement).value)} onKeyDown={(e) => { if (e.key === 'Enter') void addUrl(); }} />
         <button class="btn" onClick={addUrl} disabled={!url.trim() || busy}>Add</button>
       </div>}
-      {tab !== 'saved' && items.length === 0 && <p class="muted">Nothing here yet. Your library is saved to your Google account, so it follows you to any device.</p>}
+      {tab !== 'saved' && items.length === 0 && <p class="muted">{client.backend.kind === 'mock' ? 'Nothing here. In demo mode the library is not kept.' : 'Nothing here yet. Your library is saved to your Google account, so it follows you to any device.'}</p>}
       {tab !== 'saved' && <div class="thumbs big">
         {items.map((it) => (
           <div key={it.id} class="lib-item">
@@ -470,9 +498,13 @@ export function LibraryModal(props: { client: TableClient; onClose: () => void; 
 }
 
 // ================================================================== settings
-export function SettingsModal(props: { client: TableClient; ui: UiState; onClose: () => void; onSignOut?: () => void }) {
+export type SettingsTab = 'table' | 'files' | 'you' | 'keys';
+
+/** Settings, a page at a time: the table (DM), pictures and files (DM), you, and the mouse and keyboard. */
+export function SettingsModal(props: { client: TableClient; ui: UiState; onClose: () => void; onSignOut?: () => void; /** the page to open on */ tab?: SettingsTab }) {
   const { client } = props;
   useClient(client);
+  const [tab, setTab] = useState<SettingsTab>(props.tab ?? (client.isDM ? 'table' : 'you'));
   const [name, setName] = useState(client.meta?.name ?? '');
   const [key, setKey] = useState(client.uploadKey ?? '');
   const [log, setLog] = useState<string[] | null>(null);
@@ -488,9 +520,14 @@ export function SettingsModal(props: { client: TableClient; ui: UiState; onClose
 
   return (
     <Modal title="Settings" onClose={props.onClose} width={600}>
-      {client.isDM && (
+      <div class="tabs">
+        {client.isDM && <button class={tab === 'table' ? 'on' : ''} onClick={() => setTab('table')}>Table</button>}
+        {client.isDM && <button class={tab === 'files' ? 'on' : ''} onClick={() => setTab('files')}>Pictures and files</button>}
+        <button class={tab === 'you' ? 'on' : ''} onClick={() => setTab('you')}>You</button>
+        <button class={tab === 'keys' ? 'on' : ''} onClick={() => setTab('keys')}>Mouse and keys</button>
+      </div>
+      {client.isDM && tab === 'table' && (
         <>
-          <h3>Table</h3>
           <Field label="Table name">
             <input type="text" value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)}
               onBlur={() => { if (name.trim() && name !== client.meta?.name) void client.setTableName(name.trim()); }} />
@@ -499,10 +536,9 @@ export function SettingsModal(props: { client: TableClient; ui: UiState; onClose
             <div class="row"><input type="text" readOnly value={link} onFocus={(e) => (e.target as HTMLInputElement).select()} /><button class="btn" onClick={() => copyText(link)}>Copy</button></div>
           </Field>
 
-          <h3>Moving between scenes</h3>
           <Toggle checked={carry} onChange={(v) => { setCarry(v); client.carryParty = v; try { localStorage.setItem('vtt-carry-party', v ? '1' : '0'); } catch { /* ignore */ } }}
             label="Bring the players' tokens along when I summon them"
-            hint="Copies each player's token (with its hit points and conditions) onto the scene you summon them to, unless that character is already there. The tokens stay on the scene they left too." />
+            hint="Their tokens are copied to the new scene with their hit points and conditions." />
 
           <h3>What players can do</h3>
           <div class="seg">
@@ -517,11 +553,15 @@ export function SettingsModal(props: { client: TableClient; ui: UiState; onClose
           {(Object.keys(PERM_LABELS) as (keyof Permissions)[]).map((k) => (
             <Toggle key={k} checked={perm[k]} label={PERM_LABELS[k].label} hint={PERM_LABELS[k].hint} onChange={(v) => setPerm({ [k]: v })} />
           ))}
-
-          <h3>Image uploads</h3>
+        </>
+      )}
+      {client.isDM && tab === 'files' && (
+        <>
+          <h3>Picture uploads</h3>
+          {client.backend.kind === 'mock' && <p class="muted"><strong>Demo mode needs no key:</strong> pictures stay in this browser tab until it is reloaded.</p>}
           <p class="muted">
-            Maps and tokens are hosted on <a href="https://api.imgbb.com/" target="_blank" rel="noreferrer">imgbb</a> (free). Paste your API key here. It is saved to your account and shared with your players
-            through this table so they can upload tokens too, so use a key from an account you only use for this.
+            Maps and token pictures are stored on <a href="https://api.imgbb.com/" target="_blank" rel="noreferrer">imgbb</a> (free). Paste your API key here.
+            Your players use it too, through this table, so use an account you keep just for this.
           </p>
           <Field label="imgbb API key">
             <div class="row">
@@ -532,7 +572,7 @@ export function SettingsModal(props: { client: TableClient; ui: UiState; onClose
           </Field>
           <div class="row">
             <button class="btn" disabled={!key.trim() || testing} onClick={async () => { setTesting(true); setLog(await testImgbb(key.trim())); setTesting(false); }}>{testing ? 'Testing…' : 'Test upload'}</button>
-            <span class="muted">Uploads a tiny image and checks your browser can use it on the board.</span>
+            <span class="muted">Uploads a tiny picture and checks that your browser can show it on the board.</span>
           </div>
           {log && <pre class="log">{log.join('\n')}</pre>}
 
@@ -540,61 +580,69 @@ export function SettingsModal(props: { client: TableClient; ui: UiState; onClose
         </>
       )}
 
-      <h3>You</h3>
-      <MyProfile client={client} />
+      {tab === 'you' && (
+        <>
+          <MyProfile client={client} />
 
-      <h3>Appearance</h3>
-      <p class="muted">These are just for you, in this browser. The map background colour is set per scene in the scene panel (white by default).</p>
-      <div class="theme-grid">
-        {THEMES.map((t) => (
-          <button key={t.id} class={`theme-tile ${theme === t.id ? 'on' : ''}`} onClick={() => setTheme(t.id)}>
-            <div class="sw"><span style={{ background: t.swatch[0] }} /><span style={{ background: t.swatch[1] }} /><span style={{ background: t.swatch[2] }} /></div>
-            <div class="lbl">{t.label}</div>
-          </button>
-        ))}
-      </div>
-      <Field label="Accent colour" hint="Buttons and highlights. Leave on the theme's own colour, or pick yours.">
-        <div class="row wrap">
-          <input type="color" value={getAccent() ?? '#4da3ff'} onInput={(e) => setAccent((e.target as HTMLInputElement).value)} />
-          <button class="btn small" disabled={!getAccent()} onClick={() => setAccent(null)}>Use the theme's colour</button>
-        </div>
-      </Field>
+          <h3>Appearance</h3>
+          <p class="muted">Only for you, in this browser.</p>
+          <div class="theme-grid">
+            {THEMES.map((t) => (
+              <button key={t.id} class={`theme-tile ${theme === t.id ? 'on' : ''}`} onClick={() => setTheme(t.id)}>
+                <div class="sw"><span style={{ background: t.swatch[0] }} /><span style={{ background: t.swatch[1] }} /><span style={{ background: t.swatch[2] }} /></div>
+                <div class="lbl">{t.label}</div>
+              </button>
+            ))}
+          </div>
+          <Field label="Accent colour" hint="The colour of buttons and highlights.">
+            <div class="row wrap">
+              <input type="color" value={getAccent() ?? '#4da3ff'} onInput={(e) => setAccent((e.target as HTMLInputElement).value)} />
+              <button class="btn small" disabled={!getAccent()} onClick={() => setAccent(null)}>Use the theme's colour</button>
+            </div>
+          </Field>
 
-      <h3>Mouse</h3>
-      <MouseSettings ui={props.ui} />
-      <InitPosSetting ui={props.ui} />
-      <HeightsSetting ui={props.ui} />
-      <EffectsViewSetting ui={props.ui} />
+          <h3>Your screen</h3>
+          <p class="muted">These only change what you see.</p>
+          <InitPosSetting ui={props.ui} />
+          <HeightsSetting ui={props.ui} />
+          <EffectsViewSetting ui={props.ui} />
+          {props.onSignOut && <div class="row" style={{ marginTop: '14px' }}><button class="btn danger" onClick={props.onSignOut}>Sign out</button></div>}
+        </>
+      )}
 
-      <h3>Keyboard &amp; mouse</h3>
-      <ul class="keys">
-        <li class="keys-head">Moving around</li>
-        <li><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> — pan the view (hold <kbd>Shift</kbd> to go faster)</li>
-        <li><kbd>Right-drag</kbd> or <kbd>Middle-drag</kbd> (your choice above) or <kbd>Space</kbd>+drag — pan</li>
-        <li><kbd>Wheel</kbd> or <kbd>+</kbd> <kbd>-</kbd> — zoom, <kbd>0</kbd> — fit the map</li>
-        <li><kbd>Z</kbd> — bring the selected tokens into view (or fit the map if none)</li>
-        <li><kbd>Middle-click</kbd> or hold <kbd>left mouse</kbd> for a moment (your choice above) — ping</li>
-        <li class="keys-head">Tools</li>
-        <li><kbd>V</kbd> select · <kbd>P</kbd> draw and write · <kbd>C</kbd> spell templates · <kbd>R</kbd> ruler · <kbd>M</kbd> test move</li>
-        <li><kbd>G</kbd> grid · <kbd>F</kbd> fog · <kbd>H</kbd> heights · <kbd>B</kbd> walls · <kbd>I</kbd> initiative (DM)</li>
-        <li><kbd>T</kbd> add a token · <kbd>E</kbd> edit the selected tokens · <kbd>?</kbd> this list</li>
-        <li><kbd>Esc</kbd> — back to select, let go of what you are drawing, or put test moves back</li>
-        <li class="keys-head">Tokens</li>
-        <li><kbd>Shift</kbd>+click — multi-select, drag on empty space — box select, <kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd> — next / previous token</li>
-        <li><kbd>Arrows</kbd> — nudge one square (or hex), <kbd>Alt</kbd> while dragging — move without snapping, <kbd>Del</kbd> — delete</li>
-        <li><kbd>]</kbd> raise the selected tokens 5 ft (they fly) · <kbd>[</kbd> lower them (down to the ground)</li>
-        <li><kbd>Q</kbd> — hold while dragging a token to <b>teleport</b> it (DM: it jumps, walls and distance do not count). Or right-click empty ground and choose "Teleport selected token here".</li>
-        <li><kbd>K</kbd> hide / reveal the selected tokens · <kbd>L</kbd> lock / unlock them (DM)</li>
-        <li><kbd>N</kbd> next turn · <kbd>Shift</kbd>+<kbd>N</kbd> previous turn (DM, with initiative running)</li>
-        <li><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo, <kbd>Ctrl</kbd>+<kbd>Y</kbd> redo, <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>X</kbd> / <kbd>V</kbd> copy, cut, paste tokens, <kbd>Ctrl</kbd>+<kbd>D</kbd> duplicate, <kbd>Ctrl</kbd>+<kbd>A</kbd> select all</li>
-        <li class="keys-head">Test move</li>
-        <li><kbd>Enter</kbd> — keep the test moves, <kbd>Esc</kbd> — put everything back, right-click — go back one step</li>
-        <li class="muted">"Multi-step" in the test move bar makes each drag a new leg of the move, with the whole distance shown.</li>
-        <li class="keys-head">While drawing</li>
-        <li><kbd>Shift</kbd> locks angles and makes squares, <kbd>Alt</kbd> turns off snapping</li>
-      </ul>
+      {tab === 'keys' && (
+        <>
+          <MouseSettings ui={props.ui} />
 
-      {props.onSignOut && <div class="row"><button class="btn danger" onClick={props.onSignOut}>Sign out</button></div>}
+          <h3>Shortcuts</h3>
+          <ul class="keys">
+            <li class="keys-head">Moving around</li>
+            <li><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> — pan the view (hold <kbd>Shift</kbd> to go faster)</li>
+            <li><kbd>Right-drag</kbd> or <kbd>Middle-drag</kbd> (your choice above) or <kbd>Space</kbd>+drag — pan</li>
+            <li><kbd>Wheel</kbd> or <kbd>+</kbd> <kbd>-</kbd> — zoom, <kbd>0</kbd> — fit the map</li>
+            <li><kbd>Z</kbd> — bring the selected tokens into view (or fit the map if none)</li>
+            <li><kbd>Middle-click</kbd> or hold <kbd>left mouse</kbd> for a moment (your choice above) — ping</li>
+            <li class="keys-head">Tools</li>
+            <li><kbd>V</kbd> select · <kbd>P</kbd> draw and write · <kbd>C</kbd> spell templates · <kbd>R</kbd> ruler · <kbd>M</kbd> test move</li>
+            <li><kbd>G</kbd> grid · <kbd>F</kbd> fog · <kbd>H</kbd> heights · <kbd>B</kbd> walls · <kbd>I</kbd> initiative (DM)</li>
+            <li><kbd>T</kbd> add a token · <kbd>E</kbd> edit the selected tokens · <kbd>?</kbd> this list</li>
+            <li><kbd>Esc</kbd> — back to select, let go of what you are drawing, or put test moves back</li>
+            <li class="keys-head">Tokens</li>
+            <li><kbd>Shift</kbd>+click — multi-select, drag on empty space — box select, <kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd> — next / previous token</li>
+            <li><kbd>Arrows</kbd> — nudge one square (or hex), <kbd>Alt</kbd> while dragging — move without snapping, <kbd>Del</kbd> — delete</li>
+            <li><kbd>]</kbd> raise the selected tokens 5 ft (they fly) · <kbd>[</kbd> lower them (down to the ground)</li>
+            <li><kbd>Q</kbd> — hold while dragging a token to <b>teleport</b> it (DM: it jumps, walls and distance do not count). Or right-click empty ground and choose "Teleport selected token here".</li>
+            <li><kbd>K</kbd> hide / reveal the selected tokens · <kbd>L</kbd> lock / unlock them (DM)</li>
+            <li><kbd>N</kbd> next turn · <kbd>Shift</kbd>+<kbd>N</kbd> previous turn (DM, with initiative running)</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo, <kbd>Ctrl</kbd>+<kbd>Y</kbd> redo, <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>X</kbd> / <kbd>V</kbd> copy, cut, paste tokens, <kbd>Ctrl</kbd>+<kbd>D</kbd> duplicate, <kbd>Ctrl</kbd>+<kbd>A</kbd> select all</li>
+            <li class="keys-head">Test move</li>
+            <li><kbd>Enter</kbd> — keep the test moves, <kbd>Esc</kbd> — put everything back, right-click — go back one step</li>
+            <li class="muted">"Multi-step" in the test move bar makes each drag a new leg of the move, with the whole distance shown.</li>
+            <li class="keys-head">While drawing</li>
+            <li><kbd>Shift</kbd> locks angles and makes squares, <kbd>Alt</kbd> turns off snapping</li>
+          </ul>
+        </>
+      )}
     </Modal>
   );
 }
@@ -624,7 +672,7 @@ export function GridDialog(props: { shape?: GridShape; onApply: (cols: number, r
         </>
       ) : (
         <>
-          <p class="muted">How many grid squares does the box you drew cover? For best accuracy, draw over several squares and enter the count.</p>
+          <p class="muted">How many grid squares does your box cover? Boxing several squares is more exact than one.</p>
           <div class="row">
             <Field label="Squares wide"><input type="number" min={1} step={1} value={cols} onInput={(e) => setCols(Math.max(1, Number((e.target as HTMLInputElement).value) || 1))} autoFocus /></Field>
             <Field label="Squares tall"><input type="number" min={1} step={1} value={rows} onInput={(e) => setRows(Math.max(1, Number((e.target as HTMLInputElement).value) || 1))} /></Field>
@@ -654,18 +702,23 @@ export function ClaimModal(props: { client: TableClient; onClose: () => void; on
                 <li key={t.id}>
                   <span class="grow">{t.name || 'Unnamed token'}{saved && <span class="badge" title="Kept in your characters"> saved</span>}</span>
                   <button class="btn small" title={saved ? 'Update what is saved about it' : 'Keep it: its look and conditions follow you to every scene'} onClick={() => void saveTokensToLibrary(client, [t.id])}>{saved ? 'Update saved' : 'Save as my character'}</button>
-                  <button class="btn small" onClick={() => void client.updateToken(t.id, { ownerUid: null })}>Release</button>
+                  <button class="btn small" title="Stop controlling it, so someone else can take it" onClick={() => void client.updateToken(t.id, { ownerUid: null })}>Release</button>
                 </li>
               );
             })}
           </ul>
         </>
       )}
-      <div class="field-label">Your characters</div>
-      <SavedTokenGrid client={client} empty="No saved characters yet. Save one of your tokens and it will be here in every scene."
-        action={(e) => (mine.some((t) => t.cid === e.id) ? 'Here already' : 'Bring here')} disabled={(e) => mine.some((t) => t.cid === e.id)}
-        onAction={(e) => { props.onBring?.(e); props.onClose(); }} />
-      <div class="field-label">{free.length ? 'Unclaimed tokens on this map' : 'No unclaimed tokens right now'}</div>
+      {/* characters you saved come first when you have some; a new player sees the tokens they can pick straight away */}
+      {client.tokenLib.length > 0 && (
+        <>
+          <div class="field-label">Your characters</div>
+          <SavedTokenGrid client={client} empty=""
+            action={(e) => (mine.some((t) => t.cid === e.id) ? 'Here already' : 'Bring here')} disabled={(e) => mine.some((t) => t.cid === e.id)}
+            onAction={(e) => { props.onBring?.(e); props.onClose(); }} />
+        </>
+      )}
+      <div class="field-label">{free.length ? 'Tokens you can take on this map' : 'No tokens to take right now'}</div>
       <div class="thumbs big">
         {free.map((t) => (
           <button key={t.id} class="lib-item" onClick={() => { void client.updateToken(t.id, { ownerUid: client.uid }); toast(`You now control ${t.name || 'that token'}`, 'ok'); props.onClose(); }}>
@@ -674,6 +727,7 @@ export function ClaimModal(props: { client: TableClient; onClose: () => void; on
           </button>
         ))}
       </div>
+      {client.tokenLib.length === 0 && <p class="muted small">Press “Save as my character” on a token of yours and it can follow you to every scene.</p>}
     </Modal>
   );
 }
@@ -703,7 +757,7 @@ function MouseSettings(props: { ui: UiState }) {
 function HeightsSetting(props: { ui: UiState }) {
   const d = useUi(props.ui);
   return (
-    <Field label="Show the high and low ground" hint="The DM draws ground heights. Only changes what you see; tokens still stand on the ground either way. When moving fades the ground in while you drag a token or measure with the ruler.">
+    <Field label="Show the high and low ground" hint="“When moving” shows it while you drag a token or measure.">
       <div class="seg">
         {([['auto', 'When moving'], ['always', 'Always'], ['tool', 'Only in the Heights tool']] as const).map(([k, label]) => (
           <button key={k} class={d.heightView === k ? 'on' : ''} onClick={() => props.ui.set({ heightView: k })}>{label}</button>
@@ -716,7 +770,7 @@ function HeightsSetting(props: { ui: UiState }) {
 function EffectsViewSetting(props: { ui: UiState }) {
   const d = useUi(props.ui);
   return (
-    <Field label="When the Effects window opens" hint="Jumping puts the token on the left of the screen and the window on the right, so you can watch the effect on it. Staying leaves the view and the window exactly where they were. Only changes your own screen.">
+    <Field label="When the Effects window opens" hint="Jumping moves the view so the token sits beside the window.">
       <div class="seg">
         <button class={d.fxJump ? 'on' : ''} onClick={() => props.ui.set({ fxJump: true })}>Jump to the token</button>
         <button class={!d.fxJump ? 'on' : ''} onClick={() => props.ui.set({ fxJump: false })}>Stay where I was</button>
@@ -728,7 +782,7 @@ function EffectsViewSetting(props: { ui: UiState }) {
 function InitPosSetting(props: { ui: UiState }) {
   const d = useUi(props.ui);
   return (
-    <Field label="Show the turn order" hint="Little boxes across the top of the screen, or a list down the right edge. Only changes your own screen.">
+    <Field label="Show the turn order">
       <div class="seg">
         <button class={d.initPos === 'top' ? 'on' : ''} onClick={() => props.ui.set({ initPos: 'top' })}>Across the top</button>
         <button class={d.initPos === 'side' ? 'on' : ''} onClick={() => props.ui.set({ initPos: 'side' })}>Right edge</button>
@@ -767,9 +821,7 @@ export function PlayersPanel(props: { client: TableClient }) {
   const list = [...client.players.values()].sort((a, b) => Number(b.dm) - Number(a.dm) || a.joinedAt - b.joinedAt);
   return (
     <>
-      <h4>You</h4>
-      <MyProfile client={client} />
-      <h4>At this table</h4>
+      <h4 style={{ marginTop: 0 }}>At this table</h4>
       {list.map((p) => (
         <div key={p.uid} class={`player-row ${p.online ? '' : 'off'}`}>
           <span class="dot" style={{ background: p.color }} />
@@ -785,7 +837,9 @@ export function PlayersPanel(props: { client: TableClient }) {
         </div>
       ))}
       {list.length === 0 && <p class="muted">Nobody has joined yet.</p>}
-      {client.isDM && <p class="muted small">Removing someone only clears them from this list and frees their tokens. They can use the link to join again.</p>}
+      {client.isDM && list.length > 1 && <p class="muted small">Removing someone frees their tokens. They can join again from the link.</p>}
+      <h4>You</h4>
+      <MyProfile client={client} />
     </>
   );
 }

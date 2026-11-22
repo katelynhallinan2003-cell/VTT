@@ -591,3 +591,48 @@ input[type=text], input[type=number], input[type=password], select { border-radi
 .dropzone-file { display: flex; align-items: center; gap: 10px; max-width: 100%; align-self: stretch; background: var(--raise); border: 1px solid var(--border); border-radius: 10px; padding: 6px 8px; }
 .dropzone-file img { width: 72px; height: 54px; object-fit: cover; border-radius: 6px; background: var(--sunken); flex: none; }
 .dropzone-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+
+/* ---------------- tool panels: rows of choices never run off the side of the panel */
+.flyout { overflow-x: hidden; }
+.flyout .seg { display: flex; max-width: 100%; }
+.flyout .seg button { padding: 6px 4px; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.flyout .seg.wrap button { flex: 1 0 28%; }
+
+/* ---------------- boxes for longer writing (handouts) look like the other inputs; the on-board text editor keeps its own look */
+textarea:not(.text-editor) { background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; width: 100%; min-width: 0; outline: none; font: inherit; line-height: 1.45; resize: vertical; }
+textarea:not(.text-editor):focus { border-color: var(--accent); }
+
+/* ---------------- the top of the screen: nothing covers anything else
+   What hangs from the top edge goes between the two halves of the top bar when it fits (TableView measures this), and in a row of
+   its own just under the top bar when it does not. Warnings are part of the same stack, so two of them never sit on each other. */
+.topstack .banner { position: static; transform: none; margin-top: 8px; max-width: 560px; }
+.topstack.low { top: 58px; gap: 6px; }
+.topstack.low .banner { margin-top: 0; }
+.topstack.low .topchip, .topstack.low .testbar { border-radius: 14px; border-top: 1px solid var(--border); }
+.topstack.low .topchip.warn { border-top-color: var(--warn-border); }
+.initbar { left: var(--pill-l, 360px); right: var(--pill-r, 340px); }
+/* (332px: clear of the toolbar and of a tool's panel when one is open, and the same on both sides so it stays in the middle) */
+.table-root[data-top-low] .initbar, .table-root[data-strip-low] .initbar { left: 332px; right: 332px; }
+.table-root[data-strip-low]:not([data-top-low]) .initbar { top: calc(64px + var(--topstack-h, 0px)); }
+/* with the side panel open it keeps to the middle of the screen, and stops short of the panel */
+.table-root[data-top-low]:has(.dock) .initbar, .table-root[data-strip-low]:has(.dock) .initbar { left: 350px; right: 350px; }
+/* the bar for the selected token stays clear of the panel on the right, and wraps instead of running off the screen */
+.tokentag { width: max-content; max-width: calc(100% - 24px); flex-wrap: wrap; justify-content: center; row-gap: 6px; }
+.table-root:has(.dock) .tokentag { left: calc((100% - 350px) / 2); max-width: calc(100% - 374px); }
+.table-root:has(.dock) .drawtag, .table-root:has(.dock) .hint-chip:not(.top) { left: calc((100% - 350px) / 2); }
+/* the initiative window opens beside a tool's panel, not on top of it */
+.table-root:has(.flyout) .initpop { left: 332px; }
+.topchip .link { color: var(--accent); padding: 0 0 0 8px; font: inherit; text-decoration: underline; }
+/* under the top bar, the stack sits in the middle of the space the toolbar and an open side panel leave free */
+.table-root[data-top-low]:has(.dock) .topstack { left: calc(50% - 137px); }
+/* a row of choices under a label is as wide as its choices, not stretched with an empty piece at the end */
+.field > .seg { align-self: flex-start; max-width: 100%; }
+
+/* ---------------- the tools on the left name themselves at once (no waiting for the browser's own slow tooltip) */
+.tool { position: relative; }
+.toolbar:hover { z-index: 8; }
+.tool[data-tip]:hover::after, .tool[data-tip]:focus-visible::after {
+  content: attr(data-tip); position: absolute; left: calc(100% + 12px); top: 50%; transform: translateY(-50%); white-space: pre; pointer-events: none; z-index: 30;
+  background: var(--panel-solid); color: var(--text); border: 1px solid var(--border-hi); border-radius: 8px; padding: 5px 10px; font-size: 12.5px; font-weight: 600; box-shadow: 0 6px 20px var(--shadow); }
+.tool:disabled { opacity: 1; }
+.tool:disabled svg { opacity: .35; }

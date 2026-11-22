@@ -103,7 +103,8 @@ await sleep(500);
 const bar = await dm.locator('.initbar').boundingBox();
 const vw = 1400;
 const strip = await dm.locator('.initstrip').boundingBox();
-check('the order shows as little boxes across the top', (await dm.locator('.initstrip.top .ibox').count()) === 5 && strip.y < 40);
+// (on the top row beside the top bar when there is room there, or else in a row of its own just under it)
+check('the order shows as little boxes across the top', (await dm.locator('.initstrip.top .ibox').count()) === 5 && strip.y < 140);
 check('roughly in the middle of the screen', Math.abs(strip.x + strip.width / 2 - vw / 2) < 120, `centre ${Math.round(strip.x + strip.width / 2)}`);
 check('players see the boxes too, without the secret line', (await pl.locator('.initstrip .ibox').count()) === 3 && !(await pl.locator('.initstrip').innerText()).includes('Lair'));
 check('the DM sees the secret one marked', (await dm.locator('.ibox.secret').count()) >= 1);
@@ -115,12 +116,14 @@ await front(dm);
 
 // the old right-edge list is a setting
 await dm.getByRole('button', { name: 'Settings' }).click();
+await dm.locator('.modal .tabs button', { hasText: 'You' }).click();
 await dm.locator('.seg button', { hasText: 'Right edge' }).click();
 await dm.keyboard.press('Escape');
 await sleep(200);
 check('the settings can move the order to the right edge', (await dm.locator('.initstrip.side').count()) === 1 && (await dm.locator('.initbar').count()) === 0);
 await dm.screenshot({ path: '/tmp/shots/113-init-side.png' });
 await dm.getByRole('button', { name: 'Settings' }).click();
+await dm.locator('.modal .tabs button', { hasText: 'You' }).click();
 await dm.locator('.seg button', { hasText: 'Across the top' }).click();
 await dm.keyboard.press('Escape');
 await sleep(200);

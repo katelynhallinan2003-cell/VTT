@@ -27,7 +27,7 @@ export const tempPct = (t: Pick<Token, 'tempHp' | 'maxHp'>): number => (t.maxHp 
 export function tellTemp(r: { name: string; had: number; now: number }[], asked: number) {
   if (!r.length) { toast('Only tokens with hit points can have temporary ones.', 'info', 2400); return; }
   const same = r.every((x) => x.now === x.had);
-  if (same) toast(r.length === 1 ? `${r[0].name} already has ${r[0].had} temporary hit points, and you keep the higher number (${asked} is not more).` : `They already have at least ${asked} temporary hit points.`, 'info', 3600);
+  if (same) toast(r.length === 1 ? `${r[0].name} already has ${r[0].had} temporary hit points. The higher number is kept.` : `They already have at least ${asked} temporary hit points.`, 'info', 3600);
   else toast(r.length === 1 ? `${r[0].name} now has ${r[0].now} temporary hit points.` : `${r.length} tokens have temporary hit points.`, 'ok', 2200);
 }
 
@@ -162,7 +162,7 @@ export function InitPopup(props: { client: TableClient; ui: UiState; board: Boar
       {tab === 'roll' && (
         <div class="initpop-body">
           <p class="muted small" style={{ margin: '0 0 6px' }}>
-            Use the dice, or type what a real d20 showed. The bonus is added for you and remembered for that token next time.
+            Roll here, or type what a real d20 showed. Each token's bonus is added for you.
           </p>
           <div class="row wrap" style={{ marginBottom: '6px' }}>
             <button class="btn small primary" onClick={rollEmpty} title="Roll a d20 for every ticked token that has no number yet">🎲 Roll all empty</button>
@@ -205,10 +205,9 @@ export function InitPopup(props: { client: TableClient; ui: UiState; board: Boar
             <button class="btn primary" disabled={!ready.length} onClick={apply}>{ready.length ? `Add ${ready.length} to the order` : 'Roll or type some numbers'}</button>
           </div>
 
-          <h4>Add something else</h4>
-          <p class="muted small" style={{ margin: '0 0 6px' }}>A lair action, a reinforcement, a timer. Tick “hide” to keep it on your tracker only.</p>
+          <h4>Add a turn that has no token</h4>
           <div class="init-add">
-            <input type="text" class="free-name" placeholder="Lair action, late arrival…" value={freeName} aria-label="Name of the extra turn" onInput={(e) => setFreeName((e.target as HTMLInputElement).value)}
+            <input type="text" class="free-name" placeholder="Lair action, late arrival, timer…" value={freeName} aria-label="Name of the extra turn" onInput={(e) => setFreeName((e.target as HTMLInputElement).value)}
               onKeyDown={(e) => { if (e.key === 'Enter') addFree(); e.stopPropagation(); }} />
             <input type="number" class="num" placeholder="#" value={freeInit} aria-label="Its initiative" onInput={(e) => setFreeInit((e.target as HTMLInputElement).value)}
               onKeyDown={(e) => { if (e.key === 'Enter') addFree(); e.stopPropagation(); }} />
@@ -229,7 +228,7 @@ export function InitPopup(props: { client: TableClient; ui: UiState; board: Boar
             <span class="spacer" />
             <Toggle checked={init.shown} onChange={(v) => void client.initShow(v)} label="Show to players" />
           </div>
-          <p class="muted small" style={{ margin: '0 0 6px' }}>Lines you hide (🙈) and hidden tokens never appear for players. Drag a line to change the order.</p>
+          <p class="muted small" style={{ margin: '0 0 6px' }}>Drag a line to reorder. Players never see hidden lines (🙈) or hidden tokens.</p>
           {entries.length === 0 && <p class="muted">Nothing in the order yet. Use the Roll tab.</p>}
           <ul class="init-list">
             {entries.map((e) => (

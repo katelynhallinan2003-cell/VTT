@@ -17,12 +17,6 @@ An issue the user says is still broken moves back up to *Open* with a note on wh
 
 ## Open
 
-- [ ] **#11 General UI cleanup, one full hour of auditing** (in progress) (added 2026-11-22): "the UI is just a little bit
-  cluttered/wordy in some places. Can you go around and just do a general UI cleanup so the user is told what they
-  actually need to know, core/basic VTT features are easy access while advanced features are deeper down and phrasing
-  is always clear so its never unclear what something does. I want you to spend a full hour doing this and looking for
-  things. Do not stop looking until the hour is done." The hour starts once #9 and #10 are finished.
-
 Carried over from the old `TASKS.md` on 2026-11-22 (asked 2026-11-21, before this file existed):
 
 - [ ] **#3 Republish `database.rules.json` in the Firebase console** (waiting on user) (added 2026-11-21): the live
@@ -50,6 +44,16 @@ they do, give the idea a number and move it to *Open*.
 - Hex token frames.
 - Remembered (explored) ground in the dark ignores walls between the light and the lit spot (known small inaccuracy).
 - Handouts shown to "some players" are filtered in the app only, not in the database.
+
+Noticed on 2026-11-22 during the grid-finder and UI work, and left alone:
+
+- A picture dropped on a scene that has no map yet becomes a token. It could offer two places to drop: "this scene's map" and "a token".
+- Hiding a printed grid also fills in a wall that lies exactly on a grid line. It could leave pixels alone that are much darker than the grid lines are.
+- The grid finder has only been run on maps drawn by the tests. A folder of real published maps (with and without grids) would be a better judge.
+- A scene can only be renamed while it is open (Manage scenes greys the button out otherwise).
+- With the Draw tool open and a drawing selected, the box at the bottom repeats the colour, thickness and fill controls of the tool's panel. It could show only what the panel lacks (size, delete).
+- The selected-token bar has six buttons for the DM. Height, Aura and Save to library could go behind a "More" button, but a dozen browser tests press them where they are, and Height shows the token's height on its face.
+- Below about 1100 px wide the warnings and the test-move bar can still touch an open tool panel.
 
 ## Completed
 
@@ -90,3 +94,21 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
   copy first. 63 drawn maps are now permanent tests (`tests/helpers/gridcorpus.ts`): all pass, and the project's
   browser tests for the feature pass. Not done: it has only been tried on maps drawn by the tests, not on real
   published maps; and hiding still fills in a wall that lies exactly on a grid line.
+- [x] **#11 General UI cleanup** (added 2026-11-22, completed 2026-11-22): "the UI is just a little bit cluttered/wordy
+  in some places ... core/basic VTT features are easy access while advanced features are deeper down and phrasing is
+  always clear ... spend a full hour." The user called time after about 45 minutes of it ("you can stop").
+  Done, where things are: Settings in four tabs (Table, Pictures and files, You, Mouse and keys; `?` opens the last);
+  the toolbar in groups (everyday tools, then the DM's scene tools) with names that show at once on hover; Add token
+  asks for the picture first, tucks the paint tools away, and takes a dropped picture while open; the token editor,
+  the Players tab and "Pick your character" put the basics first; the Scene tab shows fog options only when fog is on,
+  folds Light away, and has "Preview as players" (with a Stop link on the note at the top).
+  Done, wording: long hints cut to a sentence in every panel; "picture" everywhere instead of a mix with "image";
+  walls and extra maps both say "Players can see it"; a wall height of 0 says it means full height; notes stay on
+  screen long enough to read.
+  Done, layout: rows of choices in the tool panels are no longer cut off; at laptop widths the test-move bar, warnings,
+  the turn order and the selected-token bar no longer cover the top bar, the side panel or each other (they stack);
+  the initiative window opens beside an open tool panel; the handout text box looks like the other inputs.
+  Bugs found on the way and fixed: the right-click menu never opened on Windows; Fit map was undone by a view that was
+  still gliding; a demo map lost on reload blamed the internet connection; letting go of Alt handed the keyboard to
+  the browser's menu on Windows (not checked in a real browser window). New browser test: `tests/e2e/batchZ11.mjs`;
+  `node tests/e2e/all.mjs` runs them all. Things noticed and left alone are under *Ideas*.

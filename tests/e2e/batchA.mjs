@@ -89,6 +89,7 @@ check('sliders are a decent width', sw.width > 120, `${Math.round(sw.width)}px`)
 
 // themes now live in Settings
 await dm.getByRole('button', { name: 'Settings' }).click();
+await dm.locator('.modal .tabs button', { hasText: 'You' }).click();
 await sleep(200);
 check('no light/dark button in the top bar', (await dm.locator('button[title="Switch light / dark"]').count()) === 0);
 check('settings lists several themes', (await dm.locator('.theme-tile').count()) >= 5);

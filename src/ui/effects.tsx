@@ -321,12 +321,12 @@ export function EffectsWindow(props: { client: TableClient; ui: UiState; board: 
             <div class="seg fx-looks" style={{ marginTop: '6px' }}>
               {FX_TICKS.map((t) => <button key={t.id} class={d.tick === t.id ? 'on' : ''} title={t.hint} onClick={() => set({ tick: t.id })}>{t.label}</button>)}
             </div>
-            <span class="hint">Counts down by itself as you press Next turn in the initiative. Without a turn order it just stays, so you can nudge it with − and + or remove it yourself.</span>
+            <span class="hint">It counts down as you press Next turn. With no turn order running it stays until you take it off.</span>
           </>
         )}
       </div>
 
-      <p class="hint fx-previewnote">{shownFx ? 'This is how it looks on the token right now. Nothing is added until you press the button.' : 'Pick an effect to see it on the token before you add it.'}</p>
+      <p class="hint fx-previewnote">{shownFx ? 'The token is showing a preview. Nothing is added until you press the button.' : 'Pick an effect to preview it on the token.'}</p>
       <div class="field fx-viewset">
         <span class="field-label">When this window opens</span>
         <div class="seg fx-looks">

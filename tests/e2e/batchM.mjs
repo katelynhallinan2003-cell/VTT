@@ -197,6 +197,7 @@ check('the setting is remembered', (await dm.evaluate(() => localStorage.getItem
 await dm.locator('.fwin-head .icon-btn').click();
 await dm.getByRole('button', { name: 'Settings' }).click();
 await dm.locator('.modal').waitFor();
+await dm.locator('.modal .tabs button', { hasText: 'You' }).click();
 check('it is also in Settings', (await dm.locator('.modal .field', { hasText: 'When the Effects window opens' }).count()) === 1);
 await dm.locator('.modal .seg button', { hasText: 'Jump to the token' }).click();
 check('and changes the same switch', (await dm.evaluate(() => window.__vtt.ui.data.fxJump)) === true);

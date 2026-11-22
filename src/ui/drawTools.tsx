@@ -143,7 +143,7 @@ export function DrawFlyout(props: { ui: UiState; client: TableClient }) {
         </div>
       )}
       {wide && !isText && <Toggle checked={d.drawDash} onChange={(v) => { ui.set({ drawDash: v }); live.apply((x) => x.hz == null && x.k !== 'text' && !isTemplate(x.k), { dash: v }); }} label="Dashed" />}
-      {nSel > 0 && <p class="hint">{nSel === 1 ? 'The drawing you just made is still selected, so changes here apply to it as you make them.' : `${nSel} drawings are selected, so changes here apply to them as you make them.`}</p>}
+      {nSel > 0 && <p class="hint">{nSel === 1 ? 'Your last drawing is still selected: changes here apply to it too.' : `${nSel} drawings are still selected: changes here apply to them too.`}</p>}
       <p class="hint">{tool.hint}</p>
       <div class="row wrap">
         <button class="btn small" onClick={async () => { const n = await client.clearDrawings((x) => x.uid === client.uid && !isTemplate(x.k) && x.hz == null && x.k !== 'terrain', 'Clear my drawings'); toast(n ? `Cleared ${n} drawing${n > 1 ? 's' : ''}` : 'Nothing of yours to clear', 'info', 1800); }}>Clear mine</button>
@@ -195,8 +195,8 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient }) {
         ))}
       </div>
       <p class="hint">{rough
-        ? 'Paint difficult ground: every square of it that a walker enters costs one extra square of movement. Flyers are not slowed. It is hatched on the map.'
-        : 'Paint high and low ground like a brush. Whatever walks onto it is lifted to that height, and the ruler counts the climb. Flying tokens keep their own altitude.'}</p>
+        ? `Each ${cellWord} of difficult ground costs a walker one extra ${cellWord} of movement. Flyers are not slowed.`
+        : 'Paint high and low ground. A token that walks onto it stands at that height; flyers keep their own.'}</p>
       <div class="seg">
         {modes.map(([k, label]) => (
           <button key={k} class={mode === k ? 'on' : ''} onClick={() => ui.set({ heightMode: k })}>{label}</button>
@@ -204,7 +204,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient }) {
       </div>
       {mode !== 'move' && (
         <>
-          {mode !== 'ramp' && <Toggle checked={d.heightSnap} onChange={(v) => ui.set({ heightSnap: v })} label={`Fill whole ${cellWord}s`} hint={`Off paints freely under the brush. Hold Alt while you paint to flip it for one stroke.`} />}
+          {mode !== 'ramp' && <Toggle checked={d.heightSnap} onChange={(v) => ui.set({ heightSnap: v })} label={`Fill whole ${cellWord}s`} hint="Hold Alt to flip this for one stroke." />}
           <span class="field-label">{mode === 'ramp' ? `Ramp width (${cellWord}s)` : `Brush size (${d.heightSnap ? `${cellWord}s across` : 'cells wide'})`}</span>
           <div class="chips">
             {BRUSH_SIZES.map((x) => <button key={x} class={`chip ${d.heightBrush === x ? 'on' : ''}`} onClick={() => ui.set({ heightBrush: x })}>{x}</button>)}
@@ -225,7 +225,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient }) {
           <NumField label="End" value={d.rampTo} min={-1000} max={5000} step={5} unit="ft" title="How high the ground is where you let go" onCommit={(v) => ui.set({ rampTo: Math.round(v) })} />
           <div class="row wrap">
             <button class="btn small" onClick={() => ui.set({ rampFrom: d.rampTo, rampTo: d.rampFrom })}>Swap</button>
-            <span class="hint">Drag from one end to the other. The ground climbs in 5 ft steps, each one an area of its own, so every step of it is a stair a token can walk.</span>
+            <span class="hint">Drag from the start to the end. The ground climbs in 5 ft steps a token can walk up.</span>
           </div>
         </div>
       )}
@@ -250,7 +250,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient }) {
             {paintable.length > 1 && <button class="btn small" title="Make these one area" onClick={() => void client.mergeAreas(paintable)}>Merge</button>}
             <button class="btn small danger" onClick={() => { void client.removeDrawings(mine.flatMap((a) => a.ids), 'Delete ground'); ui.selectDrawings([]); }}>Delete {one ? 'area' : 'areas'}</button>
           </div>
-        ) : <p class="hint">Click to start a new area. Every stroke after it joins the same one until you press New area or Esc.</p>}
+        ) : <p class="hint">Strokes join into one area until you press New area or Esc.</p>}
       </div>}
       {!rough && (
         <p class="hint">
@@ -261,8 +261,10 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient }) {
       )}
       {rough && <p class="hint">{mode === 'paint' ? 'Paint or drag across the map.' : 'Rubs out difficult ground wherever you drag.'}</p>}
       {!rough && client.isDM && (
-        <NumField label="Cliffs" value={cliff} min={0} max={1000} step={5} unit="ft" title="A drop of more than this between neighbouring squares is a cliff: it stops sight, spells and walking from below, and is no obstacle from the top. A 5 ft step is a stair and costs like a diagonal move. 0 turns cliffs off."
-          onCommit={(v) => void client.updateScene({ cliff: Math.max(0, Math.round(v)) })} />
+        <div style={{ margin: '8px 0' }}>
+          <NumField label="Cliffs: drops over" value={cliff} min={0} max={1000} step={5} unit="ft" title="A drop of more than this between neighbouring squares is a cliff: it stops sight, spells and walking from below, and is no obstacle from the top. A 5 ft step is a stair and costs like a diagonal move. 0 turns cliffs off."
+            onCommit={(v) => void client.updateScene({ cliff: Math.max(0, Math.round(v)) })} />
+        </div>
       )}
       <span class="field-label">Show the ground heights</span>
       <div class="seg">
@@ -270,8 +272,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient }) {
           <button key={k} class={d.heightView === k ? 'on' : ''} onClick={() => ui.set({ heightView: k })}>{label}</button>
         ))}
       </div>
-      <p class="hint">{d.heightView === 'auto' ? 'The ground fades in while you drag a token or measure, and fades out again.' : d.heightView === 'always' ? 'The ground is always drawn on the map.' : 'The ground is only drawn while this tool is open.'} Only changes your own screen.</p>
-      <p class="hint">{'] and [ raise and lower the selected tokens.'}</p>
+      <p class="hint">{d.heightView === 'auto' ? 'Shown while you drag a token or measure.' : d.heightView === 'always' ? 'Always shown.' : 'Shown only while this tool is open.'} Only on your screen.</p>
       <div class="row wrap">
         <span class="hint">{n ? `${n} height area${n > 1 ? 's' : ''} on this map` : 'No height areas yet'}</span>
         <span class="grow" />
@@ -315,7 +316,7 @@ export function WallFlyout(props: { ui: UiState; client: TableClient }) {
             {WALL_KINDS.map((k) => <button key={k} class={d.wallKind === k ? 'on' : ''} title={WALL_HINT[k]} onClick={() => ui.set({ wallKind: k, wallVis: null })}>{WALL_NAME[k]}</button>)}
           </div>
           <p class="hint">{WALL_HINT[d.wallKind]}</p>
-          <Toggle checked={shownVis} onChange={(v) => ui.set({ wallVis: v })} label="Draw it for the players" hint="Off: only you see it, but it still blocks. Plain walls start off (the map already shows them)." />
+          <Toggle checked={shownVis} onChange={(v) => ui.set({ wallVis: v })} label="Players can see it" hint="Off: only you see it. It blocks either way." />
           {d.wallKind !== 'door' && (
             <>
               <span class="field-label">Shape</span>
@@ -333,7 +334,7 @@ export function WallFlyout(props: { ui: UiState; client: TableClient }) {
                 </>
               )}
               <Toggle checked={d.wallOne !== 0} onChange={(v) => ui.set({ wallOne: v ? (d.wallOne || 1) : 0 })} label="One-way (a cliff edge)"
-                hint="It only stops what is on one side. The little ticks show the side that is stopped: stand there and you just see a wall. From the other side you see and walk right past it." />
+                hint="Blocks from one side only. The little ticks mark the side that is stopped." />
               {d.wallOne !== 0 && (
                 <div class="seg">
                   <button class={d.wallOne === 1 ? 'on' : ''} title="The side on your right as you draw from the first point to the next" onClick={() => ui.set({ wallOne: 1 })}>Stops its right</button>
@@ -344,6 +345,7 @@ export function WallFlyout(props: { ui: UiState; client: TableClient }) {
           )}
 <div>
             <NumField label="Height" value={d.wallH} min={0} max={1000} step={5} unit="ft" title="How tall it is above the ground it stands on. 0 means too tall to get over. Anything higher than the top sees and flies over it." onCommit={(n) => ui.set({ wallH: Math.max(0, Math.round(n)) })} />
+            {d.wallH === 0 && <span class="hint"> 0: full height, nothing gets over it</span>}
           </div>
           <span class="field-label">Snap ends to</span>
           <div class="seg wrap">
@@ -354,7 +356,7 @@ export function WallFlyout(props: { ui: UiState; client: TableClient }) {
               : d.wallShape === 'box' ? 'Drag out a room, or click two opposite corners.'
               : d.wallShape === 'circle' ? 'Drag from the middle out to the edge, or click the middle and then the edge.'
               : 'Draw the outline with the mouse held down. Come back to where you started to close it. It becomes ordinary walls you can bend afterwards.'}
-            {' '}Ends snap onto other walls. Shift: straight or 45°. Alt: no snapping. A door or window drawn along a wall cuts a gap in it.
+            {' '}Shift: straight or 45°. Alt: no snapping.{d.wallKind !== 'wall' ? ' Drawn along a wall, it cuts a gap in it.' : ''}
           </p>
         </>
       ) : (
@@ -369,7 +371,7 @@ export function WallFlyout(props: { ui: UiState; client: TableClient }) {
               <div class="seg">
                 {WALL_KINDS.map((k) => <button key={k} class={kinds.size === 1 && kinds.has(k) ? 'on' : ''} onClick={() => void client.updateWalls(ids, { k }, 'Change wall type')}>{WALL_NAME[k]}</button>)}
               </div>
-              <Toggle checked={allVis} onChange={(v) => void client.updateWalls(ids, { vis: v }, v ? 'Show wall to players' : 'Hide wall from players')} label="Drawn for the players" />
+              <Toggle checked={allVis} onChange={(v) => void client.updateWalls(ids, { vis: v }, v ? 'Show wall to players' : 'Hide wall from players')} label="Players can see it" />
               {canOne.length > 0 && (
                 <>
                   <Toggle checked={canOne.every((w) => w.one !== 0)} onChange={(v) => void client.updateWalls(canOne.map((w) => w.id), { one: v ? 1 : 0 }, v ? 'Make one-way' : 'Make two-way')} label="One-way (a cliff edge)"
@@ -380,6 +382,7 @@ export function WallFlyout(props: { ui: UiState; client: TableClient }) {
               <div>
                 <NumField label="Height" value={sel[0].h} min={0} max={1000} step={5} unit="ft" title="How tall above the ground it stands on. 0 means too tall to get over. Anything higher than the top sees and flies over it."
                   onCommit={(n) => void client.updateWalls(ids, { h: Math.max(0, Math.round(n)) }, 'Change wall height')} />
+                {sel[0].h === 0 && <span class="hint"> 0: full height</span>}
               </div>
               {doors.length > 0 && (
                 <div class="seg">
@@ -391,14 +394,14 @@ export function WallFlyout(props: { ui: UiState; client: TableClient }) {
                 <button class="btn small danger" onClick={() => { void client.removeWalls(ids); ui.set({ wallSel: new Set() }); }}>Delete {sel.length > 1 ? 'walls' : WALL_NAME[sel[0].k].toLowerCase()}</button>
               </div>
             </>
-          ) : <p class="hint">Click a wall, or drag a box around several. Drag a dot to move one end (every wall that meets there follows), or drag the wall itself to move it. Shift-click adds more. Delete removes them. Double-click a door to open it, a wall to add a corner you can drag to bend it, or a corner to take it out.</p>}
+          ) : <p class="hint">Click a wall, or drag a box round several (Shift-click adds more). Drag a dot to move a corner, or the wall to move it. Double-click a wall to add a corner, a corner to remove it, a door to open it.</p>}
         </div>
       )}
       <div class="ht-card">
         <strong>On this map</strong>
-        <Toggle checked={!!meta?.wallStop} onChange={(v) => void client.updateScene({ wallStop: v })} label="Walls stop the players' tokens" hint="Off: players can drag tokens through walls (they still block sight and spells)." />
-        <Toggle checked={d.wallIgnore} onChange={(v) => ui.set({ wallIgnore: v })} label="I can walk through walls" hint="Only for you. Holding Q while you drag also lets you through (it teleports the token)." />
-        <Toggle checked={d.showWalls} onChange={(v) => ui.set({ showWalls: v })} label="Show walls when this tool is closed" hint="Only changes what you see." />
+        <Toggle checked={!!meta?.wallStop} onChange={(v) => void client.updateScene({ wallStop: v })} label="Walls stop the players' tokens" hint="Off: walls only block sight and spells." />
+        <Toggle checked={d.wallIgnore} onChange={(v) => ui.set({ wallIgnore: v })} label="I can walk through walls" hint="Only for you. Holding Q while you drag does it once." />
+        <Toggle checked={d.showWalls} onChange={(v) => ui.set({ showWalls: v })} label="Show walls when this tool is closed" hint="Only on your screen." />
         {!sightOn && (
           <div>
             <p class="hint">Walls shape what tokens can see once their sight is on.</p>
@@ -447,7 +450,7 @@ export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
           </div>
         </>
       )}
-      <Toggle checked={d.tplShare} onChange={(v) => ui.set({ tplShare: v })} label="Show others my templates" hint="On: everyone sees the templates you place. Off: only you (and the DM) see them." />
+      <Toggle checked={d.tplShare} onChange={(v) => ui.set({ tplShare: v })} label="Show others my templates" hint="Off: only you and the DM see them." />
       <Toggle checked={d.tplCover} onChange={(v) => ui.set({ tplCover: v })} label={hex ? 'Show the hexes it covers' : 'Show the squares it covers'} hint={hex ? 'A hex counts when its middle is inside the area.' : 'A square counts when its middle is inside the area.'} />
       <p class="hint">{say(t.hint)} {say('Sizes snap to whole squares')} (hold Alt to turn that off, Shift to lock the angle).</p>
       <div class="row wrap">
@@ -467,12 +470,12 @@ export function RulerFlyout(props: { ui: UiState; client: TableClient }) {
     <div class="flyout">
       <div class="flyout-title">Ruler</div>
       {!client.canDo('measure') && <p class="hint">The ruler is turned off for players.</p>}
-      <p class="hint">Drag to measure. Hold Alt to measure freely instead of from square to square (or hex to hex). Right-click or Esc clears it.</p>
+      <p class="hint">Drag to measure. Alt: measure freely, off the grid. Right-click or Esc clears it.</p>
       <Toggle checked={d.rulerMulti} onChange={(v) => ui.set({ rulerMulti: v })} label="Measure in several steps"
-        hint="Each drag adds a leg that carries on from the end of the last one, with the distance so far at every corner. Right-click takes back the last leg; Shift+drag starts a new measurement." />
+        hint="Each drag carries on from the last. Right-click takes back a step; Shift+drag starts again." />
       <span class="field-label">Colour</span>
       <Colors value={d.rulerColor} fallback={mine} sameLabel="Use my player colour" onPick={(c) => ui.set({ rulerColor: c })} />
-      <Toggle checked={d.sharePlot} onChange={(v) => ui.set({ sharePlot: v })} label="Show my ruler to everyone" hint="Off by default so planning doesn't distract the table." />
+      <Toggle checked={d.sharePlot} onChange={(v) => ui.set({ sharePlot: v })} label="Show my ruler to everyone" />
     </div>
   );
 }

@@ -56,7 +56,7 @@ const click = async (a, opts = {}) => {
 await dm.keyboard.press('b');
 await dm.locator('.flyout-title', { hasText: /^Walls$/ }).waitFor();
 check('B opens the Walls panel', (await ui('tool')) === 'wall' && (await ui('wallMode')) === 'draw' && (await ui('wallKind')) === 'wall');
-check('the toolbar has a Walls button', (await dm.locator('.toolbar button[title^="Walls"]').count()) === 1);
+check('the toolbar has a Walls button', (await dm.locator('.toolbar button[aria-label^="Walls"]').count()) === 1);
 check('the panel offers Wall, Door and Window', (await dm.locator('.flyout .seg button', { hasText: /^(Wall|Door|Window)$/ }).count()) === 3);
 
 // ---- a wall dragged out, then a room clicked point by point

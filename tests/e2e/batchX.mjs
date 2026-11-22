@@ -36,6 +36,7 @@ const made = await dm.evaluate(async () => {
 await sleep(500);
 const sceneName = made.name;
 await dm.getByRole('button', { name: 'Settings' }).click();
+await dm.locator('.modal .tabs button', { hasText: 'Pictures and files' }).click();
 await dm.locator('.modal', { hasText: 'Campaign file' }).waitFor();
 
 // ---- save it
@@ -63,6 +64,7 @@ await dm.getByRole('button', { name: 'Create table' }).click();
 await dm.waitForSelector('.board-host canvas');
 check('the new table has no scenes', (await dm.evaluate(() => window.__vtt.client.sceneIndex.length)) === 0);
 await dm.getByRole('button', { name: 'Settings' }).click();
+await dm.locator('.modal .tabs button', { hasText: 'Pictures and files' }).click();
 await dm.locator('.modal', { hasText: 'Campaign file' }).waitFor();
 
 // a file that is not one of ours

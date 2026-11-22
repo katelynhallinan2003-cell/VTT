@@ -215,6 +215,7 @@ export class Board {
     setTextureFailHandler((kind, url) => {
       if (kind !== 'token' || this.failedTokenUrls.has(url)) return;
       this.failedTokenUrls.add(url);
+      if (url.startsWith('blob:')) { this.cb.onTokenImageError('A token picture was only kept in this browser tab (demo mode), so it is gone after a reload.'); return; }
       void diagnoseImage(url).then((why) => { if (!this.destroyed) this.cb.onTokenImageError(`A token picture could not be shown: ${why}.`); });
     });
     const app = new Application();
@@ -313,9 +314,13 @@ export class Board {
     return { x: (this.host.clientWidth / 2 - this.cam.tx) / this.cam.zoom, y: (this.host.clientHeight / 2 - this.cam.ty) / this.cam.zoom };
   }
 
+  /** A glide of the view that is under way stops as soon as the view is set some other way (a fit, a zoom, a drag), instead of carrying on over it. */
+  private glideSeq = 0;
+
   fit() {
     const rect = this.client.sceneRect();
     if (!rect) return;
+    this.glideSeq++;
     this.cam = fitCamera(this.host.clientWidth, this.host.clientHeight, rect, 48);
     this.applyCamera();
   }
@@ -327,11 +332,13 @@ export class Board {
     const left = 76;
     const free = Math.max(240, this.host.clientWidth - rightPx - left);
     const c = fitCamera(free, this.host.clientHeight, rect, 48);
+    this.glideSeq++;
     this.cam = { zoom: c.zoom, tx: c.tx + left, ty: c.ty };
     this.applyCamera();
   }
 
   zoomBy(factor: number) {
+    this.glideSeq++;
     this.cam = zoomAt(this.cam, this.host.clientWidth / 2, this.host.clientHeight / 2, factor);
     this.applyCamera();
   }
@@ -357,7 +364,9 @@ export class Board {
     const to = { zoom, tx: left + freeW / 2 - cx * zoom, ty: H * 0.46 - cy * zoom };
     const from = { ...this.cam };
     const t0 = performance.now();
+    const seq = ++this.glideSeq;
     const run = (now: number) => {
+      if (this.destroyed || seq !== this.glideSeq) return;
       const k = Math.min(1, (now - t0) / 260);
       const e = 1 - Math.pow(1 - k, 3);
       this.cam.zoom = from.zoom + (to.zoom - from.zoom) * e;
@@ -380,8 +389,9 @@ export class Board {
     const to = fitCamera(this.host.clientWidth, this.host.clientHeight, rect, 0);
     const from = { ...this.cam };
     const t0 = performance.now();
+    const seq = ++this.glideSeq;
     const run = (now: number) => {
-      if (this.destroyed) return;
+      if (this.destroyed || seq !== this.glideSeq) return;
       const k = Math.min(1, (now - t0) / 500);
       const e = 1 - Math.pow(1 - k, 3);
       this.cam.zoom = from.zoom + (to.zoom - from.zoom) * e;
@@ -394,6 +404,7 @@ export class Board {
   }
 
   centerOn(p: Vec) {
+    this.glideSeq++;
     this.cam.tx = this.host.clientWidth / 2 - p.x * this.cam.zoom;
     this.cam.ty = this.host.clientHeight / 2 - p.y * this.cam.zoom;
     this.applyCamera();
@@ -707,7 +718,10 @@ export class Board {
       if (this.fitPending) { this.fit(); this.fitPending = false; }
       const why = await diagnoseImage(url);
       if (this.destroyed || this.mapUrl !== url) return;
-      this.cb.onMapError(`The map picture could not be shown: ${why}. Picture address: ${url}`);
+      // a picture added in demo mode only lives in the browser tab it was added in: say that, not "check your connection"
+      this.cb.onMapError(url.startsWith('blob:')
+        ? `This map picture was only kept in one browser tab (demo mode), so it is gone after a reload. ${this.client.isDM ? 'Add the map again in the Scene tab.' : 'The DM has to add it again.'}`
+        : `The map picture could not be shown: ${why}. Picture address: ${url}`);
       return;
     }
     this.cb.onMapError(null);
@@ -747,9 +761,7 @@ export class Board {
     const m = this.client.scene?.meta;
     if (!m || m.mapGrid) return;
     await this.client.updateScene({ mapGrid: r.cut, grid: impliedGrid(r.cut, m.mapScale, m.mapX, m.mapY) });
-    this.cb.onNotice(r.cut.hex
-      ? `This map has a hex grid printed on it. I hid it and set your grid on it. Ctrl+Z puts it back.`
-      : `This map has a grid printed on it (every ${Math.round(r.cut.p * m.mapScale * 10) / 10} px on the board). I hid it and set your grid on it. Ctrl+Z puts it back.`, 'ok');
+    this.cb.onNotice(`This map has a ${r.cut.hex ? 'hex grid' : 'grid'} printed on it. It is hidden now, and your grid is set to match. Ctrl+Z undoes both.`, 'ok');
   }
 
   // ------------------------------------------------------------------ tokens
@@ -1955,6 +1967,9 @@ export class Board {
     on(canvas, 'wheel', (e: WheelEvent) => this.onWheel(e), { passive: false });
     on(window, 'keydown', (e: KeyboardEvent) => this.onKeyDown(e));
     on(window, 'keyup', (e: KeyboardEvent) => {
+      // Alt is "do not snap" here. On Windows, letting go of Alt by itself hands the keyboard to the browser's own menu,
+      // and the next keys you press (arrows, Delete, a tool's letter) would go there instead of to the board.
+      if (e.key === 'Alt') e.preventDefault();
       this.shiftDown = e.shiftKey;
       if (e.code === 'Space') { this.spaceDown = false; this.updateCursor(); }
       const k = e.key.toLowerCase();
@@ -1980,6 +1995,7 @@ export class Board {
     // trackpad pinch arrives as ctrl+wheel with small deltas; mouse wheels send ~100 per notch
     const delta = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
     const factor = Math.exp(-delta * (e.ctrlKey ? 0.01 : 0.0016));
+    this.glideSeq++;
     this.cam = zoomAt(this.cam, e.clientX - r.left, e.clientY - r.top, factor);
     this.applyCamera();
   }
@@ -2688,7 +2704,7 @@ export class Board {
         const dx = e.clientX - d.sx;
         const dy = e.clientY - d.sy;
         if (Math.abs(dx) + Math.abs(dy) > 4) d.moved = true;
-        if (d.moved && !d.noPan) { this.cam.tx = d.tx + dx; this.cam.ty = d.ty + dy; this.applyCamera(); }
+        if (d.moved && !d.noPan) { this.glideSeq++; this.cam.tx = d.tx + dx; this.cam.ty = d.ty + dy; this.applyCamera(); }
         break;
       }
       case 'tokens': this.dragTokens(d, w, e); break;

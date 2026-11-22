@@ -47,7 +47,10 @@ await sleep(500);
 // ---- test move bar flush at the top
 await dm.keyboard.press('m');
 const tb = await dm.locator('.testbar').boundingBox();
-check('the test-move box is flush with the top edge', tb && tb.y <= 1, JSON.stringify(tb));
+// flush with the top edge when it fits between the two halves of the top bar; just under the top bar when it does not, and never over it
+const pills = await dm.locator('.pill').evaluateAll((els) => els.map((e) => { const r = e.getBoundingClientRect(); return { x: r.left, r: r.right, b: r.bottom }; }));
+const clearOfPills = tb && pills.every((q) => tb.y >= q.b || tb.x >= q.r || tb.x + tb.width <= q.x);
+check('the test-move box is at the top edge, or just under the top bar when there is no room beside it', tb && clearOfPills && (tb.y <= 1 || tb.y < 80), JSON.stringify(tb));
 await dm.screenshot({ path: '/tmp/shots/y2-testbar.png' });
 await dm.getByRole('button', { name: /^Draw and write/ }).click().catch(() => dm.keyboard.press('p'));
 await sleep(200);

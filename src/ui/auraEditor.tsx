@@ -15,7 +15,7 @@ export function AuraEditor(props: { auras: Aura[]; ft: number; isDM: boolean; di
   return (
     <div class="auras">
       {!props.compact && <h3>Auras</h3>}
-      {auras.length === 0 && <p class="muted small">Coloured areas around a token, such as a paladin's aura or a lingering spell. They follow the token and are measured in feet.</p>}
+      {auras.length === 0 && <p class="muted small">Coloured areas that follow a token, like a paladin's aura or a lingering spell.</p>}
       {auras.map((a, i) => (
         <div class="aura-row" key={i}>
           <input type="number" class="aura-r" min={0} max={500} step={props.ft} value={a.r} disabled={props.disabled}
@@ -31,7 +31,7 @@ export function AuraEditor(props: { auras: Aura[]; ft: number; isDM: boolean; di
             {OPACITIES.map((o) => <option value={String(o.v)}>{o.label}</option>)}
           </select>
           <label class="inline-check" title="Measure from the edge of the token, as 5e emanations do. Off measures from its centre.">
-            <input type="checkbox" checked={a.edge} disabled={props.disabled} onChange={(e) => upd(i, { edge: (e.target as HTMLInputElement).checked })} /> edge
+            <input type="checkbox" checked={a.edge} disabled={props.disabled} onChange={(e) => upd(i, { edge: (e.target as HTMLInputElement).checked })} /> from edge
           </label>
           <label class="inline-check" title="Follow the grid lines like a spell template: the aura covers whole squares (or hexes). Off draws a smooth shape.">
             <input type="checkbox" checked={a.g} disabled={props.disabled} onChange={(e) => upd(i, { g: (e.target as HTMLInputElement).checked })} /> on grid

@@ -67,8 +67,8 @@ export function CampaignFileSection(props: { client: TableClient }) {
     <>
       <h3>Campaign file</h3>
       <p class="muted">
-        Save everything to one file to keep a backup or to move it to another table: every scene with its tokens (hidden ones and hit points too), walls, fog, drawings and initiative, plus your handouts.
-        Pictures are saved as links, so they come back as long as they stay online. The file has your hidden things in it, so keep it to yourself.
+        One file with every scene (tokens, walls, fog, drawings, initiative) and your handouts: a backup, or a way to move to another table.
+        It includes your hidden things, so keep it to yourself. Pictures are saved as links.
       </p>
       <Toggle checked={withLibrary} label="Include my map and token library" hint="The pictures saved in your account, not only the ones on this table." onChange={setWithLibrary} />
       <div class="row wrap">
@@ -87,7 +87,7 @@ export function CampaignFileSection(props: { client: TableClient }) {
             ) : 'No scenes.'}
             {d.handouts ? ` ${d.handouts} handout${d.handouts === 1 ? '' : 's'}.` : ''}
           </div>
-          <p class="muted">These are added next to what you have. Nothing here is changed or replaced. Tokens that belonged to players come in unclaimed, and handouts come in not shown.</p>
+          <p class="muted">Added next to what you have: nothing here is changed or replaced. Player tokens come in unclaimed, handouts not shown.</p>
           {(d.maps || d.tokens) ? (
             <Toggle checked={useLibrary} label={`Add its library to mine (${d.maps} map${d.maps === 1 ? '' : 's'}, ${d.tokens} token${d.tokens === 1 ? '' : 's'})`} hint="Pictures you already have are skipped." onChange={setUseLibrary} />
           ) : null}

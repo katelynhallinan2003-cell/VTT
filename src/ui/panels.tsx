@@ -142,7 +142,7 @@ function HeightPop(props: { client: TableClient; tokens: Token[]; zones: ReturnT
       <div class="chips">
         {[10, 20, 30, 40, 60].map((h) => <button key={h} class="chip" onClick={() => aboveGround(h)}>{h} ft</button>)}
       </div>
-      <p class="hint">{groundTxt}{abs} A flyer keeps its elevation when the ground changes under it: 20 ft up over flat ground is 30 ft up once it crosses ground that is 10 ft lower.</p>
+      <p class="hint">{groundTxt}{abs}</p>
     </div>
   );
 }
@@ -241,7 +241,7 @@ function ExtraMaps(props: { client: TableClient; meta: SceneMeta; ui: UiState; b
           <FileButton label={busy ? 'Adding…' : meta.maps.length ? 'Add another map…' : 'Add a second map…'} onFile={(f) => void add(f)} />
         </div>
       )}
-      {!meta.maps.length && <p class="hint">A second picture in the same scene: the next floor, the next room along, an overlay. It goes to the right of the first; drag it where it belongs.</p>}
+      {!meta.maps.length && <p class="hint">For another floor, the next room, or an overlay. It lands beside the first map; drag it into place.</p>}
     </>
   );
 }
@@ -276,9 +276,9 @@ function MapGridCut(props: { client: TableClient; board: Board | null; meta: Sce
 
   return (
     <>
-      <p class="hint">If your map picture has a grid drawn on it, this finds it, covers it by filling each line in from the pixels beside it, and sets your own grid to the same size, so you never have to draw it. A new map is looked at once, automatically. The picture itself is never changed, and you can switch it back any time.</p>
+      <p class="hint">Finds a grid that is drawn on the map picture, hides it, and sets your own grid to match. The picture file itself is not changed.</p>
       <Toggle checked={d.autoGrid} onChange={(v) => ui.set({ autoGrid: v })} label="Look for a printed grid when I add a map"
-        hint="When one is clearly there, it is hidden and your grid is set on it. Ctrl+Z puts it back. Only for you, in this browser." />
+        hint="Ctrl+Z undoes it. This switch is only for you." />
       <div class="row wrap">
         <button class="btn small primary" disabled={busy || !board} onClick={() => void find()}>{busy ? 'Looking…' : cut ? 'Look again' : 'Find and hide it'}</button>
         {cut && <button class="btn small" onClick={() => void client.updateScene({ mapGrid: null })}>Forget it</button>}
@@ -286,7 +286,7 @@ function MapGridCut(props: { client: TableClient; board: Board | null; meta: Sce
       {cut && (
         <>
           <Toggle checked={cut.on} onChange={(v) => { void client.updateScene({ mapGrid: { ...cut, on: v } }); }} label="Hide the map's grid lines"
-            hint={cut.hex ? `A ${cut.hex === 'pointy' ? 'point-up' : 'flat-top'} hex grid, ${round2(cut.p)} px between hex centres in the picture, lines about ${round2(cut.t)} px thick. Everyone sees the same thing.` : `Lines every ${round2(cut.p)} px in the picture, about ${round2(cut.t)} px thick. Everyone sees the same thing.`} />
+            hint={cut.hex ? `${cut.hex === 'pointy' ? 'Point-up' : 'Flat-top'} hexes ${round2(cut.p)} px apart, lines about ${round2(cut.t)} px thick. Hidden for your players too.` : `A line every ${round2(cut.p)} px, about ${round2(cut.t)} px thick. Hidden for your players too.`} />
           {!aligned && implied && (
             <div class="row wrap">
               <button class="btn small" title="Moves and resizes the app's grid (and switches it to hexes or squares if needed) so it sits exactly on the lines printed on the map. Finding the grid does this for you; this is for after you have changed your grid by hand."
@@ -356,13 +356,13 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
             onInput={(v) => mapT({ mapScale: v / 100 })} hint="Drag the map on the board to move it." />
         )}
         <ExtraMaps client={client} meta={meta} ui={ui} board={board} />
-        <Field label="Background colour" hint="The surface behind the map. White by default, so drawings show up.">
+        <Field label="Background colour" hint="Shown behind and around the map.">
           <input type="color" value={meta.bg} onInput={(e) => bgT((e.target as HTMLInputElement).value)} />
         </Field>
       </Section>
 
       <Section id="grid" title="Grid">
-        <Field label="Grid type" hint={hex ? 'Hexes count every step the same, with no diagonals. Move a token with the arrow keys and it follows the hexes. Draw a box over the hexes again to line the grid up with your map.' : undefined}>
+        <Field label="Grid type" hint={hex ? 'Every step counts the same on hexes. Draw a box (below) to line them up with your map.' : undefined}>
           <div class="seg">
             <button class={g.shape === 'square' ? 'on' : ''} onClick={() => switchShape('square')}>Squares</button>
             <button class={g.shape === 'pointy' ? 'on' : ''} title="Hexes with a point at the top: rows run straight across" onClick={() => switchShape('pointy')}>Hex, point up</button>
@@ -402,15 +402,16 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
 
       <Section id="fog" title="Fog of war">
         <Toggle checked={meta.fog.enabled} onChange={(v) => { void client.updateScene({ fog: { enabled: v } }); }} label="Fog of war on" />
-        <Toggle checked={meta.fog.vision} onChange={(v) => { void client.updateScene({ fog: { vision: v } }); }} label="Tokens clear the fog around them"
-          hint="Each token sees as far as its “Sight” setting (token editor). Hidden tokens never do." />
-        {meta.fog.vision && (
+        {!meta.fog.enabled && <p class="hint">Off: players see the whole map.</p>}
+        {meta.fog.enabled && <Toggle checked={meta.fog.vision} onChange={(v) => { void client.updateScene({ fog: { vision: v } }); }} label="Tokens clear the fog around them"
+          hint="As far as each token's Sight distance (set in Edit token)." />}
+        {meta.fog.enabled && meta.fog.vision && (
           <>
             <Toggle checked={meta.fog.explore} onChange={(v) => { void client.updateScene({ fog: { explore: v } }); }} label="Remember what they have seen"
-              hint="While your browser is open, the ground a token walks past is remembered, following the route it really took. Hold Q while dragging a token to teleport it without marking the way." />
+              hint="Ground a token has seen stays revealed. It is only recorded while your browser is open." />
             {meta.fog.explore && (
               <Toggle checked={meta.fog.dim} onChange={(v) => { void client.updateScene({ fog: { dim: v } }); }} label="Grey out what they cannot see right now"
-                hint="Three kinds of ground: black where nobody has been, grey where they have looked before but cannot see now (monsters standing there are out of sight), clear where a token sees this moment. Off: remembered ground stays fully clear." />
+                hint="Ground they saw earlier turns grey, and monsters on it stay out of sight until someone looks again." />
             )}
             <SightAll client={client} />
           </>
@@ -420,9 +421,10 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
           <button class="btn small" onClick={() => void client.resetFog('clear')}>Reveal everything</button>
           <button class={`btn small ${d.tool === 'fog' ? 'primary' : ''}`} onClick={() => ui.set({ tool: d.tool === 'fog' ? 'select' : 'fog' })}>Fog tool (F)</button>
         </div>
+        <Toggle checked={d.dmPreview} onChange={(v) => ui.set({ dmPreview: v })} label="Preview as players" hint="See the fog, the dark and hidden tokens the way your players do." />
       </Section>
 
-      <Section id="light" title="Light and darkness">
+      <Section id="light" title="Light and darkness" defaultOpen={false}>
         <LightingSection client={client} ui={ui} board={board} meta={meta} />
       </Section>
     </>
@@ -432,7 +434,7 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
 const AMBIENT_HINT = {
   bright: 'Full daylight. Lights do nothing here.',
   dim: 'Twilight: everything is dimmer, and a light brightens the ground near it.',
-  dark: 'Night or a dungeon: only lit ground, or ground a token has darkvision for, can be seen. A token can still make out what is right beside it.',
+  dark: 'Night or a dungeon: tokens see only lit ground, what their darkvision reaches, and what is right beside them.',
 } as const;
 
 /** How bright the scene is, and the lights you can place in it. */
@@ -476,7 +478,7 @@ function LightingSection(props: { client: TableClient; ui: UiState; board: Board
         </select>
         <button class="btn small" disabled={!board} onClick={() => void place()}>Place a light</button>
       </div>
-      <p class="hint">A placed light is a small flame everyone can see; hide it (Edit token, Hidden from players) to keep it a secret. A token can carry a light too: Edit token, then the Sight and lights tab, where you can also make your own lights. Tokens with sight see lit ground, and darkvision sees the dark as if it were dim.</p>
+      <p class="hint">Everyone sees a placed light unless you hide it. A token can carry a light too: Edit token, then Sight and lights.</p>
     </>
   );
 }
@@ -524,9 +526,9 @@ export function TokenList(props: { client: TableClient; ui: UiState; board: Boar
                 {owner && <span class="tok-sub"><span class="dot" style={{ background: owner.color }} /> {owner.name}</span>}
                 {t.hp != null && t.maxHp != null && <span class="tok-sub"><HpBar pct={pctOf(t.hp, t.maxHp) ?? 0} width={46} /> {t.hp}/{t.maxHp}</span>}
               </span>
-              <button class={`icon-btn ${t.hidden ? 'on' : ''}`} title={t.hidden ? 'Hidden from players. Click to reveal.' : 'Visible to players. Click to hide.'}
+              <button class={`icon-btn ${t.hidden ? 'on' : ''}`} title={t.hidden ? 'Hidden from players. Click to reveal.' : 'Visible to players. Click to hide.'} aria-label={t.hidden ? `Show ${t.name || 'token'} to players` : `Hide ${t.name || 'token'} from players`}
                 onClick={(e) => { e.stopPropagation(); void client.updateTokens([t.id], { hidden: !t.hidden }); }}>{t.hidden ? '🙈' : '👁'}</button>
-              <button class={`icon-btn ${t.locked ? 'on' : ''}`} title={t.locked ? 'Locked. Click to unlock.' : 'Click to lock in place.'}
+              <button class={`icon-btn ${t.locked ? 'on' : ''}`} title={t.locked ? 'Locked. Click to unlock.' : 'Click to lock in place.'} aria-label={t.locked ? `Unlock ${t.name || 'token'}` : `Lock ${t.name || 'token'} in place`}
                 onClick={(e) => { e.stopPropagation(); void client.updateTokens([t.id], { locked: !t.locked }); }}>{t.locked ? '🔒' : '🔓'}</button>
             </li>
           );

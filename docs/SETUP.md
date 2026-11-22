@@ -63,16 +63,17 @@ You can do this any time. It takes effect immediately.
 
 1. Open your site, click **DM: sign in with Google**, and sign in with the allowlisted account.
    (If it says your email isn't on the allowlist, check the comma-ified address in step 3.)
-2. **Create table**, then open **Settings → Image uploads**, paste the imgbb key, **Save**, then **Test upload**.
+2. **Create table**, then open **Settings → Pictures and files**, paste the imgbb key, **Save**, then **Test upload**.
    The test uploads a tiny image and checks the browser can use it on the board. Both lines should say OK.
-3. **+ New scene**, upload a map, then set the grid (see below).
+3. **+ New scene** and upload a map, or just drag the map picture onto the page. If the map has a grid printed on it,
+   the app finds it and sets your grid to match by itself; if not, set the grid as below.
 4. **Copy player link** and send it to your friends.
 
 ### Setting the grid
 
-- Press **G** (or "Draw a box to set the grid"), drag a box over the squares of your map, and say how many squares it covers.
-  Covering many squares (say 10 by 10) is more accurate than covering one.
-- Fine-tune with the **Square size** and **Offset** sliders. Turn the grid off from the same panel.
+- Open the **Scene** tab on the right, press **Draw a box to set the grid**, drag a box over the squares of your map,
+  and say how many squares it covers. Covering many squares (say 10 by 10) is more accurate than covering one.
+- Fine-tune with the **Square size** and **Offset** sliders under **Fine tune grid**. **G** shows or hides the grid.
 
 ---
 
@@ -86,7 +87,7 @@ You can do this any time. It takes effect immediately.
 | "is not on the DM allowlist" | The email key must be lowercase with dots replaced by commas, value `true` (a boolean, not a string). |
 | "Could not create the table: permission_denied" | Rules weren't published (step 2.5), or the allowlist entry is missing. |
 | Upload test says CORS problem | imgbb's image host didn't allow the browser to use the image as a texture. Tell me and I'll add another image host option. |
-| Players see nothing / "Waiting for the DM" | The scene isn't live. Use **Show to players** next to the scene picker. |
+| Players see nothing / "Waiting for the DM" | The scene isn't live. Press **Summon players** next to the scene picker. |
 | A map looks blurry when zoomed in | The GPU limit is applied to very large maps (over 8192 px on a side). It is downscaled for display only. The original is untouched. |
 
 ## Security notes (read once)

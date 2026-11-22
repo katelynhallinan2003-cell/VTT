@@ -99,10 +99,10 @@ export function HandoutsModal(props: { client: TableClient; openId?: string | nu
         <Field label="Title">
           <input type="text" value={title} maxLength={120} placeholder="A letter from the baron" onInput={(e) => setTitle((e.target as HTMLInputElement).value)} />
         </Field>
-        <Field label="Words" hint="Optional. Line breaks are kept.">
+        <Field label="Words">
           <textarea rows={7} value={text} placeholder="What the players read" onInput={(e) => setText((e.target as HTMLTextAreaElement).value)} />
         </Field>
-        <Field label="Picture" hint="Optional: a map fragment, a portrait, a note you scanned.">
+        <Field label="Picture" hint="A handout can be words, a picture, or both.">
           <div class="row wrap" style={{ marginBottom: 0 }}>
             <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) void pick(f); (e.target as HTMLInputElement).value = ''; }} />
             <button class="btn small" disabled={busy} onClick={() => fileRef.current?.click()}>{img ? 'Replace picture…' : 'Add picture…'}</button>
@@ -156,7 +156,7 @@ export function HandoutsModal(props: { client: TableClient; openId?: string | nu
         {dm && <button class="btn primary" onClick={() => openEdit(null)}>+ New handout</button>}
         <button class="btn" onClick={props.onClose}>Close</button>
       </>}>
-      {!list.length && <p class="muted">{dm ? 'Nothing yet. A handout is a picture and/or some words you can put in front of your players, such as a letter, a map fragment or a clue.' : 'Nothing has been shown to you yet.'}</p>}
+      {!list.length && <p class="muted">{dm ? 'No handouts yet. A handout is a picture, some words, or both, that you show your players: a letter, a map fragment, a clue.' : 'Nothing has been shown to you yet.'}</p>}
       {list.map((h) => (
         <div key={h.id} class="handout-row">
           <div class="handout-row-main" onClick={() => setView({ v: 'read', id: h.id })} title="Read it">

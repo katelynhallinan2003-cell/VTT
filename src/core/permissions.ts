@@ -35,12 +35,12 @@ export const PRESETS: Record<'trusting' | 'standard' | 'strict', Permissions> = 
 
 export const PERM_LABELS: Record<keyof Permissions, { label: string; hint: string }> = {
   playersMoveAnyToken: { label: 'Move and edit any token', hint: 'Off: players can only touch the token they own.' },
-  playersCreateTokens: { label: 'Create tokens', hint: 'Players can add their own tokens to the board.' },
+  playersCreateTokens: { label: 'Create tokens', hint: '' },
   playersDeleteAnyToken: { label: 'Delete any token', hint: 'Off: players can only delete tokens they own.' },
-  playersPing: { label: 'Ping the map', hint: 'Show everyone a spot on the map (middle click by default).' },
-  playersDraw: { label: 'Draw and write', hint: 'Players can add, move and erase their own drawings and text.' },
-  playersTemplates: { label: 'Place spell templates', hint: 'Players can place, move and remove their own cones, cubes, spheres, emanations and lines, even if drawing is off.' },
-  playersMeasure: { label: 'Use the ruler', hint: 'Measure distances on the map.' },
+  playersPing: { label: 'Ping the map', hint: 'Shows everyone a spot on the map.' },
+  playersDraw: { label: 'Draw and write', hint: '' },
+  playersTemplates: { label: 'Place spell templates', hint: 'Cones, cubes, spheres and lines. Works even if drawing is off.' },
+  playersMeasure: { label: 'Use the ruler', hint: '' },
 };
 
 export function detectPreset(perm: Permissions): PermPreset {

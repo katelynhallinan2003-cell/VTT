@@ -174,27 +174,6 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
             </>
           )}
 
-          <Field label="Name shown on the board">
-            <select disabled={!editable} value={val('label') ?? ''} onChange={(e) => set({ label: (e.target as HTMLSelectElement).value as LabelMode })}>
-              {val('label') === null && <option value="">Mixed</option>}
-              <option value="all">Everyone can see it</option>
-              <option value="dm">Only the DM</option>
-              <option value="none">Nobody (hidden)</option>
-            </select>
-          </Field>
-
-          <h4>Height</h4>
-          <Toggle checked={val('fly') === true} onChange={(v) => set({ fly: v, ...(v && !(((val('elev') ?? 0) as number) > g0) ? { elev: g0 + 10 } : {}) })} label="Flying" disabled={!editable}
-            hint="Off the ground. It keeps its elevation, and shows a shadow and a ↑ tag with how far above the ground it is. Walking tokens stand on whatever height the ground has (see the Heights tool)." />
-          {val('fly') !== false && (
-            <Field label={sameGround ? 'Height above the ground (feet)' : 'Elevation (feet above the map base)'}
-              hint={sameGround ? 'Measured from the ground right under it. If the ground rises or falls under a flyer, it keeps its elevation, so this number changes: 20 ft up becomes 30 ft up over ground that is 10 ft lower.' : 'These tokens stand over different ground, so this is measured from the map base level.'}>
-              <input type="number" class="num" step={5} min={sameGround ? 0 : -1000} max={5000} disabled={!editable || val('fly') !== true} value={elevShown}
-                placeholder={val('elev') === null ? 'Mixed' : '0'}
-                onInput={(e) => { const v = (e.target as HTMLInputElement).value; const n = v === '' ? 0 : Math.round(Number(v)); set({ elev: sameGround ? g0 + Math.max(0, n) : n }); }} />
-            </Field>
-          )}
-
           {client.isDM && (
             <>
               <Field label="Controlled by">
@@ -227,17 +206,43 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
                   </Field>
                 </div>
               )}
-              <Field label="What players see of its health" hint="Players only ever see what this setting shows. The hit points themselves stay hidden unless you pick the last option.">
+              <Field label="What players see of its health">
                 <select disabled={!editable} value={val('hpShow') ?? ''} onChange={(e) => set({ hpShow: (e.target as HTMLSelectElement).value as HpShow })}>
                   {val('hpShow') === null && <option value="">Mixed</option>}
                   <option value="off">Nothing at all</option>
-                  <option value="state">Colour only: orange when bloodied, red when near death (no bar)</option>
-                  <option value="bar">Colour and a health bar (no numbers)</option>
-                  <option value="numbers">Colour, a bar and the real numbers (12/30)</option>
+                  <option value="state">Colour only (orange when bloodied, red near death)</option>
+                  <option value="bar">Colour and a health bar</option>
+                  <option value="numbers">Colour, a health bar and the numbers (12/30)</option>
                 </select>
               </Field>
+            </>
+          )}
+
+          <Field label="Name shown on the board">
+            <select disabled={!editable} value={val('label') ?? ''} onChange={(e) => set({ label: (e.target as HTMLSelectElement).value as LabelMode })}>
+              {val('label') === null && <option value="">Mixed</option>}
+              <option value="all">Everyone can see it</option>
+              <option value="dm">Only the DM</option>
+              <option value="none">Nobody (hidden)</option>
+            </select>
+          </Field>
+
+          <h4>Height</h4>
+          <Toggle checked={val('fly') === true} onChange={(v) => set({ fly: v, ...(v && !(((val('elev') ?? 0) as number) > g0) ? { elev: g0 + 10 } : {}) })} label="Flying" disabled={!editable}
+            hint="Off the ground. A flyer keeps its height when the ground under it rises or falls." />
+          {val('fly') !== false && (
+            <Field label={sameGround ? 'Height above the ground (feet)' : 'Elevation (feet above the map base)'}
+              hint={sameGround ? 'Measured from the ground right under it.' : 'These tokens are over different ground, so this is measured from the map base level.'}>
+              <input type="number" class="num" step={5} min={sameGround ? 0 : -1000} max={5000} disabled={!editable || val('fly') !== true} value={elevShown}
+                placeholder={val('elev') === null ? 'Mixed' : '0'}
+                onInput={(e) => { const v = (e.target as HTMLInputElement).value; const n = v === '' ? 0 : Math.round(Number(v)); set({ elev: sameGround ? g0 + Math.max(0, n) : n }); }} />
+            </Field>
+          )}
+
+          {client.isDM && (
+            <>
               <h4>Initiative</h4>
-              <Field label="Bonus added to its initiative roll" hint="Remembered for this token. The initiative roller adds it to the d20 for you.">
+              <Field label="Initiative bonus" hint="Added to its d20 when you roll initiative.">
                 <input type="number" class="num" min={-99} max={99} disabled={!editable} value={(draft.initBonus ?? same('initBonus') ?? '') as number | ''}
                   placeholder={val('initBonus') === null ? 'Mixed' : '0'}
                   onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ initBonus: v === '' ? 0 : Math.max(-99, Math.min(99, Math.round(Number(v)))) }); }} />
@@ -279,7 +284,7 @@ function SightLights(props: {
   return (
     <div>
       <h4 style={{ marginTop: 0 }}>Sight</h4>
-      <Field label="Sees as far as (feet)" hint="0: it does not clear fog by itself. Turn on “Tokens clear the fog around them” in the Scene panel.">
+      <Field label="Sees as far as (feet)" hint="Clears fog this far when “Tokens clear the fog around them” is on (Scene tab). 0: it clears none.">
         <div class="row wrap" style={{ marginBottom: 0 }}>
           <input type="number" class="num" min={0} step={5} disabled={!editable} value={sight ?? ''} placeholder={sight === null ? 'Mixed' : '0'}
             onInput={(e) => { const v = (e.target as HTMLInputElement).value; props.onSight(v === '' ? 0 : Math.max(0, Number(v))); }} />
@@ -289,7 +294,7 @@ function SightLights(props: {
 
       <h4>Darkvision</h4>
       <Toggle checked={dvOn} disabled={!editable} onChange={(v) => props.onDv(v ? lastDv.current : 0)} label="Has darkvision"
-        hint={dv === null ? 'These tokens differ. Switching it on or off sets them all alike.' : 'In the dark it sees as if the ground were dim light, out to the distance below (never further than its sight).'} />
+        hint={dv === null ? 'These tokens differ. Switching it on or off sets them all alike.' : 'Sees in the dark as if it were dim light, but never further than its sight.'} />
       {dvOn && (
         <Field label="Darkvision reaches (feet)">
           <div class="row wrap" style={{ marginBottom: 0 }}>
@@ -302,7 +307,7 @@ function SightLights(props: {
 
       <h4>Lights</h4>
       <Toggle checked={light != null} disabled={!editable} onChange={(v) => props.onLight(v ? { ...LIGHT_PRESETS[1].light } : null)} label="Gives off light"
-        hint="Bright out to the first distance, then dim for the second one on top of it (a torch: 20 and 20). It matters once the scene is twilight or dark (Scene panel). Everyone can see where it is." />
+        hint="Bright for the first distance, then dim for the second (a torch: 20 + 20 ft). It only matters in a twilight or dark scene." />
       {light === undefined && <p class="hint">These tokens have different lights. Pick one to give them all the same.</p>}
       {light !== null && (
         <>
@@ -312,7 +317,7 @@ function SightLights(props: {
             </div>
           </Field>
           {saved.length > 0 && (
-            <Field label="Your lights" hint="Made by you and kept in this browser. They also show in the Scene panel when you place a light.">
+            <Field label="Your lights" hint="Kept in this browser.">
               <div class="row wrap" style={{ marginBottom: 0 }}>
                 {pickRow(saved.map((c) => ({ key: c.id, name: c.name, light: c.light, custom: c.id })))}
               </div>
@@ -321,7 +326,7 @@ function SightLights(props: {
         </>
       )}
       {light && (
-        <Field label="Make your own" hint="Set how it shines, then give it a name to keep it for next time.">
+        <Field label="Make your own" hint="Give it a name to keep it for next time.">
           <div class="row wrap" style={{ marginBottom: '8px' }}>
             <label class="field-label">Bright
               <input type="number" class="num" min={0} step={5} disabled={!editable} value={light.b}

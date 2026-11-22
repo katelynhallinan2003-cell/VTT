@@ -119,6 +119,7 @@ check('a plain right click still opens the menu', await (async () => { await dm.
 
 // swap in settings
 await dm.locator('.pill-right button', { hasText: 'Settings' }).click();
+await dm.locator('.modal .tabs button', { hasText: 'Mouse and keys' }).click();
 await dm.locator('.modal .seg button', { hasText: 'Middle mouse' }).click();
 check('settings: Middle-click ping is disabled when pan is middle', await dm.locator('.modal .seg button', { hasText: 'Middle click' }).isDisabled());
 await dm.keyboard.press('Escape');
@@ -128,6 +129,8 @@ await dm.mouse.down({ button: 'middle' }); await dm.mouse.move(850, 440, { steps
 const q1 = await dm.evaluate(() => ({ x: window.__vtt.board.cam.tx, y: window.__vtt.board.cam.ty }));
 check('middle-drag pans after swapping', Math.abs(q1.x - q0.x - 50) < 3 && Math.abs(q1.y - q0.y - 40) < 3, `${q0.x},${q0.y} -> ${q1.x},${q1.y}`);
 check('settings persist', (await dm.evaluate(() => localStorage.getItem('vtt-pan-button'))) === 'middle');
+// (earlier pings fade by themselves: wait for them to go, so one fading while the new one appears is not counted as "no ping")
+await dm.waitForFunction(() => window.__vtt.board.pings.length === 0, null, { timeout: 8000 }).catch(() => {});
 const before = await pings();
 await dm.mouse.move(700, 300);
 await dm.mouse.down(); await sleep(900); await dm.mouse.up(); await sleep(300);

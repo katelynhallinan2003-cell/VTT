@@ -48,8 +48,8 @@ export async function uploadImage(client: TableClient, file: Blob, kind: 'map' |
       return { url, thumb: url, w: prepared.w, h: prepared.h };
     }
     throw new Error(client.isDM
-      ? 'Add your imgbb API key in Settings → Uploads before uploading images.'
-      : 'The DM has not set up image uploads yet. You can paste an image link instead.');
+      ? 'Add your imgbb API key in Settings → Pictures and files before uploading pictures.'
+      : 'The DM has not set up picture uploads yet. You can paste a link to a picture instead.');
   }
   const res = await uploadToImgbb(prepared.blob, key, prepared.name);
   const out = { ...res, w: res.w || prepared.w, h: res.h || prepared.h };

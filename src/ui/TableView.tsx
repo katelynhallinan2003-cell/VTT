@@ -9,7 +9,7 @@ import type { SavedToken } from '../core/tokenlib';
 import type { AuthUser, LibraryItem, Rect, Token, Vec } from '../types';
 import { HandoutsModal } from './handouts';
 import { Toasts, copyText, toast, useClient, useTheme, useUi } from './common';
-import { AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewFolderModal, NewSceneModal, ScenesModal, SettingsModal } from './modals';
+import { AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewFolderModal, NewSceneModal, ScenesModal, SettingsModal, type SettingsTab } from './modals';
 import { SceneBar } from './sceneBar';
 import { saveTokensToLibrary } from './tokenLib';
 import { droppedImage } from './uploads';
@@ -26,7 +26,7 @@ type ModalState =
   | { kind: 'scenes' }
   | { kind: 'newFolder' }
   | { kind: 'library' }
-  | { kind: 'settings' }
+  | { kind: 'settings'; tab?: SettingsTab }
   | { kind: 'claim' }
   | { kind: 'handouts'; openId?: string | null }
   | { kind: 'editToken'; ids: string[] }
@@ -61,7 +61,8 @@ const DropIcon = (props: { size?: number }) => (
 
 function ToolBtn(props: { icon: keyof typeof ICONS; label: string; hotkey?: string; on?: boolean; /** a plain on/off switch, not the active tool: shown more quietly */ toggle?: boolean; disabled?: boolean; onClick: () => void }) {
   return (
-    <button class={`tool ${props.on ? (props.toggle ? 'toggled' : 'on') : ''}`} disabled={props.disabled} title={`${props.label}${props.hotkey ? ` (${props.hotkey})` : ''}`} aria-label={props.label} onClick={props.onClick}>
+    // the name (and its key) shows beside the button the moment the pointer is on it: see .tool[data-tip] in styles.css
+    <button class={`tool ${props.on ? (props.toggle ? 'toggled' : 'on') : ''}`} disabled={props.disabled} data-tip={`${props.label}${props.hotkey ? `  (${props.hotkey})` : ''}`} aria-label={props.label} aria-keyshortcuts={props.hotkey} onClick={props.onClick}>
       <Icon d={ICONS[props.icon]} />
     </button>
   );
@@ -87,17 +88,44 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
   /** a handout the DM just showed: it opens over whatever else is open, so it is never missed */
   const [popup, setPopup] = useState<string | null>(null);
   const topRef = useRef<HTMLDivElement>(null);
-  // the turn order sits just under whatever hangs from the top edge
+  // What hangs from the top edge (notes, the test-move bar, warnings) sits between the two halves of the top bar when there is room
+  // for it there, and just under the top bar when there is not, so it never covers the scene picker or the buttons.
+  // The turn order goes beside or under it the same way.
   useEffect(() => {
     const el = topRef.current;
     const root = el?.parentElement;
     if (!el || !root) return;
-    const set = () => root.style.setProperty('--topstack-h', `${el.offsetHeight}px`);
-    set();
-    const ro = new ResizeObserver(set);
+    const lay = () => {
+      const box = root.getBoundingClientRect();
+      const pl = root.querySelector('.pill-left')?.getBoundingClientRect();
+      const pr = root.querySelector('.pill-right')?.getBoundingClientRect();
+      const l = pl ? pl.right - box.left + 8 : 360;
+      const r = pr ? box.right - pr.left + 8 : 340;
+      const free = box.width - l - r;
+      const low = el.offsetWidth > free;
+      el.classList.toggle('low', low);
+      if (low) root.dataset.topLow = '1'; else delete root.dataset.topLow;
+      // the turn order needs room for a handful of boxes: with less than that beside the top bar it goes under it too
+      if (free < 480) root.dataset.stripLow = '1'; else delete root.dataset.stripLow;
+      const h = el.offsetHeight;
+      root.style.setProperty('--pill-l', `${Math.round(l)}px`);
+      root.style.setProperty('--pill-r', `${Math.round(r)}px`);
+      root.style.setProperty('--topstack-h', `${low && h ? h + 54 : h}px`);
+    };
+    lay();
+    const ro = new ResizeObserver(lay);
     ro.observe(el);
+    ro.observe(root);
+    for (const pill of root.querySelectorAll('.pill')) ro.observe(pill);
     return () => ro.disconnect();
   }, []);
+
+  // the browser tab is named after the table, so a DM with several tables (or a test player in the next tab) can tell them apart
+  const tableName = client.meta?.name;
+  useEffect(() => {
+    document.title = tableName ? `${tableName} · Table` : 'Table';
+    return () => { document.title = 'Table'; };
+  }, [tableName]);
 
   // Esc closes the right-click menu (and stops there, so it doesn't also clear the selection)
   useEffect(() => {
@@ -115,7 +143,8 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       onGridRect: (rect, derived) => setModal({ kind: 'grid', rect, derived }),
       onMapError: setMapError,
       onTokenImageError: (m) => toast(m, 'error', 9000),
-      onNotice: (m, k) => toast(m, k, 1800),
+      // a note stays long enough to be read: a couple of words a couple of seconds, a sentence or two longer
+      onNotice: (m, k) => toast(m, k, Math.max(1800, 900 + m.length * 45)),
     });
     let dead = false;
     void b.init().then(() => { if (!dead) { boardRef.current = b; setBoard(b); (window as any).__vtt = { client, ui, board: b }; } });
@@ -165,7 +194,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
       if (e.ctrlKey || e.metaKey || e.altKey || modalRef.current) return;
-      if (e.key === '?') { e.preventDefault(); setModal({ kind: 'settings' }); }
+      if (e.key === '?') { e.preventDefault(); setModal({ kind: 'settings', tab: 'keys' }); }
       if (e.key.toLowerCase() === 't' && client.canDo('create')) openAddToken();
       if (e.key.toLowerCase() === 'e') {
         const ids = [...ui.data.selection].filter((id) => { const t = client.scene?.tokens.get(id); return t && client.canDo('edit', t); });
@@ -205,6 +234,9 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
     e.preventDefault();
     dragDepth.current = 0;
     setDragging(false);
+    // a window that is open keeps the page: a picture dropped behind Settings or a handout does not start a token under it
+    // (New scene and Add token take a dropped picture themselves)
+    if (modalRef.current) return;
     const got = droppedImage(e);
     if (got === 'other') { toast('That file is not a picture.', 'error'); return; }
     if (got === 'none' || !('file' in got)) return;
@@ -300,16 +332,18 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {/* ---------------- left toolbar */}
       <nav class="toolbar">
         <ToolBtn icon="select" label="Select / move" hotkey="V" on={d.tool === 'select'} onClick={() => ui.set({ tool: 'select' })} />
-        {client.isDM && <ToolBtn icon="grid" label={gridOn ? 'Hide the grid' : 'Show the grid'} hotkey="G" on={gridOn} toggle disabled={!scene?.meta} onClick={() => void client.updateScene({ grid: { visible: !gridOn } })} />}
-        {client.isDM && <ToolBtn icon="fog" label="Fog of war" hotkey="F" on={d.tool === 'fog'} onClick={() => ui.set({ tool: d.tool === 'fog' ? 'select' : 'fog' })} />}
         <ToolBtn icon="token" label="Add token" hotkey="T" onClick={() => client.canDo('create') ? openAddToken() : toast('You are not allowed to add tokens.', 'error')} />
+        <ToolBtn icon="ruler" label="Ruler" hotkey="R" on={d.tool === 'ruler'} disabled={!client.canDo('measure')} onClick={() => ui.set({ tool: d.tool === 'ruler' ? 'select' : 'ruler' })} />
         <div class="tool-sep" />
         <ToolBtn icon="draw" label="Draw and write" hotkey="P" on={d.tool === 'draw'} disabled={!client.canDo('draw')} onClick={() => ui.set({ tool: d.tool === 'draw' ? 'select' : 'draw' })} />
         <ToolBtn icon="template" label="Spell templates" hotkey="C" on={d.tool === 'template'} disabled={!client.canDo('template')} onClick={() => ui.set({ tool: d.tool === 'template' ? 'select' : 'template' })} />
-        <ToolBtn icon="ruler" label="Ruler" hotkey="R" on={d.tool === 'ruler'} disabled={!client.canDo('measure')} onClick={() => ui.set({ tool: d.tool === 'ruler' ? 'select' : 'ruler' })} />
-        {client.isDM && <ToolBtn icon="height" label="Heights: draw high and low ground" hotkey="H" on={d.tool === 'height'} onClick={() => ui.set({ tool: d.tool === 'height' ? 'select' : 'height' })} />}
-        {client.isDM && <ToolBtn icon="wall" label="Walls: draw walls, doors and windows" hotkey="B" on={d.tool === 'wall'} onClick={() => ui.set({ tool: d.tool === 'wall' ? 'select' : 'wall' })} />}
         <ToolBtn icon="test" label="Test move: try a move without making it" hotkey="M" on={d.testMove} onClick={() => ui.set({ testMove: !d.testMove })} />
+        {client.isDM && <div class="tool-sep" />}
+        {/* the DM's tools for setting a scene up and running a fight */}
+        {client.isDM && <ToolBtn icon="grid" label={gridOn ? 'Hide the grid' : 'Show the grid'} hotkey="G" on={gridOn} toggle disabled={!scene?.meta} onClick={() => void client.updateScene({ grid: { visible: !gridOn } })} />}
+        {client.isDM && <ToolBtn icon="fog" label="Fog of war" hotkey="F" on={d.tool === 'fog'} onClick={() => ui.set({ tool: d.tool === 'fog' ? 'select' : 'fog' })} />}
+        {client.isDM && <ToolBtn icon="wall" label="Walls: draw walls, doors and windows" hotkey="B" on={d.tool === 'wall'} onClick={() => ui.set({ tool: d.tool === 'wall' ? 'select' : 'wall' })} />}
+        {client.isDM && <ToolBtn icon="height" label="Heights: draw high and low ground" hotkey="H" on={d.tool === 'height'} onClick={() => ui.set({ tool: d.tool === 'height' ? 'select' : 'height' })} />}
         {client.isDM && <ToolBtn icon="init" label="Initiative: roll and keep the turn order" hotkey="I" on={d.initOpen} toggle onClick={() => ui.set({ initOpen: !d.initOpen })} />}
         <div class="tool-sep" />
         <ToolBtn icon="undo" label={client.history.undoLabel ? `Undo: ${client.history.undoLabel}` : 'Undo'} hotkey="Ctrl+Z" disabled={!client.history.canUndo} onClick={() => void board?.runHistory('undo')} />
@@ -346,8 +380,8 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
           <p class="hint">{d.fogShape === 'poly' ? 'Click points, then click the first point, double-click or press Enter to finish.' : d.fogShape === 'brush' ? 'Hold and drag to paint.' : 'Drag a box.'}</p>
           <div class="row wrap">
             <button class="btn small" onClick={() => void client.undoFog()}>Undo</button>
-            <button class="btn small" onClick={() => void client.resetFog('hidden')}>Hide all</button>
-            <button class="btn small" onClick={() => void client.resetFog('clear')}>Reveal all</button>
+            <button class="btn small" onClick={() => void client.resetFog('hidden')}>Hide everything</button>
+            <button class="btn small" onClick={() => void client.resetFog('clear')}>Reveal everything</button>
           </div>
           <label class="toggle"><input type="checkbox" checked={d.dmPreview} onChange={(e) => ui.set({ dmPreview: (e.target as HTMLInputElement).checked })} /><span class="toggle-text">Preview as players</span></label>
         </div>
@@ -388,13 +422,12 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
 
       {/* ---------------- overlays */}
       {d.status && <div class="status">{d.status}</div>}
-      {mapError && <div class="banner error">{mapError} <button class="btn small" onClick={() => board?.retryMap()}>Try again</button></div>}
-      {client.lastError && client.isDM && <div class="banner error">Database error: {client.lastError}</div>}
+
       {!client.metaLoaded && <div class="splash-center">Connecting…</div>}
       {showEmpty && client.isDM && (
         <div class="empty-card">
           <h2>Create your first scene</h2>
-          <p>Upload a map, then set the grid and place tokens.</p>
+          <p>Start with a map picture, then place your tokens.</p>
           <button class="btn primary" onClick={() => setModal({ kind: 'newScene' })}>+ New scene</button>
           <p class="drop-tip"><DropIcon /> or drag a map picture anywhere onto this page</p>
         </div>
@@ -411,22 +444,26 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       )}
       {client.metaLoaded && !client.isDM && !client.activeSceneId && <div class="empty-card"><h2>Waiting for the DM…</h2><p>No scene is being shown yet.</p></div>}
       {scene?.meta && !scene.meta.mapUrl && client.isDM && <div class="hint-chip">This scene has no map yet. <button class="link" onClick={() => ui.set({ dockTab: 'scene' })}>Add one in the Scene tab</button>.</div>}
-      {client.isDM && client.metaLoaded && client.backend.kind === 'firebase' && !client.uploadKey && (
-        <div class="banner info">
-          Add your imgbb API key to upload maps and tokens.{' '}
-          <button class="btn small primary" onClick={() => setModal({ kind: 'settings' })}>Open settings</button>
-        </div>
-      )}
-      {/* ---------------- top middle: things that hang from the top edge */}
+      {/* ---------------- top middle: things that hang from the top edge, one under the other so none covers another */}
       <div class="topstack" ref={topRef}>
         {client.isDM && !live && client.viewSceneId && <div class="topchip warn">Private scene: players can't see this yet</div>}
-        {client.isDM && d.dmPreview && <div class="topchip">Previewing what players see</div>}
+        {client.isDM && d.dmPreview && <div class="topchip">Previewing what players see <button class="link" onClick={() => ui.set({ dmPreview: false })}>Stop</button></div>}
         <TestMoveBar ui={ui} board={board} />
+        {mapError && <div class="banner error">{mapError} <button class="btn small" onClick={() => board?.retryMap()}>Try again</button></div>}
+        {client.lastError && client.isDM && <div class="banner error">Database error: {client.lastError}</div>}
+        {client.isDM && client.metaLoaded && client.backend.kind === 'firebase' && !client.uploadKey && (
+          <div class="banner info">
+            Add your imgbb API key to upload maps and tokens.{' '}
+            <button class="btn small primary" onClick={() => setModal({ kind: 'settings', tab: 'files' })}>Open settings</button>
+          </div>
+        )}
       </div>
 
       {/* ---------------- context menu */}
       {menu && menuItems.length > 0 && (
-        <div class="ctx-back" onMouseDown={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null); }}>
+        // a press anywhere outside the menu closes it. The browser's own menu is only kept away here, never used to close ours:
+        // on Windows the "context menu" event arrives after the button is let go, which is just after this menu has opened
+        <div class="ctx-back" onMouseDown={() => setMenu(null)} onContextMenu={(e) => e.preventDefault()}>
           <div class="ctx" style={{ left: `${Math.max(0, Math.min(menu.x, window.innerWidth - 220))}px`, top: `${Math.max(0, Math.min(menu.y, window.innerHeight - menuItems.length * 34 - 16))}px` }} onMouseDown={(e) => e.stopPropagation()}>
             {menuItems.map((it) => <button key={it.label} class={it.danger ? 'danger' : ''} onClick={() => { setMenu(null); it.onClick(); }}>{it.label}</button>)}
           </div>
@@ -441,7 +478,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {modal?.kind === 'newFolder' && <NewFolderModal client={client} onClose={() => setModal(null)} onCreated={(id) => ui.set({ sceneFolder: id })} />}
       {modal?.kind === 'scenes' && <ScenesModal client={client} onClose={() => setModal(null)} onNew={() => setModal({ kind: 'newScene' })} onNewFolder={() => setModal({ kind: 'newFolder' })} />}
       {modal?.kind === 'library' && <LibraryModal client={client} onClose={() => setModal(null)} onUseMap={useLibraryMap} onAddToken={addLibraryToken} onAddSaved={(e) => { void addSavedToken(e); setModal(null); }} />}
-      {modal?.kind === 'settings' && <SettingsModal client={client} ui={ui} onClose={() => setModal(null)} onSignOut={client.isDM ? props.onSignOut : undefined} />}
+      {modal?.kind === 'settings' && <SettingsModal key={modal.tab ?? 'first'} client={client} ui={ui} tab={modal.tab} onClose={() => setModal(null)} onSignOut={client.isDM ? props.onSignOut : undefined} />}
       {modal?.kind === 'editToken' && <TokenEditorModal client={client} ids={modal.ids} onClose={() => setModal(null)} />}
       {modal?.kind === 'handouts' && <HandoutsModal key={modal.openId ?? 'list'} client={client} openId={modal.openId ?? null} onClose={() => setModal(null)} />}
       {popup && <HandoutsModal key={'popup-' + popup} client={client} openId={popup} onClose={() => setPopup(null)} />}

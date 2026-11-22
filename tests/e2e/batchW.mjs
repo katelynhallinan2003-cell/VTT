@@ -46,7 +46,7 @@ check('players have none while nothing is shown to them', (await handoutsBtn(ari
 
 // ---- make one
 await handoutsBtn(dm).click();
-await dm.locator('.modal', { hasText: 'Nothing yet' }).waitFor();
+await dm.locator('.modal', { hasText: 'No handouts yet' }).waitFor();
 await dm.getByRole('button', { name: '+ New handout' }).click();
 const save = dm.locator('.modal .btn.primary', { hasText: 'Save' });
 check('an empty one cannot be saved', await save.isDisabled());

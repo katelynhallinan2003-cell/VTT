@@ -130,7 +130,7 @@ check('the right-click menu teleports the token there', Math.abs(pos.x - target.
 // ---- settings list
 await dm.keyboard.press('Escape');
 await dm.keyboard.press('Shift+Slash');
-await dm.locator('.modal', { hasText: 'Keyboard' }).waitFor();
+await dm.locator('.modal', { hasText: 'Shortcuts' }).waitFor();
 const keys = await dm.locator('.keys').innerText();
 check('the hotkey list covers the new keys', /pan the view/.test(keys) && /teleport/i.test(keys) && /spell templates/.test(keys) && /next \/ previous token/.test(keys));
 await dm.screenshot({ path: '/tmp/shots/y3-keys.png' });

@@ -474,16 +474,18 @@ export const FILL_BAND = 3;
 /**
  * Fill the lines in, on a copy of the picture's pixels (changed in place).
  *
- * Each line is worked out to a fraction of a pixel. Every pixel on it is replaced by a blend between the average of a few
- * pixels just outside it on one side and the same on the other (a single neighbour would copy its speck of noise, and one
- * that is still part of the line's soft edge would leave a faint streak). Pixels at the edge of the zone are only partly
- * replaced, so no seam shows where the fill ends.
+ * Continuous lines blend into the surrounding pixels at their soft edges. For dotted lines, fill only the
+ * measured dot cores where the local contrast also agrees with the ink. Measure both axes before editing either.
  */
 export function hideGrid(img: PixelImage, cut: Pick<GridCut, 'p' | 'x' | 'y' | 't'>): void {
   const { width: W, height: H } = img;
   // down the vertical lines, then across the horizontal ones (the crossings are filled from rows that are already clean)
-  fillLines(img.data, { along: H, alongStride: W * 4, across: W, acrossStride: 4 }, cut.x, cut.p, cut.t);
-  fillLines(img.data, { along: W, alongStride: 4, across: H, acrossStride: W * 4 }, cut.y, cut.p, cut.t);
+  const vertical = { along: H, alongStride: W * 4, across: W, acrossStride: 4 };
+  const horizontal = { along: W, alongStride: 4, across: H, acrossStride: W * 4 };
+  const verticalDots = dotPattern(img.data, vertical, cut.x, cut.y, cut.p, cut.t);
+  const horizontalDots = dotPattern(img.data, horizontal, cut.y, cut.x, cut.p, cut.t);
+  fillLines(img.data, vertical, cut.x, cut.p, cut.t, verticalDots);
+  fillLines(img.data, horizontal, cut.y, cut.p, cut.t, horizontalDots);
 }
 
 interface Axis {
@@ -495,7 +497,68 @@ interface Axis {
   acrossStride: number;
 }
 
-function fillLines(data: Uint8ClampedArray | Uint8Array, ax: Axis, first: number, p: number, t: number): void {
+interface DotPattern { ink: Uint8Array; sign: number }
+
+/** Read the ink along parallel strokes. A dotted grid has a short repeating pulse with clear paper between dots. */
+function dotPattern(data: PixelImage['data'], ax: Axis, first: number, crossing: number, p: number, t: number): DotPattern | null {
+  const flank = Math.ceil(t / 2) + 1;
+  const centres: number[] = [];
+  const step = Math.max(1, Math.ceil(ax.across / p / 64)) * p;
+  for (let c = first + Math.ceil((flank - first) / p) * p; c < ax.across - flank - 1; c += step) centres.push(Math.round(c) * ax.acrossStride);
+  if (centres.length < 5 || ax.along < 48) return null;
+  const brightness = (q: number) => (data[q] + 2 * data[q + 1] + data[q + 2]) / 4;
+  const profile = new Float32Array(ax.along);
+  const valid = new Uint8Array(ax.along);
+  const values: number[] = [];
+  const sample = new Float32Array(centres.length);
+  const side = flank * ax.acrossStride;
+  for (let i = 0; i < ax.along; i++) {
+    const delta = i - crossing;
+    if (Math.abs(delta - Math.round(delta / p) * p) <= flank) continue;
+    for (let j = 0; j < centres.length; j++) {
+      const q = i * ax.alongStride + centres[j];
+      sample[j] = (brightness(q - side) + brightness(q + side)) / 2 - brightness(q);
+    }
+    sample.sort();
+    profile[i] = sample[sample.length >> 1];
+    valid[i] = 1;
+    values.push(profile[i]);
+  }
+  if (values.length < 32) return null;
+  values.sort((a, b) => a - b);
+  const lo = values[Math.floor(values.length * 0.12)], hi = values[Math.floor(values.length * 0.88)];
+  const sign = Math.abs(hi) >= Math.abs(lo) ? 1 : -1;
+  const peak = sign === 1 ? hi : -lo, gap = sign === 1 ? lo : -hi;
+  if (peak < 6 || gap > 0.35 * peak) return null;
+  // Compare the pulse to itself. Solid strokes with incidental texture should stay on the solid-line path.
+  const threshold = (peak + gap) / 2;
+  const ink = Uint8Array.from(profile, v => Number(sign * v > threshold));
+  let period = 0, sawMismatch = false;
+  for (let lag = 1; lag <= Math.min(24, p / 2); lag++) {
+    let mismatches = 0, pairs = 0;
+    for (let i = lag; i < ax.along; i++) if (valid[i] && valid[i - lag]) {
+      mismatches += Number(ink[i] !== ink[i - lag]);
+      pairs++;
+    }
+    if (pairs < 24) continue;
+    if (mismatches / pairs > 0.27) sawMismatch = true;
+    if (sawMismatch && mismatches / pairs < 0.12) { period = lag; break; }
+  }
+  if (!period) return null;
+  // Perpendicular strokes obscure the pulse at intersections. Read the nearest clear cycle on either side.
+  for (let i = 0; i < ink.length; i++) if (!valid[i]) {
+    let vote = 0, count = 0;
+    for (const dir of [-1, 1]) {
+      for (let j = i + dir * period; j >= 0 && j < ink.length; j += dir * period) {
+        if (valid[j]) { vote += ink[j]; count++; break; }
+      }
+    }
+    ink[i] = Number(count > 0 && vote * 2 > count);
+  }
+  return { ink, sign };
+}
+
+function fillLines(data: Uint8ClampedArray | Uint8Array, ax: Axis, first: number, p: number, t: number, dots: DotPattern | null): void {
   const half = Math.max(0.5, t / 2) + 0.5;
   const reach = half + FEATHER;
   // where the pixels the fill is taken from begin (kept clear of the next line when the lines are close)
@@ -507,6 +570,28 @@ function fillLines(data: Uint8ClampedArray | Uint8Array, ax: Axis, first: number
   let c = first - Math.ceil((first + reach) / p) * p;
   for (; c < across + reach; c += p) {
     if (c + reach < 0 || c - reach > across - 1) continue;
+    if (dots) {
+      const radius = Math.max(0.5, t / 2);
+      const start = Math.max(0, Math.ceil(c - radius)), end = Math.min(across - 1, Math.floor(c + radius));
+      const left = start - 1, right = end + 1;
+      if (left < 0 && right >= across) continue;
+      for (let i = 0; i < along; i++) {
+        if (!dots.ink[i]) continue;
+        const row = i * alongStride;
+        const a = row + (left >= 0 ? left : right) * acrossStride;
+        const b = row + (right < across ? right : left) * acrossStride;
+        const lightA = data[a] + 2 * data[a + 1] + data[a + 2];
+        const lightB = data[b] + 2 * data[b + 1] + data[b + 2];
+        for (let x = start; x <= end; x++) {
+          const f = (x - left) / (right - left);
+          const q = row + x * acrossStride;
+          const light = data[q] + 2 * data[q + 1] + data[q + 2];
+          if (dots.sign * (lightA * (1 - f) + lightB * f - light) <= 8) continue; // two luma levels
+          for (let k = 0; k < 3; k++) data[q + k] = Math.round(data[a + k] * (1 - f) + data[b + k] * f);
+        }
+      }
+      continue;
+    }
     const lo = Math.round(c - gap - n + 1), hi = Math.round(c - gap);
     const lo2 = Math.round(c + gap), hi2 = Math.round(c + gap + n - 1);
     const x0 = Math.max(0, Math.ceil(c - reach)), x1 = Math.min(across - 1, Math.floor(c + reach));

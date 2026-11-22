@@ -30,6 +30,7 @@ export const CORPUS: Case[] = [
   withGrid('dungeon: white around the rooms, thin grey lines', { W: 1500, H: 1200, seed: 6, ground: 'paper', rooms: { count: 6, fill: 246, walls: 4 } }, sq(50, 25, 25, 1, 60)),
   withGrid('a lot of furniture over the lines', { W: 1400, H: 1050, seed: 7, clutter: 70 }, sq(70, 35, 35, 2, 55)),
   withGrid('dashed lines', { W: 1400, H: 1050, seed: 8 }, sq(70, 14, 30, 2, 60, { style: 'dashed' })),
+  withGrid('light dots over textured stone with exposed gaps', { W: 960, H: 800, seed: 93, ground: 'dark' }, sq(49, 16.5, 10.5, 2, 44, { light: true, style: 'dotted' })),
   withGrid('dotted cavern grid with an odd spacing on a reduced preview', { W: 2280, H: 1710, seed: 87, ground: 'painted' }, sq(57, 56.5, 56.5, 2, 24, { style: 'dotted' })),
   withGrid('widely spaced dotted lines with clear ground between them', { W: 2280, H: 1710, seed: 88, ground: 'painted' }, sq(114, 23.5, 51.5, 2, 45, { style: 'dotted' })),
   withGrid('only little crosses at the corners', { W: 1400, H: 1050, seed: 9 }, sq(70, 50, 12, 2, 80, { style: 'corners' })),

@@ -104,6 +104,32 @@ describe('finding a printed grid', () => {
 });
 
 describe('hiding the grid', () => {
+  it.each([[4, false], [7, true]])('preserves ink-free pixels while removing dots (repeat %i, light %s)', (repeat, light) => {
+    const period = Number(repeat);
+    const { width, height, data } = mapWith(610, 490, 49, 0, 0, 2, { noGrid: true });
+    // An opaque, unprinted piece of the artwork covers part of the grid.
+    for (let y = 180; y < 280; y++) for (let x = 220; x < 330; x++) {
+      const q = (y * width + x) * 4;
+      data[q] = 155 + (x % 2) * 2;
+      data[q + 1] = 125; data[q + 2] = 95;
+    }
+    const ground = data.slice();
+    const ink = new Uint8Array(width * height);
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      if (y >= 180 && y < 280 && x >= 220 && x < 330) continue;
+      if (!(x % 49 < 2 && y % period < 2 || y % 49 < 2 && x % period < 2)) continue;
+      ink[y * width + x] = 1;
+      for (let c = 0; c < 3; c++) data[(y * width + x) * 4 + c] += light ? 55 : -55;
+    }
+    hideGrid({ width, height, data }, { p: 49, x: 0.5, y: 0.5, t: 2.25 });
+    let collateral = 0, error = 0, count = 0;
+    for (let i = 0; i < ink.length; i++) {
+      if (ink[i]) { error += Math.abs(data[i * 4] - ground[i * 4]); count++; }
+      else if (data[i * 4] !== ground[i * 4] || data[i * 4 + 1] !== ground[i * 4 + 1] || data[i * 4 + 2] !== ground[i * 4 + 2]) collateral++;
+    }
+    expect(collateral).toBe(0);
+    expect(error / count).toBeLessThan(16);
+  });
   it('fills the lines in so they no longer stand out', () => {
     const img = mapWith(500, 400, 50, 13, 7, 2);
     const before = lineContrast(img, 50, 13, 7, 2);

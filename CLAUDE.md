@@ -48,6 +48,8 @@ Read `CLAUDE.md` (this file) and `WIP.md` before doing anything else in a sessio
 
 ## Design precedents
 
+- **Dotted square grids.** When a short repeating dot pattern is visible across parallel grid lines, repair only the dot cores that show ink contrast. Keep the gaps and surrounding texture intact.
+
 - **Library picture deletion.** Keep ImgBB's private deletion link with the owning DM's library item. Campaign exports and shared scene and token data carry only picture URLs. The DM confirms hosted deletion on ImgBB before finishing removal in the VTT.
 
 - **Maps without a clear printed grid.** Start gridless with free movement and straight-line measurement. The DM can calibrate ten feet with two points, then choose squares, hex rows, hex columns or no overlay. Changing the overlay preserves the map scale.

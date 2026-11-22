@@ -42,7 +42,7 @@ export function SavedTokenGrid(props: { client: TableClient; empty: string; acti
             <div class="lib-name" title={e.name}>{e.name}{effects > 0 && <span class="muted small"> · {effects} effect{effects === 1 ? '' : 's'}</span>}</div>
             <div class="lib-actions">
               <button class="btn small" disabled={props.disabled?.(e)} onClick={() => props.onAction(e)}>{props.action(e)}</button>
-              <button class="btn small danger" title="Remove from my library" onClick={() => void removeTokenFromLib(client.backend, client.uid, e.id)}>✕</button>
+              <button class="btn small danger" title="Remove from my library" onClick={() => void removeTokenFromLib(client.backend, client.libPath, e.id)}>✕</button>
             </div>
           </div>
         );

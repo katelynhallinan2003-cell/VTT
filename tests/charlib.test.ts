@@ -31,7 +31,7 @@ async function setup() {
   pl.start();
   await waitFor(() => pl.scene?.id === s1 && !!pl.scene.meta, 'player scene');
   await pl.joinAsPlayer('Aria', '#ff0000');
-  return { dm, pl, dmB, plB, tid, s1, s2 };
+  return { dm, pl, dmB, plB, tid, s1, s2, channel };
 }
 
 describe('the DM\'s saved tokens', () => {
@@ -140,5 +140,65 @@ describe('the party travels with its hit points', () => {
     // players see only what the token's health display allows
     await waitFor(() => pl.scene!.tokens.get(nid)?.hpPct === 36, 'public percentage');
     void s1;
+  }, 20000);
+});
+
+describe('a returning player takes their name back', () => {
+  async function newcomer(channel: string, tid: string, uid: string) {
+    const b = new MockBackend({ persist: false, channel });
+    b.forceUser(user(uid, true));
+    const c = new TableClient(b, tid, uid, 'player');
+    c.start();
+    await waitFor(() => !!c.scene?.meta, 'newcomer scene');
+    return { b, c };
+  }
+
+  it('their saved characters come back, and the DM hands their token to the new browser', async () => {
+    const { dm, pl, plB, tid, channel } = await setup();
+    const id = await pl.addToken({ x: 70, y: 70, name: 'Aria' }, { record: false });
+    await waitFor(() => !!pl.scene!.tokens.get(id) && !!dm.scene!.tokens.get(id), 'token');
+    const cid = (await pl.saveTokenToLibrary(id))!;
+    await waitFor(() => pl.tokenLib.length === 1 && dm.scene!.tokens.get(id)?.cid === cid, 'saved');
+    // the characters are kept with the table, not under the browser's account
+    expect(Object.keys((await plB.get(`tables/${tid}/chars/p1`)) ?? {})).toEqual([cid]);
+    expect(await plB.get('users/p1/tokenLib')).toBeNull();
+    // she is on a new browser (new uid); the old one has gone offline
+    await plB.update({ [`tables/${tid}/players/p1/online`]: false });
+    const { c } = await newcomer(channel, tid, 'p9');
+    await waitFor(() => c.players.has('p1'), 'sees the old entry');
+    expect(c.players.get('p1')!.rid).toBe('p1');
+    expect(c.tokenLib).toHaveLength(0); // before picking her name, nothing
+    await c.joinAsPlayer('Aria', '#ff0000', c.players.get('p1')!.rid);
+    await waitFor(() => c.tokenLib.length === 1, 'characters come back');
+    expect(c.tokenLib[0].id).toBe(cid);
+    // the DM merges the old entry into the new one: token reassigned, one Aria in the list
+    await waitFor(() => dm.scene!.tokens.get(id)?.ownerUid === 'p9' && !dm.players.has('p1'), 'merged', 6000);
+    expect(dm.players.get('p9')!.rid).toBe('p1');
+    // changes she saves now go to the same library
+    await c.saveTokenToLibrary(id);
+    expect(c.libPath).toBe(`tables/${tid}/chars/p1`);
+  }, 20000);
+
+  it('an old entry that is still online (a second device) is left alone', async () => {
+    const { dm, pl, tid, channel } = await setup();
+    const { c } = await newcomer(channel, tid, 'p9');
+    await waitFor(() => c.players.has('p1'), 'sees the old entry');
+    await c.joinAsPlayer('Aria', '#ff0000', 'p1');
+    await sleep(900);
+    expect(dm.players.has('p1')).toBe(true);
+    expect(dm.players.has('p9')).toBe(true);
+    void pl;
+  }, 20000);
+
+  it('a different player cannot see her characters just by being on the table', async () => {
+    const { pl, tid, channel } = await setup();
+    const id = await pl.addToken({ x: 70, y: 70, name: 'Aria' }, { record: false });
+    await waitFor(() => !!pl.scene!.tokens.get(id), 'token');
+    await pl.saveTokenToLibrary(id);
+    const { c } = await newcomer(channel, tid, 'p7');
+    await c.joinAsPlayer('Bo', '#00ff00');
+    await sleep(300);
+    expect(c.libPath).toBe(`tables/${tid}/chars/p7`);
+    expect(c.tokenLib).toHaveLength(0);
   }, 20000);
 });

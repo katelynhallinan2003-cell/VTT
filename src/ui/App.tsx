@@ -5,7 +5,7 @@ import { PLAYER_COLORS } from '../core/model';
 import { createTable, getTableName, getTableOwner, isAllowedDM, watchUserTables } from '../state/account';
 import { TableClient } from '../state/client';
 import { P } from '../state/paths';
-import type { AppConfig, AuthUser, UserTableEntry } from '../types';
+import type { AppConfig, AuthUser, Player, UserTableEntry } from '../types';
 import { Toasts, copyText, toast, useRerender } from './common';
 import { TableView } from './TableView';
 
@@ -206,8 +206,18 @@ function JoinForm(props: { client: TableClient; tableName: string; onJoined: () 
   const [name, setName] = useState(() => localStorage.getItem('vtt-name') ?? '');
   const [color, setColor] = useState(() => localStorage.getItem('vtt-color') ?? PLAYER_COLORS[Math.floor(Math.random() * PLAYER_COLORS.length)]);
   const [busy, setBusy] = useState(false);
+  // a name picked from the people who have played here before: it brings their saved characters back
+  const [rid, setRid] = useState<string | null>(null);
   useRerender((fn) => props.client.subscribe(fn), [props.client]);
   const taken = useMemo(() => new Set([...props.client.players.values()].map((p) => p.color)), [props.client.players.size]);
+  const before = [...props.client.players.values()]
+    .filter((p) => !p.dm && p.uid !== props.client.uid)
+    .filter((p, i, all) => all.findIndex((q) => q.rid === p.rid) === i)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const pick = (p: Player) => {
+    if (rid === p.rid) { setRid(null); return; }
+    setRid(p.rid); setName(p.name); setColor(p.color);
+  };
 
   const join = async () => {
     if (!name.trim()) return;
@@ -215,7 +225,7 @@ function JoinForm(props: { client: TableClient; tableName: string; onJoined: () 
     try {
       localStorage.setItem('vtt-name', name.trim());
       localStorage.setItem('vtt-color', color);
-      await props.client.joinAsPlayer(name.trim(), color);
+      await props.client.joinAsPlayer(name.trim(), color, rid ?? undefined);
       props.onJoined();
     } catch (e) {
       toast(`Could not join: ${asErr(e)}`, 'error');
@@ -227,7 +237,18 @@ function JoinForm(props: { client: TableClient; tableName: string; onJoined: () 
     <div class="screen center">
       <div class="card">
         <h1>Join “{props.tableName}”</h1>
-        <label class="field"><span class="field-label">Your name</span>
+        {before.length > 0 && (
+          <div class="field"><span class="field-label">Played here before? Pick your name to get your characters back</span>
+            <div class="chips">
+              {before.map((p) => (
+                <button key={p.rid} class={`chip ${rid === p.rid ? 'on' : ''}`} onClick={() => pick(p)} title={rid === p.rid ? 'Picked: tap again to join as someone new' : `I am ${p.name}`}>
+                  <span class="dot" style={{ background: p.color }} />{p.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <label class="field"><span class="field-label">{rid ? 'Your name (you can change it)' : 'Your name'}</span>
           <input type="text" autoFocus value={name} placeholder="e.g. Aria" onInput={(e) => setName((e.target as HTMLInputElement).value)} onKeyDown={(e) => { if (e.key === 'Enter') void join(); }} />
         </label>
         <div class="field"><span class="field-label">Your colour (used for pings)</span>

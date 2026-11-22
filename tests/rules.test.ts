@@ -121,7 +121,7 @@ function makeDb(perm: Record<string, boolean> = allTrue) {
         meta: { name: 'Table', activeScene: 'S1' },
         settings: { perm },
         upload: { key: 'k' },
-        players: { p1: { name: 'Aria' } },
+        players: { p1: { name: 'Aria' }, p3: { name: 'Aria again', rid: 'p1' } },
         scenes: {
           S1: {
             meta: { name: 'Live' },
@@ -144,6 +144,7 @@ function makeDb(perm: Record<string, boolean> = allTrue) {
 const dm: Auth = { uid: 'dm-uid', token: { email: 'DM@gmail.com', email_verified: true } };
 const p1: Auth = { uid: 'p1', token: {} };
 const p2: Auth = { uid: 'p2', token: {} };
+const p3: Auth = { uid: 'p3', token: {} };
 const stranger: Auth = { uid: 'g1', token: { email: 'rando@gmail.com', email_verified: true } };
 
 describe('security rules: access', () => {
@@ -199,22 +200,37 @@ describe('security rules: tables and DM powers', () => {
       expect(can(db, p1, 'write', p, { a: 1 })).toBe(false);
     }
   });
-  it('anyone signed in can keep their own saved tokens, nobody else\'s', () => {
-    expect(can(db, p1, 'write', 'users/p1/tokenLib/c1', { name: 'Aria', t: { size: 1 } })).toBe(true);
-    expect(can(db, p1, 'write', 'users/p1/tokenLib/c1', null)).toBe(true);
-    expect(can(db, p1, 'write', 'users/p2/tokenLib/c1', { name: 'Aria', t: { size: 1 } })).toBe(false);
+  it('the DM keeps templates under their own account; nobody else can write there', () => {
     expect(can(db, dm, 'write', 'users/dm-uid/tokenLib/c1', { name: 'Goblin', t: { size: 1 } })).toBe(true);
-    expect(can(db, null, 'write', 'users/p1/tokenLib/c1', { name: 'x', t: {} })).toBe(false);
+    expect(can(db, dm, 'write', 'users/other/tokenLib/c1', { name: 'Goblin', t: { size: 1 } })).toBe(false);
+    expect(can(db, p1, 'write', 'users/p1/tokenLib/c1', { name: 'Aria', t: { size: 1 } })).toBe(false); // a player's characters are with the table now
+    expect(can(db, p1, 'read', 'users/dm-uid/tokenLib')).toBe(false);
   });
-  it('a saved token needs a name and its settings, and a short name', () => {
-    expect(can(db, p1, 'write', 'users/p1/tokenLib/c1', { name: 'Aria' })).toBe(false);
-    expect(can(db, p1, 'write', 'users/p1/tokenLib/c1', { t: { size: 1 } })).toBe(false);
-    expect(can(db, p1, 'write', 'users/p1/tokenLib/c1', { name: 'x'.repeat(61), t: { size: 1 } })).toBe(false);
+  it('a player keeps their characters with the table, under their own identity', () => {
+    expect(can(db, p1, 'write', `${T}/chars/p1/c1`, { name: 'Aria', t: { size: 1 } })).toBe(true);
+    expect(can(db, p1, 'write', `${T}/chars/p1/c1`, null)).toBe(true);
+    expect(can(db, p1, 'read', `${T}/chars/p1`)).toBe(true);
+    expect(can(db, null, 'write', `${T}/chars/p1/c1`, { name: 'x', t: {} })).toBe(false);
   });
-  it('saved tokens are private to their owner', () => {
-    expect(can(db, p1, 'read', 'users/p1/tokenLib')).toBe(true);
-    expect(can(db, p2, 'read', 'users/p1/tokenLib')).toBe(false);
-    expect(can(db, dm, 'read', 'users/p1/tokenLib')).toBe(false);
+  it('a player who took an old identity (picked their name) uses that identity\'s characters', () => {
+    expect(can(db, p3, 'read', `${T}/chars/p1`)).toBe(true);
+    expect(can(db, p3, 'write', `${T}/chars/p1/c1`, { name: 'Aria', t: { size: 1 } })).toBe(true);
+    expect(can(db, p3, 'read', `${T}/chars/p3`)).toBe(true); // and still their own
+  });
+  it('a player cannot use someone else\'s characters, and the DM can see them all', () => {
+    expect(can(db, p2, 'read', `${T}/chars/p1`)).toBe(false);
+    expect(can(db, p2, 'write', `${T}/chars/p1/c1`, { name: 'x', t: { size: 1 } })).toBe(false);
+    expect(can(db, dm, 'read', `${T}/chars`)).toBe(true);
+    expect(can(db, p1, 'read', `${T}/chars`)).toBe(false);
+  });
+  it('a saved character needs a name and its settings, and a short name', () => {
+    expect(can(db, p1, 'write', `${T}/chars/p1/c1`, { name: 'Aria' })).toBe(false);
+    expect(can(db, p1, 'write', `${T}/chars/p1/c1`, { t: { size: 1 } })).toBe(false);
+    expect(can(db, p1, 'write', `${T}/chars/p1/c1`, { name: 'x'.repeat(61), t: { size: 1 } })).toBe(false);
+  });
+  it('a player entry may carry an identity, as text', () => {
+    expect(can(db, p1, 'write', `${T}/players/p1/rid`, 'p9')).toBe(true);
+    expect(can(db, p1, 'write', `${T}/players/p1/rid`, 5)).toBe(false);
   });
   it('a DM can only write their own library', () => {
     expect(can(db, dm, 'write', 'users/dm-uid/library/maps/x', { url: 'u' })).toBe(true);

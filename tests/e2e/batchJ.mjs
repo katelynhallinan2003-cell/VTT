@@ -175,7 +175,7 @@ await sleep(150);
 const altBox = dm.locator('.modal input[type="number"][step="5"]').first();
 check('turning it on enables it, at 10 ft', (await altBox.isEnabled()) && (await altBox.inputValue()) === '10');
 await altBox.fill('25');
-await dm.getByRole('button', { name: /^Save/ }).click();
+await dm.getByRole('button', { name: 'Save', exact: true }).click();
 await sleep(400);
 t = await tok(dm, hero);
 check('saving keeps it: flying at 25', t.fly === true && t.elev === 25, JSON.stringify(t));

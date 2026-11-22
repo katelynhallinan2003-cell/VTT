@@ -368,6 +368,8 @@ export interface Player {
   joinedAt: number;
   /** the table's DM (cosmetic badge only; real DM-ness is enforced by the database rules) */
   dm: boolean;
+  /** whose saved characters are theirs: their own uid unless they picked a name they had used before */
+  rid: string;
 }
 
 /** `folder` is the id of the folder it sits in, or null when it is not in one. */

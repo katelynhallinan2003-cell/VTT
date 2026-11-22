@@ -176,7 +176,7 @@ await dm.locator('.modal').waitFor();
 const elevBox = dm.locator('.modal label.field', { hasText: 'Height above the ground' }).locator('input');
 check('the editor field is "Height above the ground" and shows 15', (await elevBox.count()) === 1 && (await elevBox.inputValue()) === '15', (await elevBox.count()) ? await elevBox.inputValue() : 'none');
 await elevBox.fill('25');
-await dm.getByRole('button', { name: /^Save/ }).click();
+await dm.getByRole('button', { name: 'Save', exact: true }).click();
 await sleep(500);
 check('saving 25 puts it 25 above that ground', (await tok(bird)).elev === g + 25 && (await alt(bird)).clear === 25, JSON.stringify(await tok(bird)));
 

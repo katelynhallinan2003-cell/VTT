@@ -20,7 +20,8 @@ Carried over from the old `TASKS.md` on 2026-11-22 (asked 2026-11-21, before thi
 
 - [ ] **#3 Republish `database.rules.json` in the Firebase console** (waiting on user) (added 2026-11-21): the live
   database still has older rules. Needed for the handouts node (round 6g), the spell-template permission (round 7a) and
-  `users/$uid/tokenLib` for saved tokens and characters (round 7i). Someone with access to the Firebase console has to
+  saved tokens and characters (round 7i, moved in round 7j: now `tables/$tid/chars`, so paste the 96-line file from round
+  7j, which replaces the whole Rules tab; the allowed emails are data and stay). Someone with access to the Firebase console has to
   paste the file into the Rules tab; it cannot be done from here.
 - [ ] **#4 Players get "permission denied" when drawing or placing a template** (waiting on user) (added 2026-11-21):
   a template permission was added in round 7a, but the exact failing message was never seen. Verify with the user once
@@ -54,3 +55,13 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
 - [x] **#2 Move the unfinished items out of TASKS.md and delete it** (added 2026-11-22, completed 2026-11-22):
   "move them and delete tasks.md". Done: the four unfinished items are #3 to #6 above, the unrequested ideas are in
   *Ideas*, `TASKS.md` is deleted and `CLAUDE.md` no longer mentions it.
+- [x] **#7 Always read CLAUDE.md first** (added 2026-11-22, completed 2026-11-22): "Always read CLAUDE.md before doing
+  anything in future runs and update CLAUDE.md if it has important design precedent changes." Done: a "Read this file
+  first, every run" section and a "Design precedents" section in `CLAUDE.md`.
+- [x] **#8 Player character library tied to the table, reclaim by name** (added 2026-11-22, completed 2026-11-22): "if a
+  players character library is tied to their browser, change it to tie it to the dm's account and when they log in they
+  can select their name to reclaim their library so its not lost." Done: characters are kept at `tables/$tid/chars/$rid`;
+  the join screen lists people who played here before and picking one brings their characters back; the DM's screen
+  hands the old token to the new browser and removes the old entry once offline (an entry still online is left alone);
+  round 7i libraries are copied across once; the player-writable `users/$uid/tokenLib` rule is gone. Needs the rules
+  republished (#3). Tests: `tests/rules.test.ts`, `tests/charlib.test.ts`, `tests/e2e/batchZ10.mjs`.

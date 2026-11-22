@@ -367,6 +367,7 @@ export function normalizePlayer(uid: string, raw: any): Player {
     online: bool(raw?.online, false),
     joinedAt: num(raw?.joinedAt, 0),
     dm: bool(raw?.dm, false),
+    rid: typeof raw?.rid === 'string' && raw.rid ? raw.rid : uid,
   };
 }
 

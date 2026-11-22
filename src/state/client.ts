@@ -24,7 +24,7 @@ import { altitudeOf, groundAt, zonesOf } from '../core/height';
 import { isLightMark, litSeen, lightOf, viewerOf, type LightSrc } from '../core/light';
 import { carveWalls, joinAt, normalizeWall, routeReveal, sightSegs, splitPieces, wallMid, wallToWire, type Wall } from '../core/walls';
 import { buildCampaign, newLibraryItems, planImport, type CampaignFile, type CampaignLibraryItem } from '../core/campaign';
-import { addLibraryItem, saveTokenToLib, watchTokenLib } from './account';
+import { addLibraryItem, removeTokenFromLib, saveTokenToLib, watchTokenLib } from './account';
 import { History } from './history';
 import { P } from './paths';
 
@@ -219,9 +219,10 @@ export class TableClient {
       this.bump();
     }, this.fail('settings')));
 
+    this.unsubs.push(() => { this.libUnsub?.(); this.libUnsub = null; clearTimeout(this.mergeTimer); });
     this.unsubs.push(b.listenChildren(P.players(tid), {
-      added: (k, v) => { this.players.set(k, normalizePlayer(k, v)); this.bump(); },
-      changed: (k, v) => { this.players.set(k, normalizePlayer(k, v)); this.bump(); },
+      added: (k, v) => { this.players.set(k, normalizePlayer(k, v)); this.playersChanged(k); this.bump(); },
+      changed: (k, v) => { this.players.set(k, normalizePlayer(k, v)); this.playersChanged(k); this.bump(); },
       removed: (k) => { this.players.delete(k); this.bump(); },
     }, this.fail('players')));
 
@@ -273,7 +274,7 @@ export class TableClient {
         removed: (k) => { this.charMem.delete(k); },
       }, this.fail('characters')));
     }
-    this.unsubs.push(watchTokenLib(b, this.uid, (items) => { this.tokenLib = items; this.bump(); }));
+    this.armLibrary();
 
     this.armPresence();
     if (b.kind === 'firebase') {
@@ -308,6 +309,78 @@ export class TableClient {
       }
       this.backend.onDisconnectSet(`${path}/online`, false);
     }).catch(() => undefined);
+  }
+
+  /**
+   * Where this person's saved tokens live. The DM's templates are under their Google account. A player has no account
+   * (they are anonymous per browser), so their characters are kept with the table under their identity: their own uid,
+   * or the one they took back by picking their name when joining.
+   */
+  get libPath(): string {
+    return this.isDM ? P.userTokenLib(this.uid) : P.tableChars(this.tableId, this.me?.rid ?? this.uid);
+  }
+  private libWatching = '';
+  private libUnsub: (() => void) | null = null;
+  private armLibrary() {
+    const path = this.libPath;
+    if (path === this.libWatching || this.stopped) return;
+    this.libUnsub?.();
+    this.libWatching = path;
+    if (this.libUnsub) { this.tokenLib = []; this.bump(); }
+    this.libUnsub = watchTokenLib(this.backend, path, (items) => { if (this.libWatching === path) { this.tokenLib = items; this.bump(); } });
+    void this.migrateOldLibrary(path);
+  }
+  /** A player's characters used to live under their browser's account. Copy any across once. */
+  private async migrateOldLibrary(path: string) {
+    if (this.isDM) return;
+    const flag = `vtt-lib-moved-${this.uid}`;
+    try {
+      if (localStorage.getItem(flag)) return;
+      localStorage.setItem(flag, '1');
+      const old = await this.backend.get(P.userTokenLib(this.uid));
+      if (!old || typeof old !== 'object') return;
+      const now = await this.backend.get(path);
+      const have = new Set(now && typeof now === 'object' ? Object.keys(now) : []);
+      const writes: Record<string, unknown> = {};
+      for (const [id, v] of Object.entries<any>(old)) if (!have.has(id) && v && typeof v.name === 'string' && v.t) writes[`${path}/${id}`] = v;
+      if (Object.keys(writes).length) await this.backend.update(writes);
+    } catch { /* nothing to move, or no access to the old place */ }
+  }
+
+  /** A player entry appeared or changed. */
+  private playersChanged(uid: string) {
+    if (uid === this.uid && !this.isDM) this.armLibrary();
+    if (this.isDM) {
+      clearTimeout(this.mergeTimer);
+      this.mergeTimer = setTimeout(() => { void this.mergeIdentities(); }, 600);
+    }
+  }
+  private mergeTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /**
+   * DM: a player who picked a name they had used before shares that identity with the old entry. Once the old one is
+   * offline, give its tokens (in every scene) to the new one and drop the old entry, so the table list has one of each person.
+   * An old entry that is still online (a second device) is left alone.
+   */
+  private async mergeIdentities() {
+    if (!this.isDM || this.stopped) return;
+    const byRid = new Map<string, Player[]>();
+    for (const p of this.players.values()) if (!p.dm) byRid.set(p.rid, [...(byRid.get(p.rid) ?? []), p]);
+    for (const group of byRid.values()) {
+      if (group.length < 2) continue;
+      group.sort((a, b) => b.joinedAt - a.joinedAt || (a.uid < b.uid ? -1 : 1));
+      const [keep, ...rest] = group;
+      const old = rest.filter((p) => !p.online);
+      if (!old.length || !keep.online) continue;
+      const gone = new Set(old.map((p) => p.uid));
+      const updates: Record<string, unknown> = {};
+      for (const sc of this.sceneIndex) {
+        const toks = await this.backend.get(P.sceneTokens(this.tableId, sc.id)).catch(() => null);
+        for (const [tid, v] of Object.entries<any>(toks ?? {})) if (v && gone.has(v.ownerUid)) updates[`${P.sceneTokens(this.tableId, sc.id)}/${tid}/ownerUid`] = keep.uid;
+      }
+      for (const u of gone) updates[P.player(this.tableId, u)] = null;
+      await this.backend.update(updates).catch(this.fail('merge a returning player'));
+    }
   }
 
   private setIndex(id: string, v: any) {
@@ -1492,7 +1565,7 @@ export class TableClient {
     if (!e) return;
     const fields = savedFields(t, { character: true, cid: t.cid });
     if (sameSaved(fields, e.t) && (t.name || e.name) === e.name) return;
-    await saveTokenToLib(this.backend, this.uid, { name: t.name || e.name, t: fields }, e.id, e.addedAt).catch(() => undefined);
+    await saveTokenToLib(this.backend, this.libPath, { name: t.name || e.name, t: fields }, e.id, e.addedAt).catch(() => undefined);
   }
 
   /**
@@ -1504,11 +1577,11 @@ export class TableClient {
   async saveTokenToLibrary(tokenId: string): Promise<string | null> {
     const t = this.scene?.tokens.get(tokenId);
     if (!t) return null;
-    if (this.isDM) return saveTokenToLib(this.backend, this.uid, { name: t.name || 'Token', t: savedFields(t, { character: false }) });
+    if (this.isDM) return saveTokenToLib(this.backend, this.libPath, { name: t.name || 'Token', t: savedFields(t, { character: false }) });
     if (t.ownerUid !== this.uid) return null;
     const cid = t.cid ?? this.backend.newKey();
     const have = this.tokenLib.find((e) => e.id === cid);
-    await saveTokenToLib(this.backend, this.uid, { name: t.name || 'Character', t: savedFields(t, { character: true, cid }) }, cid, have?.addedAt);
+    await saveTokenToLib(this.backend, this.libPath, { name: t.name || 'Character', t: savedFields(t, { character: true, cid }) }, cid, have?.addedAt);
     if (!t.cid) await this.updateToken(t.id, { cid });
     return cid;
   }
@@ -1723,10 +1796,12 @@ export class TableClient {
   }
 
   // ---------------------------------------------------------------- players, settings
-  async joinAsPlayer(name: string, color: string): Promise<void> {
+  /** `rid`: the identity of a player who has been here before (their saved characters come back with it). */
+  async joinAsPlayer(name: string, color: string, rid?: string): Promise<void> {
     const path = P.player(this.tableId, this.uid);
     const existing = await this.backend.get(path);
-    await this.backend.set(path, { name, color, online: true, joinedAt: existing?.joinedAt ?? SERVER_TS });
+    const keep = rid ?? (typeof existing?.rid === 'string' ? existing.rid : undefined);
+    await this.backend.set(path, { name, color, online: true, joinedAt: existing?.joinedAt ?? SERVER_TS, ...(keep && keep !== this.uid ? { rid: keep } : {}) });
     this.backend.onDisconnectSet(`${path}/online`, false);
   }
   /** DM: remove someone from the table list (their tokens become unclaimed). */
@@ -1735,6 +1810,10 @@ export class TableClient {
     const updates: Record<string, any> = { [P.player(this.tableId, uid)]: null };
     for (const t of this.scene?.tokens.values() ?? []) if (t.ownerUid === uid) updates[`${this.tokenPath(t)}/ownerUid`] = null;
     await this.backend.update(updates);
+  }
+  /** Take back the identity (and with it the saved characters) of a player who has been here before. */
+  async claimIdentity(rid: string): Promise<void> {
+    await this.backend.update({ [`${P.player(this.tableId, this.uid)}/rid`]: rid === this.uid ? null : rid });
   }
   async updatePlayer(patch: Partial<Pick<Player, 'name' | 'color'>>): Promise<void> {
     const path = P.player(this.tableId, this.uid);

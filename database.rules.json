@@ -10,13 +10,7 @@
     "users": {
       "$uid": {
         ".read": "auth != null && auth.uid === $uid",
-        ".write": "auth != null && auth.uid === $uid && auth.token.email_verified === true && root.child('config').child('allowedEmails').child(auth.token.email.toLowerCase().replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',')).val() === true",
-        "tokenLib": {
-          "$id": {
-            ".write": "auth != null && auth.uid === $uid",
-            ".validate": "newData.hasChildren(['name', 't']) && newData.child('name').isString() && newData.child('name').val().length <= 60"
-          }
-        }
+        ".write": "auth != null && auth.uid === $uid && auth.token.email_verified === true && root.child('config').child('allowedEmails').child(auth.token.email.toLowerCase().replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',')).val() === true"
       }
     },
     "tables": {
@@ -45,7 +39,20 @@
         "players": {
           ".read": "auth != null",
           "$uid": {
-            ".write": "auth != null && (auth.uid === $uid || root.child('tables').child($tid).child('owner').val() === auth.uid)"
+            ".write": "auth != null && (auth.uid === $uid || root.child('tables').child($tid).child('owner').val() === auth.uid)",
+            "rid": {
+              ".validate": "newData.isString() && newData.val().length <= 128"
+            }
+          }
+        },
+        "chars": {
+          ".read": "auth != null && root.child('tables').child($tid).child('owner').val() === auth.uid",
+          "$rid": {
+            ".read": "auth != null && (root.child('tables').child($tid).child('owner').val() === auth.uid || auth.uid === $rid || root.child('tables').child($tid).child('players').child(auth.uid).child('rid').val() === $rid)",
+            ".write": "auth != null && (root.child('tables').child($tid).child('owner').val() === auth.uid || auth.uid === $rid || root.child('tables').child($tid).child('players').child(auth.uid).child('rid').val() === $rid)",
+            "$id": {
+              ".validate": "newData.hasChildren(['name', 't']) && newData.child('name').isString() && newData.child('name').val().length <= 60"
+            }
           }
         },
         "dm": {

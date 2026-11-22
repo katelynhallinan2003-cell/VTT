@@ -73,9 +73,9 @@ export async function addLibraryItem(backend: Backend, uid: string, kind: Librar
   return id;
 }
 
-/** The tokens this account has saved (the DM's templates, a player's characters), newest first. */
-export function watchTokenLib(backend: Backend, uid: string, cb: (items: SavedToken[]) => void) {
-  return backend.listen(P.userTokenLib(uid), (v) => {
+/** The saved tokens at `path` (the DM's templates under their account, a player's characters under the table), newest first. */
+export function watchTokenLib(backend: Backend, path: string, cb: (items: SavedToken[]) => void) {
+  return backend.listen(path, (v) => {
     const items = Object.entries<any>(v ?? {})
       .map(([id, raw]) => normalizeSavedToken(id, raw))
       .filter((x): x is SavedToken => !!x)
@@ -85,14 +85,14 @@ export function watchTokenLib(backend: Backend, uid: string, cb: (items: SavedTo
 }
 
 /** Saves (or, with an existing `id`, replaces) a saved token. Returns its id. */
-export async function saveTokenToLib(backend: Backend, uid: string, entry: { name: string; t: Record<string, unknown> }, id?: string, addedAt?: number): Promise<string> {
+export async function saveTokenToLib(backend: Backend, path: string, entry: { name: string; t: Record<string, unknown> }, id?: string, addedAt?: number): Promise<string> {
   const key = id ?? backend.newKey();
-  await backend.set(`${P.userTokenLib(uid)}/${key}`, { name: cleanSavedName(entry.name) || 'Token', t: entry.t, addedAt: addedAt ?? SERVER_TS });
+  await backend.set(`${path}/${key}`, { name: cleanSavedName(entry.name) || 'Token', t: entry.t, addedAt: addedAt ?? SERVER_TS });
   return key;
 }
 
-export async function removeTokenFromLib(backend: Backend, uid: string, id: string) {
-  await backend.remove(`${P.userTokenLib(uid)}/${id}`);
+export async function removeTokenFromLib(backend: Backend, path: string, id: string) {
+  await backend.remove(`${path}/${id}`);
 }
 
 export async function removeLibraryItem(backend: Backend, uid: string, kind: LibraryKind, id: string) {

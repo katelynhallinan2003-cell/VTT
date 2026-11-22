@@ -7,6 +7,8 @@ export const P = {
   userTable: (uid: string, tid: string) => `users/${uid}/tables/${tid}`,
   userLibrary: (uid: string, kind: string) => `users/${uid}/library/${kind}`,
   userTokenLib: (uid: string) => `users/${uid}/tokenLib`,
+  /** a player's saved characters live with the table, under their identity (`rid`), not in their browser */
+  tableChars: (tid: string, rid: string) => `tables/${tid}/chars/${rid}`,
   dmChars: (tid: string) => `tables/${tid}/dm/chars`,
   userSetting: (uid: string, key: string) => `users/${uid}/settings/${key}`,
 

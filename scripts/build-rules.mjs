@@ -39,13 +39,6 @@ const rules = {
       $uid: {
         '.read': 'auth != null && auth.uid === $uid',
         '.write': `auth != null && auth.uid === $uid && ${ALLOWED_DM}`,
-        // saved tokens: anyone signed in keeps their own (a player's characters, the DM's templates). Private to their owner.
-        tokenLib: {
-          $id: {
-            '.write': 'auth != null && auth.uid === $uid',
-            '.validate': "newData.hasChildren(['name', 't']) && newData.child('name').isString() && newData.child('name').val().length <= 60",
-          },
-        },
       },
     },
     tables: {
@@ -63,7 +56,23 @@ const rules = {
         upload: readAllWriteOwner,
         players: {
           '.read': 'auth != null',
-          $uid: { '.write': `auth != null && (auth.uid === $uid || ${OWNER})` },
+          $uid: {
+            '.write': `auth != null && (auth.uid === $uid || ${OWNER})`,
+            // which saved-characters library is theirs (see `chars`); defaults to their own uid
+            rid: { '.validate': 'newData.isString() && newData.val().length <= 128' },
+          },
+        },
+        // Players' saved characters. A player has no account, so they are kept here, against the table, under the
+        // identity (`rid`) the player took when they joined; a returning player takes the same `rid` back by picking their name.
+        chars: {
+          '.read': `auth != null && ${OWNER}`,
+          $rid: {
+            '.read': `auth != null && (${OWNER} || auth.uid === $rid || ${TABLE}.child('players').child(auth.uid).child('rid').val() === $rid)`,
+            '.write': `auth != null && (${OWNER} || auth.uid === $rid || ${TABLE}.child('players').child(auth.uid).child('rid').val() === $rid)`,
+            $id: {
+              '.validate': "newData.hasChildren(['name', 't']) && newData.child('name').isString() && newData.child('name').val().length <= 60",
+            },
+          },
         },
         // DM-only data (hidden tokens, the scene list). A sibling of `scenes` because read rules cascade downwards.
         dm: dmOnly,

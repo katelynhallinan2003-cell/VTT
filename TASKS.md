@@ -18,27 +18,18 @@ nothing gets forgotten between sessions. **Read this first at the start of every
 
 ## In progress
 
-- [ ] Round 7e: three-zone fog; lights visible to players; darkvision toggles + distances; custom lights; Lights section in the token editor (next).
+- [ ] Round 7h: scene folders (next).
 
 ## To do (asked for, not done)
 
 Asked 2026-11-21 18:34 PT:
 
-- [ ] Fog of war has three zones: black (never seen), gray (seen before, not visible now), clear (visible now). Update how sight works to match.
-- [ ] Light sources must not be invisible to players (today light-only tokens show a DM-only marker).
-- [ ] Tokens get darkvision toggles and distances; custom lights can be defined; lights are their own section inside the token editor.
-- [ ] Printed-grid detection: when a grid is found on an imported map and hidden, also size the app grid automatically (square and hex), so the user need not draw it.
-- [ ] Printed-grid hiding: more precise, with averaging.
-- [ ] A second map can be added to the same scene.
 - [ ] Scene folders in the scene selector: make folders, swap between them, to prep many scenes over a campaign.
 - [ ] DM token library: tokens remember their settings and can be dropped in whenever wanted.
 - [ ] Player token library; players claim a token and bring it to other scenes; it remembers HP, effects and other settings.
 - [ ] Player can place templates and draw without a "permission denied": **verify with the user** after they republish `database.rules.json` (a template permission was added; the exact failing message was never seen).
 - [ ] Handout pop-up for players: **verify with the user** (two causes fixed in round 7a; needs the rules republished).
 
-Earlier requests that were reported again or only partly met:
-
-- [ ] Printed-grid removal "can be better and more precise" (asked 2026-11-21 15:59 and again 18:34).
 
 ## Waiting on the user
 
@@ -57,6 +48,19 @@ Earlier requests that were reported again or only partly met:
 
 ## Done
 
+2026-11-21 (round 7g): **a second map can be added to a scene** (Scene → Map → "Add a second map…", up to four extra): each has a name, "Players can see it", "Locked in place" and Size; unlocked ones are dragged on the board; fog, grid, light and walls cover all the maps (`sceneRect`); Ctrl+Z undoes; the view moves clear of the side panel after adding. Stored in scene meta (`maps`), no new rules.
+Tests: `tests/extramaps.test.ts`, `tests/e2e/batchZ6.mjs`. Also fixed old e2e checks that expected the earlier fog/test-move/token-editor wording (batchB2, C, J, U).
+2026-11-21 (round 7f): **a new map is looked at once for a printed grid** (square or hex, the clearer wins; setting "Look for a printed grid when I add a map", on by default); when
+clearly there it is hidden **and the app grid is set on it** in one undo step ("Find and hide it" does both too); the lines are located to a fraction of a pixel (spacing fitted to where
+every line is) and hidden by filling from an **average of the ground on both sides** with soft edges (squares and hexes); the grid size you already had only wins when its lines are as clear
+as the best anywhere (a wrong guess found 6 in 7 of the real lines). New scene field `gridTried` (old scenes: true). No new database rules.
+Tests: `tests/gridcut.test.ts` (soft lines, big pictures, averaging), `tests/mapgrid.test.ts`, `tests/e2e/batchZ5.mjs`; batchO/T updated for the new behaviour.
+2026-11-21 (round 7e): **three kinds of ground in the fog** (black never seen, grey seen before but out of sight now, clear where a token sees this moment; new fog op `x` =
+"explored", kept apart from the fog and put together on one canvas, so putting fog back over a place un-sees it; a scene setting "Grey out what they cannot see right now"
+(on by default) — off writes plain reveals as before; players do not see or pick tokens standing on grey ground unless a player owns them, and lights stay);
+**light markers are visible to everyone** (a hidden light stays hidden); token editor has a **Sight and lights** tab with a **Darkvision** switch and distance, light presets,
+and **custom lights** you can name and keep (browser storage, listed in the Scene panel's "Place a light"). No new database rules.
+Tests: `tests/fog3.test.ts`, `tests/e2e/batchZ4.mjs`.
 2026-11-21 (round 7d): Heights **Ramp** mode (start and end height, drag from one end to the other, 5 ft steps, one undo); drops of more than 10 ft between
 neighbouring squares are **cliffs** (derived wall pieces: stop sight, spells and walking from the low side, nothing from the top; scene setting "Cliffs", 0 = off);
 steps of 5 ft or less are **stairs** and cost like diagonals by the distance rule (readouts for drags, test moves; flyers exempt); **difficult ground** painted with the

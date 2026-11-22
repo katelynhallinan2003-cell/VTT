@@ -212,7 +212,7 @@ await drag(dm, { x: p0.x, y: p0.y }, { x: p0.x + 5 * cell, y: p0.y }, 8);
 const p1 = await tokPos();
 check('the token shows at the test spot but has not really moved', Math.abs(p1.dx - (p0.x + 5 * cell)) < 2 && p1.x === p0.x, `real ${p1.x}, shown ${Math.round(p1.dx)}`);
 check('a shadow stays where it was', (await dm.evaluate(() => window.__vtt.board.ghostViews.size)) === 1);
-check('the bar counts it', (await dm.locator('.testbar', { hasText: '1 token moved' }).count()) === 1);
+check('the bar counts it', (await dm.locator('.testbar', { hasText: '1 moved' }).count()) === 1);
 check('other players see nothing by default', (await pl.evaluate(() => [...window.__vtt.client.scene.live.values()].filter((l) => Object.keys(l.ghosts).length).length)) === 0);
 await dm.screenshot({ path: '/tmp/shots/64-test-move.png' });
 await dm.locator('.testbar label', { hasText: 'Show others' }).click();

@@ -150,3 +150,77 @@ describe('scaling the answer', () => {
     expect(scaleCut({ on: true, p: 10, x: 0, y: 0, t: 1 }, 0.1).t).toBe(1);
   });
 });
+
+/** The same stony ground with and without printed lines whose edges are soft and whose spacing is not a whole number of pixels. */
+function softMap(W: number, H: number, p: number, ox: number, oy: number, t: number, contrast = 70) {
+  const r = rng(11);
+  const ground = new Uint8ClampedArray(W * H * 4);
+  const lined = new Uint8ClampedArray(W * H * 4);
+  // how much of the pixel centred on x a line centred on c covers
+  const cover = (x: number, o: number) => {
+    const k = Math.round((x - o) / p);
+    const c = o + k * p;
+    return Math.max(0, Math.min(x + 0.5, c + t / 2) - Math.max(x - 0.5, c - t / 2));
+  };
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const blot = Math.sin(x / 37) * 18 + Math.cos(y / 53) * 14 + Math.sin((x + y) / 91) * 10;
+      const v = 150 + blot + (r() - 0.5) * 30;
+      const cov = Math.min(1, cover(x, ox) + cover(y, oy));
+      const w = v - contrast * cov;
+      const i = (y * W + x) * 4;
+      ground[i] = v; ground[i + 1] = v * 0.93; ground[i + 2] = v * 0.8; ground[i + 3] = 255;
+      lined[i] = w; lined[i + 1] = w * 0.93; lined[i + 2] = w * 0.8; lined[i + 3] = 255;
+    }
+  }
+  return { ground, img: { data: lined, width: W, height: H } as PixelImage };
+}
+
+describe('hiding soft lines at odd spacings', () => {
+  it('leaves almost nothing behind, on either side of where each line was', () => {
+    const p = 47.37, ox = 20.4, oy = 11.7, t = 2.6;
+    const { ground, img } = softMap(900, 700, p, ox, oy, t);
+    const f = findGrid(img, 47)!;
+    expect(f).not.toBeNull();
+    hideGrid(img, f.cut);
+    // average difference from the true ground, pixel by pixel along the line, across the line (away from where lines cross)
+    for (const off of [-2, -1, 0, 1, 2]) {
+      let sum = 0, n = 0;
+      for (let y = 30; y < 680; y++) {
+        const dy = (((y - oy) % p) + p) % p;
+        if (dy < 8 || dy > p - 8) continue;
+        for (let k = 1; k < 18; k++) {
+          const x = Math.round(ox + k * p) + off;
+          if (x < 5 || x >= 895) continue;
+          sum += img.data[(y * 900 + x) * 4] - ground[(y * 900 + x) * 4];
+          n++;
+        }
+      }
+      expect(Math.abs(sum / n)).toBeLessThan(4); // the line was 70 darker: under 6% of it is left
+    }
+  });
+
+  it('on a big picture the lines far from the first one are still hit', () => {
+    const p = 63.37, ox = 31.2, oy = 17.9;
+    const { img } = softMap(2600, 1300, p, ox, oy, 2.4);
+    const f = findGrid(img)!;
+    expect(f).not.toBeNull();
+    expect(Math.abs(f.cut.p - p)).toBeLessThan(0.02);
+    // the last vertical line is within a quarter of a pixel
+    const k = Math.floor((2600 - ox) / p);
+    expect(Math.abs(f.cut.x + k * f.cut.p - (ox + k * p))).toBeLessThan(0.3);
+  });
+
+  it('lines are filled with an average of the ground beside them, not one speck of it', () => {
+    // a picture of a flat colour with one speckled row of pixels next to a line: the fill must not copy the speck
+    const W = 120, H = 60;
+    const data = new Uint8ClampedArray(W * H * 4);
+    for (let i = 0; i < W * H; i++) { data[i * 4] = data[i * 4 + 1] = data[i * 4 + 2] = 100; data[i * 4 + 3] = 255; }
+    for (let y = 0; y < H; y++) for (let x = 29; x <= 31; x++) data[(y * W + x) * 4] = data[(y * W + x) * 4 + 1] = data[(y * W + x) * 4 + 2] = 20; // the line
+    for (let y = 0; y < H; y++) data[(y * W + 27) * 4] = 250; // one bright speck beside it, in the red channel only
+    hideGrid({ data, width: W, height: H }, { p: 60, x: 30, y: -100, t: 3 });
+    const filled = data[(10 * W + 30) * 4];
+    expect(filled).toBeGreaterThan(95);
+    expect(filled).toBeLessThan(140); // an average of three pixels with one speck, not the speck itself
+  });
+});

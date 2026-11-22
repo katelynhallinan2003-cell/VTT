@@ -198,7 +198,7 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
         const img = await loadImage(url.trim(), true).catch(() => { throw new Error('That image link could not be loaded.'); });
         mapUrl = url.trim(); w = img.naturalWidth; h = img.naturalHeight;
       }
-      await client.createScene({ name: name || fileName.replace(/\.\w+$/, '') || picked?.name || 'New scene', mapUrl, mapW: w, mapH: h, makeActive });
+      await client.createScene({ name: name || fileName.replace(/\.\w+$/, '') || picked?.name || 'New scene', mapUrl, mapW: w, mapH: h, makeActive, /* the demo map is made by the app and its grid is known */ gridTried: fileName === 'Sample dungeon.png' });
       props.onCreated?.();
       props.onClose();
     } catch (e) {

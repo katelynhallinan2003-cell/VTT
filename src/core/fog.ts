@@ -1,4 +1,7 @@
-import type { FogOp, FogSettings, Rect, Vec } from '../types';
+import type { FogMode, FogOp, FogSettings, Rect, Vec } from '../types';
+
+/** How much of the fog stays over ground that was seen once and is out of sight now (0 = none, 1 = all). */
+export const GREY_FOG = 0.58;
 
 /** "x,y,x,y,..." <-> points. One short string per op keeps the database small and atomic. */
 export function encodePoints(points: Vec[]): string {
@@ -13,23 +16,26 @@ export function decodePoints(s: string): Vec[] {
   return out;
 }
 
-export function rectOp(mode: 'r' | 'h', r: Rect): FogOp {
+export function rectOp(mode: FogMode, r: Rect): FogOp {
   return { m: mode, t: 'rect', p: [r.x, r.y, r.w, r.h].map((v) => Math.round(v * 10) / 10).join(',') };
 }
-export function polyOp(mode: 'r' | 'h', pts: Vec[]): FogOp {
+export function polyOp(mode: FogMode, pts: Vec[]): FogOp {
   return { m: mode, t: 'poly', p: encodePoints(pts) };
 }
-export function lineOp(mode: 'r' | 'h', pts: Vec[], width: number): FogOp {
+export function lineOp(mode: FogMode, pts: Vec[], width: number): FogOp {
   return { m: mode, t: 'line', p: encodePoints(pts), w: Math.round(width * 10) / 10 };
 }
 
 type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 
-/** Paint one op onto a mask context (black = fogged). `reveal` erases, `hide` paints. */
-export function paintOp(ctx: Ctx2D, op: FogOp, origin: Vec, scale: number): void {
+/**
+ * Paint one op onto a mask context (black = fogged). `reveal` erases, `hide` paints, `explored` paints too
+ * (on the context that keeps what has been seen: `erase` clears it instead).
+ */
+export function paintOp(ctx: Ctx2D, op: FogOp, origin: Vec, scale: number, erase = op.m === 'r'): void {
   ctx.save();
   ctx.setTransform(scale, 0, 0, scale, -origin.x * scale, -origin.y * scale);
-  ctx.globalCompositeOperation = op.m === 'r' ? 'destination-out' : 'source-over';
+  ctx.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
   ctx.fillStyle = '#000';
   ctx.strokeStyle = '#000';
   if (op.t === 'rect') {
@@ -63,14 +69,26 @@ export function paintOp(ctx: Ctx2D, op: FogOp, origin: Vec, scale: number): void
 }
 
 /**
- * Keeps an offscreen canvas holding the fog mask for one scene. Incremental when ops are only
- * appended (the common case), full redraw otherwise.
+ * Keeps an offscreen canvas holding the fog for one scene. Incremental when ops are only appended (the common case),
+ * full redraw otherwise.
+ *
+ * Three kinds of ground come out of it: never seen (solid black), seen once but out of sight now (`GREY_FOG` of the black) and clear.
+ * The fog itself (hide and reveal) and the ground that has been seen (explored) are kept apart and put together into `canvas`.
  */
 export class FogMask {
+  /** what the fog sprite shows */
   readonly canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
+  /** the fog before any greying: reveal and hide only */
+  private fogCanvas = document.createElement('canvas');
+  private fogCtx = this.fogCanvas.getContext('2d', { willReadFrequently: true })!;
+  /** the ground that has been seen once (white), wiped where the fog is put back */
+  private seenCanvas = document.createElement('canvas');
+  private seenCtx = this.seenCanvas.getContext('2d', { willReadFrequently: true })!;
   private applied: string[] = [];
   private key = '';
+  /** whether any ground has been marked as explored (nothing to put together otherwise) */
+  private hasSeen = false;
   scale = 1;
   origin: Vec = { x: 0, y: 0 };
   worldW = 0;
@@ -93,20 +111,61 @@ export class FogMask {
     if (isExtension && ids.length === this.applied.length) return false;
 
     if (!isExtension) {
-      if (this.canvas.width !== w || this.canvas.height !== h) { this.canvas.width = w; this.canvas.height = h; }
+      for (const c of [this.canvas, this.fogCanvas, this.seenCanvas]) {
+        if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+      }
       this.scale = scale;
       this.origin = { x: rect.x, y: rect.y };
       this.worldW = rect.w;
       this.worldH = rect.h;
-      this.ctx.setTransform(1, 0, 0, 1, 0, 0);
-      this.ctx.globalCompositeOperation = 'source-over';
-      this.ctx.clearRect(0, 0, w, h);
-      if (settings.base === 'hidden') { this.ctx.fillStyle = '#000'; this.ctx.fillRect(0, 0, w, h); }
+      for (const c of [this.fogCtx, this.seenCtx]) {
+        c.setTransform(1, 0, 0, 1, 0, 0);
+        c.globalCompositeOperation = 'source-over';
+        c.clearRect(0, 0, w, h);
+      }
+      if (settings.base === 'hidden') { this.fogCtx.fillStyle = '#000'; this.fogCtx.fillRect(0, 0, w, h); }
+      this.hasSeen = false;
       this.applied = [];
     }
-    for (let i = this.applied.length; i < ops.length; i++) paintOp(this.ctx, ops[i][1], this.origin, this.scale);
+    for (let i = this.applied.length; i < ops.length; i++) {
+      const op = ops[i][1];
+      if (op.m === 'x') {
+        paintOp(this.seenCtx, op, this.origin, this.scale);
+        this.hasSeen = true;
+      } else {
+        paintOp(this.fogCtx, op, this.origin, this.scale);
+        // fog put back over ground covers it again: it has to be seen anew
+        if (op.m === 'h' && this.hasSeen) paintOp(this.seenCtx, op, this.origin, this.scale, true);
+      }
+    }
     this.applied = ids;
     this.key = key;
+    this.compose();
     return true;
+  }
+
+  /** The fog, with the explored ground (where there is still fog) let through grey. */
+  private compose() {
+    const { ctx, canvas } = this;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(this.fogCanvas, 0, 0);
+    if (!this.hasSeen) return;
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.globalAlpha = 1 - GREY_FOG;
+    ctx.drawImage(this.seenCanvas, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  /** Is there fog over this spot, and has the ground there been seen before? (Both false: clear ground.) */
+  fogAt(p: Vec): { fog: boolean; seen: boolean } {
+    const x = Math.floor((p.x - this.origin.x) * this.scale), y = Math.floor((p.y - this.origin.y) * this.scale);
+    if (x < 0 || y < 0 || x >= this.canvas.width || y >= this.canvas.height) return { fog: false, seen: false };
+    const fog = this.fogCtx.getImageData(x, y, 1, 1).data[3] > 127;
+    const seen = fog && this.hasSeen && this.seenCtx.getImageData(x, y, 1, 1).data[3] > 127;
+    return { fog, seen };
   }
 }

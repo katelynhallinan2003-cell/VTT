@@ -147,6 +147,11 @@ export function findGrid(img: PixelImage, hint?: number): Found | null {
   // the search above forgives a pixel either way; now pin the spacing and offsets down to a fraction of a pixel
   const fine = refine(pc, pr, best.p, best.ox, best.oy);
   best = { ...best, ...wholeSpacing(pc, pr, fine) };
+  // measure where the lines really are and fit the spacing to them: it keeps lines far from the first one on target
+  const fx = fitSpacing(pc, best.p, best.ox), fy = fitSpacing(pr, best.p, best.oy);
+  if (fx && fy && fx.rms < 0.8 && fy.rms < 0.8 && Math.abs(fx.p - fy.p) < best.p * 0.003 && Math.abs((fx.p * fx.n + fy.p * fy.n) / (fx.n + fy.n) - best.p) < best.p * 0.004) {
+    best = { ...best, p: (fx.p * fx.n + fy.p * fy.n) / (fx.n + fy.n) };
+  }
   const t = Math.max(1, Math.min(12, (thickness(pc, best.p, best.ox) + thickness(pr, best.p, best.oy)) / 2));
   // put the offset on the middle of the line rather than on its strongest pixel
   const x = centre(pc, best.p, best.ox), y = centre(pr, best.p, best.oy);
@@ -174,6 +179,37 @@ function wholeSpacing(pc: Float32Array, pr: Float32Array, f: { p: number; ox: nu
     if (sx + sy > base * 1.4 && sx + sy > top * 1.4) { out = { p: f.p * k, ox: f.ox + jx * f.p, oy: f.oy + jy * f.p }; top = sx + sy; }
   }
   return out;
+}
+
+/**
+ * Where each line's middle really is, fitted with a straight line (position = start + number * spacing). The slope is the spacing,
+ * true to a small fraction of a pixel however many lines there are. Null when the lines do not sit on a straight comb well enough to trust.
+ */
+export function fitSpacing(prof: Float32Array, p: number, o: number): { p: number; n: number; rms: number } | null {
+  const ks: number[] = [], ys: number[] = [];
+  for (let k = 0; ; k++) {
+    const c = o + k * p;
+    const i = Math.round(c);
+    if (i >= prof.length - 4) break;
+    if (i < 4) continue;
+    // the strength-weighted middle of the line, with the level of the ground beside it taken off
+    let floor = Infinity;
+    for (let j = i - 4; j <= i + 4; j++) if (prof[j] < floor) floor = prof[j];
+    let w = 0, m = 0;
+    for (let j = i - 3; j <= i + 3; j++) { const v = Math.max(0, prof[j] - Math.max(0, floor)); w += v; m += v * j; }
+    if (w <= 0) continue;
+    ks.push(k); ys.push(m / w);
+  }
+  const n = ks.length;
+  if (n < 4) return null;
+  const mk = ks.reduce((a, b) => a + b, 0) / n, my = ys.reduce((a, b) => a + b, 0) / n;
+  let sxx = 0, sxy = 0;
+  for (let i = 0; i < n; i++) { sxx += (ks[i] - mk) ** 2; sxy += (ks[i] - mk) * (ys[i] - my); }
+  if (sxx <= 0) return null;
+  const slope = sxy / sxx, icpt = my - slope * mk;
+  let ss = 0;
+  for (let i = 0; i < n; i++) ss += (ys[i] - (icpt + slope * ks[i])) ** 2;
+  return { p: slope, n, rms: Math.sqrt(ss / n) };
 }
 
 /** Strength of a profile at a point between two pixels. */
@@ -238,39 +274,70 @@ export function centre(prof: Float32Array, p: number, o: number): number {
   return o + (cnt ? sum / cnt : 0);
 }
 
-/** Fill the lines in from the pixels either side of them, on a copy of the picture's pixels (changed in place). */
+/** How far past a line's own width (in pixels) the fill fades out, so the soft edge a printed line has is covered as well and no seam is left. */
+export const FEATHER = 1.5;
+/** How many pixels on each side are averaged to make the colour a line is filled with. */
+export const FILL_BAND = 3;
+
+/**
+ * Fill the lines in, on a copy of the picture's pixels (changed in place).
+ *
+ * Each line is worked out to a fraction of a pixel. Every pixel on it is replaced by a blend between the average of a few
+ * pixels just outside it on one side and the same on the other (a single neighbour would copy its speck of noise, and one
+ * that is still part of the line's soft edge would leave a faint streak). Pixels at the edge of the zone are only partly
+ * replaced, so no seam shows where the fill ends.
+ */
 export function hideGrid(img: PixelImage, cut: Pick<GridCut, 'p' | 'x' | 'y' | 't'>): void {
-  const { width: W, height: H, data } = img;
-  const half = Math.ceil(cut.t / 2) + 1;
-  // down the vertical lines
-  for (let c = cut.x; c < W + cut.p; c += cut.p) {
-    const mid = Math.round(c);
-    const a = mid - half, b = mid + half;
-    const l = a - 1, r = b + 1;
-    if (b < 0 || a >= W) continue;
-    for (let y = 0; y < H; y++) {
-      const o = y * W * 4;
-      const lo = o + Math.max(0, l) * 4, ro = o + Math.min(W - 1, r) * 4;
-      for (let x = Math.max(0, a); x <= Math.min(W - 1, b); x++) {
-        const f = r === l ? 0 : (x - l) / (r - l);
-        const q = o + x * 4;
-        for (let k = 0; k < 3; k++) data[q + k] = data[lo + k] * (1 - f) + data[ro + k] * f;
-      }
-    }
-  }
-  // then across the horizontal ones (the crossings are filled from rows that are already clean)
-  for (let c = cut.y; c < H + cut.p; c += cut.p) {
-    const mid = Math.round(c);
-    const a = mid - half, b = mid + half;
-    const l = a - 1, r = b + 1;
-    if (b < 0 || a >= H) continue;
-    const lo = Math.max(0, l) * W * 4, ro = Math.min(H - 1, r) * W * 4;
-    for (let y = Math.max(0, a); y <= Math.min(H - 1, b); y++) {
-      const f = r === l ? 0 : (y - l) / (r - l);
-      const o = y * W * 4;
-      for (let x = 0; x < W; x++) {
-        const q = o + x * 4;
-        for (let k = 0; k < 3; k++) data[q + k] = data[lo + x * 4 + k] * (1 - f) + data[ro + x * 4 + k] * f;
+  const { width: W, height: H } = img;
+  // down the vertical lines, then across the horizontal ones (the crossings are filled from rows that are already clean)
+  fillLines(img.data, { along: H, alongStride: W * 4, across: W, acrossStride: 4 }, cut.x, cut.p, cut.t);
+  fillLines(img.data, { along: W, alongStride: 4, across: H, acrossStride: W * 4 }, cut.y, cut.p, cut.t);
+}
+
+interface Axis {
+  /** pixels along a line, and how far apart they are in the data */
+  along: number;
+  alongStride: number;
+  /** pixels across the picture in the direction the lines are spaced in, and the data distance between them */
+  across: number;
+  acrossStride: number;
+}
+
+function fillLines(data: Uint8ClampedArray | Uint8Array, ax: Axis, first: number, p: number, t: number): void {
+  const half = Math.max(0.5, t / 2) + 0.5;
+  const reach = half + FEATHER;
+  // where the pixels the fill is taken from begin (kept clear of the next line when the lines are close)
+  const gap = Math.max(1, Math.min(reach, p / 2 - 1.5));
+  const n = Math.max(1, Math.min(FILL_BAND, Math.floor(p / 2 - gap)));
+  const { along, alongStride, across, acrossStride } = ax;
+  const px = new Float32Array(3);
+  // c walks over every line that could touch the picture (a line starting before it, as well)
+  let c = first - Math.ceil((first + reach) / p) * p;
+  for (; c < across + reach; c += p) {
+    if (c + reach < 0 || c - reach > across - 1) continue;
+    const lo = Math.round(c - gap - n + 1), hi = Math.round(c - gap);
+    const lo2 = Math.round(c + gap), hi2 = Math.round(c + gap + n - 1);
+    const x0 = Math.max(0, Math.ceil(c - reach)), x1 = Math.min(across - 1, Math.floor(c + reach));
+    for (let i = 0; i < along; i++) {
+      const row = i * alongStride;
+      // the average colour just outside the line on each side
+      const sideL = new Float32Array(3), sideR = new Float32Array(3);
+      let nl = 0, nr = 0;
+      for (let k = Math.max(0, lo); k <= Math.min(across - 1, hi); k++) { const q = row + k * acrossStride; sideL[0] += data[q]; sideL[1] += data[q + 1]; sideL[2] += data[q + 2]; nl++; }
+      for (let k = Math.max(0, lo2); k <= Math.min(across - 1, hi2); k++) { const q = row + k * acrossStride; sideR[0] += data[q]; sideR[1] += data[q + 1]; sideR[2] += data[q + 2]; nr++; }
+      if (!nl && !nr) continue;
+      for (let k = 0; k < 3; k++) { if (nl) sideL[k] /= nl; if (nr) sideR[k] /= nr; }
+      for (let x = x0; x <= x1; x++) {
+        const d = Math.abs(x - c);
+        const w = d <= half ? 1 : Math.max(0, 1 - (d - half) / FEATHER);
+        if (w <= 0) continue;
+        // along the stretch between the two sides the fill slides from one colour to the other
+        const f = nl && nr ? Math.min(1, Math.max(0, (x - (c - gap)) / (2 * gap))) : nl ? 0 : 1;
+        const q = row + x * acrossStride;
+        for (let k = 0; k < 3; k++) {
+          px[k] = (nl && nr ? sideL[k] * (1 - f) + sideR[k] * f : nl ? sideL[k] : sideR[k]);
+          data[q + k] = data[q + k] * (1 - w) + px[k] * w;
+        }
       }
     }
   }

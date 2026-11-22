@@ -14,8 +14,6 @@ export interface TokenCtx {
   health: { pct: number; bar: boolean; nums?: { now: number; cap: number } } | null;
   /** how high it is: flying, or standing on high or low ground */
   alt: Altitude;
-  /** the DM's own view: a light with no token to go with it shows as a small marker (players see nothing there) */
-  mark: boolean;
 }
 
 /** what has to change on screen when a token's effects change */
@@ -105,7 +103,7 @@ export class TokenView {
     this.health = ctx.health;
     const key = [token.size, token.shape, token.ring, token.ringW, token.imgScale, token.imgX, token.imgY, token.imgBg, token.name ? token.name[0] : '?', g.cell,
       ctx.health ? `${ctx.health.pct}/${ctx.health.bar}/${ctx.health.nums ? `${ctx.health.nums.now}of${ctx.health.nums.cap}` : ''}` : '', fxKey(this.fxList(token)),
-      isLightMark(token) ? `L${ctx.mark}${token.light?.c}` : ''].join('|');
+      isLightMark(token) ? `L${token.light?.c}` : ''].join('|');
     if (key !== this.key) {
       this.key = key;
       this.redraw(token, ctx);
@@ -163,11 +161,9 @@ export class TokenView {
       this.maskG.rect(-r + ringPx / 2, -r + ringPx / 2, D - ringPx, D - ringPx).fill(noImage ? hashColor(t.name || t.id) : imgFill);
       if (ringPx > 0) this.ring.rect(-r + ringPx / 2, -r + ringPx / 2, D - ringPx, D - ringPx).stroke({ width: ringPx, color: hex(t.ring), join: 'miter' });
     } else if (isLightMark(t)) {
-      // a light on its own: the DM sees a small glowing marker, the players see nothing at all
-      if (ctx.mark) {
-        const col = hex(t.light!.c);
-        this.base.circle(0, 0, r).fill({ color: col, alpha: 0.35 }).stroke({ width: Math.max(1.5, r * 0.12), color: col, alpha: 0.9 });
-      }
+      // a light on its own: everyone sees a small glowing marker where it is (a light the players should not see is hidden like any token)
+      const col = hex(t.light!.c);
+      this.base.circle(0, 0, r).fill({ color: col, alpha: 0.35 }).stroke({ width: Math.max(1.5, r * 0.12), color: col, alpha: 0.9 });
     } else if (noImage) {
       this.base.circle(0, 0, r).fill(hashColor(t.name || t.id));
     }
@@ -182,7 +178,7 @@ export class TokenView {
     }
 
     const mark = isLightMark(t);
-    this.initial.visible = mark ? ctx.mark : noImage && t.shape !== 'none';
+    this.initial.visible = mark || (noImage && t.shape !== 'none');
     this.initial.text = mark ? '🔥' : (t.name || '?').trim().charAt(0).toUpperCase() || '?';
     this.initial.style.fontSize = Math.max(10, D * (mark ? 0.7 : 0.5));
 

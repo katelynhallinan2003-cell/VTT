@@ -10,7 +10,7 @@ const { browser, context } = await launch();
 const dm = await context.newPage();
 watch(dm, 'dm', errors);
 await dm.goto(BASE);
-await dm.evaluate(() => localStorage.clear());
+await dm.evaluate(() => { localStorage.clear(); localStorage.setItem('vtt-auto-grid', '0'); }); // these batches press the Find button themselves (batchZ5 covers the automatic look)
 await dm.reload();
 await dm.getByRole('button', { name: /Start as the DM/ }).click();
 await dm.getByPlaceholder('New table name').fill('O');
@@ -97,6 +97,7 @@ check('it found lines every 70 px even though my grid was set to 33', Math.abs(m
 check('on the right offsets (23 across, 41 down)', Math.abs(m.cut.x - 23.5) < 1.6 && Math.abs(m.cut.y - 41.5) < 1.6, `${m.cut.x}, ${m.cut.y}`);
 check('about 2 px thick', m.cut.t >= 1 && m.cut.t <= 4, String(m.cut.t));
 check('and is switched on', m.cut.on === true);
+check('and my own grid was set on it as well (70 px squares on the lines)', Math.abs(m.grid.cell - 70) < 0.3 && Math.abs(m.grid.ox - 23.5) < 1.6 && Math.abs(m.grid.oy - 41.5) < 1.6, JSON.stringify(m.grid));
 await dm.waitForFunction(() => { const b = window.__vtt.board; return b.mapCutTex && b.mapSprite.texture === b.mapCutTex; }, null, { timeout: 30000 });
 check('the board now shows the copy without the grid', (await showing(dm)) === 'cut');
 const after = await lineContrast(dm);
@@ -120,6 +121,8 @@ await dm.waitForFunction(() => { const b = window.__vtt.board; return b.mapCutTe
 check('turning it on hides them again', (await showing(dm)) === 'cut');
 
 // ---- line my grid up with it
+// finding the grid already set mine on it, so knock it off the lines first
+await dm.evaluate(() => window.__vtt.client.updateScene({ grid: { cell: 33, ox: 5, oy: 9 } })); await sleep(500);
 await dm.getByRole('button', { name: 'Line my grid up with it' }).click();
 await sleep(500);
 m = await meta();

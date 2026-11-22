@@ -561,3 +561,7 @@ input[type=text], input[type=number], input[type=password], select { border-radi
 .campaign-error { margin: 8px 0 0; color: var(--danger); }
 
 .keys .keys-head { margin: 10px 0 0; font-weight: 700; color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: .06em; }
+
+/* extra maps in the Scene panel */
+.extra-map { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
+.extra-map.on { border-color: var(--accent); }

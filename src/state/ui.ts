@@ -19,6 +19,8 @@ export interface UiData {
   brushSize: number;
   selection: Set<string>;
   mapSelected: boolean;
+  /** the extra map being moved (null: none) */
+  extraSel: string | null;
   /** DM: look at the board exactly as players do (opaque fog, no hidden tokens) */
   dmPreview: boolean;
   zoom: number;
@@ -61,6 +63,8 @@ export interface UiData {
   testMulti: boolean;
   /** ruler: each drag adds a leg to the measurement instead of starting again */
   rulerMulti: boolean;
+  /** a map that has just been added is looked at for a printed grid, which is then hidden and used as the grid */
+  autoGrid: boolean;
   /** which mouse button pans the view (the other one opens the menu / pings) */
   panButton: 'right' | 'middle';
   /** how pinging works: middle click, or holding the left button */
@@ -132,7 +136,7 @@ function readStr<T extends string>(key: string, dflt: T, allowed: readonly T[]):
 export class UiState {
   data: UiData = {
     tool: 'select', fogMode: 'r', fogShape: 'rect', brushSize: 2,
-    selection: new Set(), mapSelected: false, dmPreview: false, zoom: 1, status: null,
+    selection: new Set(), mapSelected: false, extraSel: null, dmPreview: false, zoom: 1, status: null,
     dockTab: null,
     drawTool: readStr('vtt-draw-tool', 'pen', ['pen', 'line', 'arrow', 'rect', 'ellipse', 'text', 'erase'] as const),
     tplKind: readStr('vtt-tpl-kind', 'cone', ['cone', 'cube', 'sphere', 'emanation', 'beam'] as const),
@@ -154,6 +158,7 @@ export class UiState {
     tplShare: readFlag('vtt-tpl-share', true),
     testMulti: readFlag('vtt-test-multi', false),
     rulerMulti: readFlag('vtt-ruler-multi', false),
+    autoGrid: readFlag('vtt-auto-grid', true),
     textEdit: null, camRev: 0, initOpen: false,
     fxJump: readFlag('vtt-fx-jump', true), fxDraft: null,
     heightFt: (() => { try { const n = Number(localStorage.getItem('vtt-height-ft')); return Number.isFinite(n) && localStorage.getItem('vtt-height-ft') !== null ? n : 10; } catch { return 10; } })(),
@@ -236,6 +241,7 @@ export class UiState {
       if (patch.tplShare !== undefined) localStorage.setItem('vtt-tpl-share', patch.tplShare ? '1' : '0');
       if (patch.testMulti !== undefined) localStorage.setItem('vtt-test-multi', patch.testMulti ? '1' : '0');
       if (patch.rulerMulti !== undefined) localStorage.setItem('vtt-ruler-multi', patch.rulerMulti ? '1' : '0');
+      if (patch.autoGrid !== undefined) localStorage.setItem('vtt-auto-grid', patch.autoGrid ? '1' : '0');
       if (patch.sharePlot !== undefined) localStorage.setItem('vtt-share-plot', patch.sharePlot ? '1' : '0');
       if (patch.fxJump !== undefined) localStorage.setItem('vtt-fx-jump', patch.fxJump ? '1' : '0');
     } catch { /* ignore */ }
@@ -249,13 +255,13 @@ export class UiState {
     const next = new Set(ids);
     const cur = this.data.selection;
     if (next.size === cur.size && [...next].every((i) => cur.has(i))) return;
-    this.set({ selection: next, mapSelected: false, ...(next.size ? { drawSel: new Set<string>() } : {}) });
+    this.set({ selection: next, mapSelected: false, extraSel: null, ...(next.size ? { drawSel: new Set<string>() } : {}) });
   }
 
   selectDrawings(ids: Iterable<string>) {
     const next = new Set(ids);
     const cur = this.data.drawSel;
     if (next.size === cur.size && [...next].every((i) => cur.has(i))) return;
-    this.set({ drawSel: next, ...(next.size ? { selection: new Set<string>(), mapSelected: false } : {}) });
+    this.set({ drawSel: next, ...(next.size ? { selection: new Set<string>(), mapSelected: false, extraSel: null } : {}) });
   }
 }

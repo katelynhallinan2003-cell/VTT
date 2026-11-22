@@ -45,8 +45,10 @@ export interface FogSettings {
   base: 'hidden' | 'clear';
   /** tokens with a sight distance clear the fog around themselves while they stand there */
   vision: boolean;
-  /** the DM's browser keeps the ground those tokens have seen revealed */
+  /** the DM's browser keeps the ground those tokens have seen */
   explore: boolean;
+  /** what they have seen but cannot see right now is greyed out (and tokens there are out of sight); off: it stays fully clear */
+  dim: boolean;
 }
 
 /** How bright the scene is where no light shines: daylight, twilight or darkness. */
@@ -54,6 +56,23 @@ export type Ambient = 'bright' | 'dim' | 'dark';
 
 export interface LightSettings {
   ambient: Ambient;
+}
+
+/** Another map picture in the same scene, laid over the first (a second floor next door, an overlay, the next stretch of road). */
+export interface ExtraMap {
+  id: string;
+  url: string;
+  /** natural pixel size of the picture */
+  w: number;
+  h: number;
+  x: number;
+  y: number;
+  scale: number;
+  name: string;
+  /** players can see it (off: only the DM, drawn faded, until it is wanted) */
+  show: boolean;
+  /** clicking and dragging on it does not move it */
+  locked: boolean;
 }
 
 export interface SceneMeta {
@@ -68,6 +87,10 @@ export interface SceneMeta {
   mapLocked: boolean;
   /** a grid printed on the map picture, and whether it is hidden on screen (the picture itself is never changed) */
   mapGrid: GridCut | null;
+  /** more map pictures laid over the first, in the order they were added */
+  maps: ExtraMap[];
+  /** the map picture has been looked at for a printed grid (a new map is, once, so the grid can be set up without being asked) */
+  gridTried: boolean;
   /** walls stop tokens being dragged through them (for players; the DM can hold Q to pass) */
   wallStop: boolean;
   /** drops of more than this many feet between neighbouring squares are cliffs (0: none) */
@@ -280,7 +303,7 @@ export interface InitPub {
   entries: { id: string; tk: string | null; n: string; i: number; o: number }[];
 }
 
-export type FogMode = 'r' | 'h'; // reveal | hide
+export type FogMode = 'r' | 'h' | 'x'; // reveal | hide | explored (seen once: shown grey when nobody can see it now)
 export type FogOp =
   | { m: FogMode; t: 'rect'; p: string }            // "x,y,w,h"
   | { m: FogMode; t: 'poly'; p: string }            // "x1,y1,x2,y2,..."

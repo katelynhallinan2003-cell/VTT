@@ -4,7 +4,8 @@ import { LIGHT_PRESETS } from '../core/light';
 import { TOKEN_SIZES } from '../core/model';
 import type { TableClient } from '../state/client';
 import type { Aura, HpShow, LabelMode, Token, TokenLight, TokenShape } from '../types';
-import { Field, Modal, SliderField, Toggle, toast, useClient } from './common';
+import { Field, Modal, SliderField, Toggle, toast, useClient, useRerender } from './common';
+import { customLights, removeCustomLight, saveCustomLight, subscribeLights } from '../state/lights';
 import { AuraEditor } from './auraEditor';
 import { NO_FRAMING, PickImage, TokenCropper, type PaintApi } from './tokenCropper';
 import { uploadImage } from './uploads';
@@ -31,6 +32,7 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState<'token' | 'light'>('token');
   const paintApi = useRef<PaintApi | null>(null);
 
   // the token vanished (deleted by someone else): close
@@ -131,6 +133,19 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
         )}
 
         <div>
+          {client.isDM && (
+            <div class="seg" style={{ marginBottom: '10px' }}>
+              <button class={tab === 'token' ? 'on' : ''} onClick={() => setTab('token')}>Token</button>
+              <button class={tab === 'light' ? 'on' : ''} onClick={() => setTab('light')}>Sight and lights</button>
+            </div>
+          )}
+          {client.isDM && tab === 'light' && (
+            <SightLights
+              editable={editable}
+              sight={val('sight')} dv={val('dv')} light={lightNow} sameLight={sameLight}
+              onSight={(n) => set({ sight: n })} onDv={(n) => set({ dv: n })} onLight={(l) => set({ light: l })} />
+          )}
+          <div style={{ display: client.isDM && tab === 'light' ? 'none' : undefined }}>
           {!multi && (
             <Field label="Name">
               <input type="text" value={name} disabled={!editable} onInput={(e) => set({ name: (e.target as HTMLInputElement).value })} />
@@ -227,54 +242,105 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
                   placeholder={val('initBonus') === null ? 'Mixed' : '0'}
                   onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ initBonus: v === '' ? 0 : Math.max(-99, Math.min(99, Math.round(Number(v)))) }); }} />
               </Field>
-              <h4>Sight</h4>
-              <Field label="Sees as far as (feet)" hint="0: it does not clear fog by itself. Turn on “Tokens clear the fog around them” in the Scene panel.">
-                <div class="row wrap" style={{ marginBottom: 0 }}>
-                  <input type="number" class="num" min={0} step={5} disabled={!editable} value={(draft.sight ?? same('sight') ?? '') as number | ''}
-                    placeholder={val('sight') === null ? 'Mixed' : '0'}
-                    onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ sight: v === '' ? 0 : Math.max(0, Number(v)) }); }} />
-                  {[0, 30, 60, 120].map((n) => <button key={n} class="btn small" disabled={!editable} onClick={() => set({ sight: n })}>{n === 0 ? 'None' : `${n} ft`}</button>)}
-                </div>
-              </Field>
-              <h4>Darkness and light</h4>
-              <Field label="Darkvision (feet)" hint="Sees this far in the dark as if it were dim light. 0: none. It can only see as far as its sight, above.">
-                <div class="row wrap" style={{ marginBottom: 0 }}>
-                  <input type="number" class="num" min={0} step={5} disabled={!editable} value={(draft.dv ?? same('dv') ?? '') as number | ''}
-                    placeholder={val('dv') === null ? 'Mixed' : '0'}
-                    onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ dv: v === '' ? 0 : Math.max(0, Number(v)) }); }} />
-                  {[0, 30, 60, 120].map((n) => <button key={n} class="btn small" disabled={!editable} onClick={() => set({ dv: n })}>{n === 0 ? 'None' : `${n} ft`}</button>)}
-                </div>
-              </Field>
-              <Field label="Gives off light" hint="Bright out to the first distance, dim for the second one on top of it (a torch: 20 and 20). It matters once the scene is dim or dark (Scene panel).">
-                <div class="row wrap" style={{ marginBottom: 0 }}>
-                  <button class={`btn small ${lightNow === null ? 'primary' : ''}`} disabled={!editable} onClick={() => set({ light: null })}>None</button>
-                  {LIGHT_PRESETS.map((p) => (
-                    <button key={p.name} class={`btn small ${lightNow && sameLight(lightNow, p.light) ? 'primary' : ''}`} disabled={!editable} title={`Bright ${p.light.b} ft, dim ${p.light.d} ft more`}
-                      onClick={() => set({ light: { ...p.light } })}>{p.name}</button>
-                  ))}
-                </div>
-                {lightNow === undefined && <p class="hint">These tokens have different lights. Pick one to give them all the same.</p>}
-                {lightNow && (
-                  <div class="row wrap" style={{ marginTop: '8px', marginBottom: 0 }}>
-                    <label class="field-label">Bright
-                      <input type="number" class="num" min={0} step={5} disabled={!editable} value={lightNow.b}
-                        onInput={(e) => set({ light: { ...lightNow, b: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) } })} /> ft
-                    </label>
-                    <label class="field-label">then dim
-                      <input type="number" class="num" min={0} step={5} disabled={!editable} value={lightNow.d}
-                        onInput={(e) => set({ light: { ...lightNow, d: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) } })} /> ft
-                    </label>
-                    <label class="field-label">Colour
-                      <input type="color" disabled={!editable} value={lightNow.c} onInput={(e) => set({ light: { ...lightNow, c: (e.target as HTMLInputElement).value } })} />
-                    </label>
-                  </div>
-                )}
-              </Field>
             </>
           )}
           {!multi && <AuraEditor auras={auras} ft={client.grid.ft} isDM={client.isDM} disabled={!editable} defaultColor={ring} onChange={(a) => set({ auras: a })} />}
+          </div>
         </div>
       </div>
     </Modal>
+  );
+}
+
+/** The last distance a darkvision toggle was switched on with in this editor. */
+const DV_DEFAULT = 60;
+
+/** Sight, darkvision and light, the things about a token that matter once the scene is dim or dark. null values: the tokens being edited disagree. */
+function SightLights(props: {
+  editable: boolean;
+  sight: number | null; dv: number | null; light: TokenLight | null | undefined;
+  sameLight: (a: TokenLight | null, b: TokenLight | null) => boolean;
+  onSight: (n: number) => void; onDv: (n: number) => void; onLight: (l: TokenLight | null) => void;
+}) {
+  const { editable, sight, dv, light } = props;
+  useRerender((fn) => subscribeLights(fn), []);
+  const saved = customLights();
+  const [name, setName] = useState('');
+  const lastDv = useRef(DV_DEFAULT);
+  if (dv && dv > 0) lastDv.current = dv;
+  const dvOn = dv != null && dv > 0;
+  const pickRow = (list: { key: string; name: string; light: TokenLight; custom?: string }[]) => list.map((p) => (
+    <span key={p.key} class="row" style={{ gap: '2px', marginBottom: 0, display: 'inline-flex' }}>
+      <button class={`btn small ${light && props.sameLight(light, p.light) ? 'primary' : ''}`} disabled={!editable} title={`Bright ${p.light.b} ft, dim ${p.light.d} ft more`}
+        onClick={() => props.onLight({ ...p.light })}>{p.name}</button>
+      {p.custom && <button class="btn small" title={`Forget “${p.name}”`} aria-label={`Forget ${p.name}`} onClick={() => removeCustomLight(p.custom!)}>×</button>}
+    </span>
+  ));
+  return (
+    <div>
+      <h4 style={{ marginTop: 0 }}>Sight</h4>
+      <Field label="Sees as far as (feet)" hint="0: it does not clear fog by itself. Turn on “Tokens clear the fog around them” in the Scene panel.">
+        <div class="row wrap" style={{ marginBottom: 0 }}>
+          <input type="number" class="num" min={0} step={5} disabled={!editable} value={sight ?? ''} placeholder={sight === null ? 'Mixed' : '0'}
+            onInput={(e) => { const v = (e.target as HTMLInputElement).value; props.onSight(v === '' ? 0 : Math.max(0, Number(v))); }} />
+          {[0, 30, 60, 120].map((n) => <button key={n} class="btn small" disabled={!editable} onClick={() => props.onSight(n)}>{n === 0 ? 'None' : `${n} ft`}</button>)}
+        </div>
+      </Field>
+
+      <h4>Darkvision</h4>
+      <Toggle checked={dvOn} disabled={!editable} onChange={(v) => props.onDv(v ? lastDv.current : 0)} label="Has darkvision"
+        hint={dv === null ? 'These tokens differ. Switching it on or off sets them all alike.' : 'In the dark it sees as if the ground were dim light, out to the distance below (never further than its sight).'} />
+      {dvOn && (
+        <Field label="Darkvision reaches (feet)">
+          <div class="row wrap" style={{ marginBottom: 0 }}>
+            <input type="number" class="num" min={5} step={5} disabled={!editable} value={dv ?? ''}
+              onInput={(e) => { const n = Number((e.target as HTMLInputElement).value); if (n > 0) props.onDv(n); }} />
+            {[30, 60, 90, 120].map((n) => <button key={n} class={`btn small ${dv === n ? 'primary' : ''}`} disabled={!editable} onClick={() => props.onDv(n)}>{n} ft</button>)}
+          </div>
+        </Field>
+      )}
+
+      <h4>Lights</h4>
+      <Toggle checked={light != null} disabled={!editable} onChange={(v) => props.onLight(v ? { ...LIGHT_PRESETS[1].light } : null)} label="Gives off light"
+        hint="Bright out to the first distance, then dim for the second one on top of it (a torch: 20 and 20). It matters once the scene is twilight or dark (Scene panel). Everyone can see where it is." />
+      {light === undefined && <p class="hint">These tokens have different lights. Pick one to give them all the same.</p>}
+      {light !== null && (
+        <>
+          <Field label="Pick a light">
+            <div class="row wrap" style={{ marginBottom: 0 }}>
+              {pickRow(LIGHT_PRESETS.map((p) => ({ key: p.name, name: p.name, light: p.light })))}
+            </div>
+          </Field>
+          {saved.length > 0 && (
+            <Field label="Your lights" hint="Made by you and kept in this browser. They also show in the Scene panel when you place a light.">
+              <div class="row wrap" style={{ marginBottom: 0 }}>
+                {pickRow(saved.map((c) => ({ key: c.id, name: c.name, light: c.light, custom: c.id })))}
+              </div>
+            </Field>
+          )}
+        </>
+      )}
+      {light && (
+        <Field label="Make your own" hint="Set how it shines, then give it a name to keep it for next time.">
+          <div class="row wrap" style={{ marginBottom: '8px' }}>
+            <label class="field-label">Bright
+              <input type="number" class="num" min={0} step={5} disabled={!editable} value={light.b}
+                onInput={(e) => props.onLight({ ...light, b: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) })} /> ft
+            </label>
+            <label class="field-label">then dim
+              <input type="number" class="num" min={0} step={5} disabled={!editable} value={light.d}
+                onInput={(e) => props.onLight({ ...light, d: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) })} /> ft
+            </label>
+            <label class="field-label">Colour
+              <input type="color" disabled={!editable} value={light.c} onInput={(e) => props.onLight({ ...light, c: (e.target as HTMLInputElement).value })} />
+            </label>
+          </div>
+          <div class="row wrap" style={{ marginBottom: 0 }}>
+            <input type="text" placeholder="Name, e.g. Everburning torch" maxLength={40} value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} />
+            <button class="btn small" disabled={!name.trim()} onClick={() => { saveCustomLight(name, light); setName(''); toast('Light saved.', 'ok', 2000); }}>Save this light</button>
+          </div>
+        </Field>
+      )}
+    </div>
   );
 }

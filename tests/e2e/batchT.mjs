@@ -10,7 +10,7 @@ const { browser, context } = await launch();
 const dm = await context.newPage();
 watch(dm, 'dm', errors);
 await dm.goto(BASE);
-await dm.evaluate(() => localStorage.clear());
+await dm.evaluate(() => { localStorage.clear(); localStorage.setItem('vtt-auto-grid', '0'); }); // these batches press the Find button themselves (batchZ5 covers the automatic look)
 await dm.reload();
 await dm.getByRole('button', { name: /Start as the DM/ }).click();
 await dm.getByPlaceholder('New table name').fill('T');
@@ -135,6 +135,8 @@ check('with it off the original lines are there to see', before !== null && befo
 await dm.locator('label.toggle', { hasText: "Hide the map's grid lines" }).locator('input').check();
 await dm.waitForFunction(() => { const b = window.__vtt.board; return b.mapCutTex && b.mapSprite.texture === b.mapCutTex; }, null, { timeout: 40000 });
 // line the app's hexes up
+// finding the grid already set mine on it, so knock it off the lines first
+await dm.evaluate(() => window.__vtt.client.updateScene({ grid: { cell: 33, ox: 5, oy: 9 } })); await sleep(500);
 await dm.getByRole('button', { name: 'Line my grid up with it' }).click();
 await sleep(500);
 m = await meta();
@@ -168,6 +170,8 @@ check('flat-top hexes are found even though the scene is set to point-up', m.cut
 check('80 px between centres', Math.abs(m.cut.p - 80) < 0.5, String(m.cut.p));
 check('on the right spot', hexLattice(m.cut, 'flat', 80, 19, 27) < 2.2, String(hexLattice(m.cut, 'flat', 80, 19, 27)));
 await dm.waitForFunction(() => { const b = window.__vtt.board; return b.mapCutTex && b.mapSprite.texture === b.mapCutTex; }, null, { timeout: 40000 });
+// finding the grid already set mine on it, so knock it off the lines first
+await dm.evaluate(() => window.__vtt.client.updateScene({ grid: { cell: 33, ox: 5, oy: 9 } })); await sleep(500);
 await dm.getByRole('button', { name: 'Line my grid up with it' }).click();
 await sleep(500);
 m = await meta();
@@ -184,6 +188,8 @@ await dm.getByRole('button', { name: 'Find and hide it' }).click();
 await dm.waitForFunction(() => window.__vtt.client.scene.meta.mapGrid, null, { timeout: 40000 });
 m = await meta();
 check('a square scene still finds the hexes on the picture', m.cut.hex === 'flat' && Math.abs(m.cut.p - 80) < 0.5, JSON.stringify(m.cut));
+// finding the grid already set mine on it, so knock it off the lines first
+await dm.evaluate(() => window.__vtt.client.updateScene({ grid: { cell: 33, ox: 5, oy: 9 } })); await sleep(500);
 await dm.getByRole('button', { name: 'Line my grid up with it' }).click();
 await sleep(500);
 m = await meta();

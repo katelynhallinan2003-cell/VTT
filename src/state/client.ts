@@ -2,7 +2,7 @@ import type { Backend, Unsub } from '../backend/types';
 import { SERVER_TS } from '../backend/types';
 import {
   drawingToWire, handoutToWire, initPubToWire, initToWire, normalizeDrawing, normalizeFogOp, normalizeHandout, normalizeInit, normalizeInitPub, normalizeLive, normalizeMeta,
-  normalizeLibraryItem, normalizePlayer, normalizeSceneMeta, normalizeSettings, normalizeToken, stripUndefined, tokenToWire, viaToWire, DEFAULT_GRID, DM_COLOR,
+  normalizeLibraryItem, normalizePlayer, normalizeSceneMeta, normalizeSettings, normalizeToken, stripUndefined, tokenToWire, viaToWire, DEFAULT_GRID, DM_COLOR, MAX_EXTRA_MAPS, mapsToWire,
 } from '../core/model';
 import {
   applyDamage, cleanHp, EXPLORE_MIN_CELLS, EXPLORE_JUMP_CELLS, EXPLORE_TELEPORT_CELLS, EXPLORE_TELEPORT_MS, emptyInit, moveEntry, nextTurn, orderOf, pctOf, prevTurn, publicHp, sightRadiusPx, sortByInit, toPub,
@@ -10,12 +10,12 @@ import {
 import { lineOp, polyOp } from '../core/fog';
 import { addFx, fxToWire, tickFx } from '../core/effects';
 import { can, detectPreset, PRESETS, type Action } from '../core/permissions';
-import { mapRect, snapTokenCenter } from '../core/geometry';
+import { sceneRect, snapTokenCenter } from '../core/geometry';
 import { isHex } from '../core/hex';
 import { isTemplate, movedPoints } from '../core/draw';
 import { throttle } from '../core/throttle';
 import type {
-  Drawing, Effect, FogOp, InitEntry, InitPub, InitState, LivePlot, GridSettings, Permissions, PermPreset, Ping, Player, Role, SceneIndexEntry,
+  Drawing, Effect, ExtraMap, FogMode, FogOp, InitEntry, InitPub, InitState, LivePlot, GridSettings, Permissions, PermPreset, Ping, Player, Role, SceneIndexEntry,
   Handout, Rect, SceneMeta, TableMeta, TableSettings, Token, Vec, ViewCall,
 } from '../types';
 import { altitudeOf, groundAt, zonesOf } from '../core/height';
@@ -63,7 +63,7 @@ export type ScenePatch = Partial<Omit<SceneMeta, 'grid' | 'fog' | 'light'>> & {
 };
 
 let tokenClipboard: Token[] = [];
-const UNDOABLE_SCENE_KEYS = new Set(['mapX', 'mapY', 'mapScale', 'mapLocked', 'mapGrid', 'wallStop', 'cliff', 'bg', 'grid', 'fog', 'light']);
+const UNDOABLE_SCENE_KEYS = new Set(['mapX', 'mapY', 'mapScale', 'mapLocked', 'mapGrid', 'maps', 'wallStop', 'cliff', 'bg', 'grid', 'fog', 'light']);
 
 /**
  * Everything the app knows about one table, kept in sync with the backend.
@@ -1274,6 +1274,8 @@ export class TableClient {
     const sid = s.id;
     const updates: Record<string, FogOp> = {};
     let count = 0;
+    // ground they have seen is kept grey (shown dimmed when nobody can see it now) unless the DM wants it plainly clear
+    const mode: FogMode = m.fog.dim ? 'x' : 'r';
     // a wall's top depends on the ground it stands on, and what is higher than that sees over it (only worked out when some wall has a height)
     const zones = [...s.walls.values()].some((w) => w.h > 0) ? zonesOf(s.draws.values(), g) : null;
     const segs = sightSegs(s.walls.values(), (w) => (zones ? groundAt(zones, wallMid(w)) : 0) + w.h);
@@ -1298,13 +1300,13 @@ export class TableClient {
         const pts = line.filter((p, i) => i === 0 || i === line.length - 1 || Math.hypot(p.x - line[i - 1].x, p.y - line[i - 1].y) >= g.cell * 0.2);
         // with no wall in reach this is the one thick line; with walls it is what the token could see from a spot every square along the way
         for (const shape of routeReveal(pts, r, segs, g.cell, zones ? altitudeOf(t, groundAt(zones, t)).alt : undefined)) {
-          updates[`${P.sceneFog(this.tableId, sid)}/${this.backend.newKey()}`] = shape.t === 'line' ? lineOp('r', shape.pts, shape.w) : polyOp('r', shape.pts);
+          updates[`${P.sceneFog(this.tableId, sid)}/${this.backend.newKey()}`] = shape.t === 'line' ? lineOp(mode, shape.pts, shape.w) : polyOp(mode, shape.pts);
           count++;
         }
       }
       if (viewer && lines.length) {
         for (const piece of litSeen(viewer, lights.filter((l) => l.id !== t.id), segs)) {
-          updates[`${P.sceneFog(this.tableId, sid)}/${this.backend.newKey()}`] = polyOp('r', piece);
+          updates[`${P.sceneFog(this.tableId, sid)}/${this.backend.newKey()}`] = polyOp(mode, piece);
           count++;
         }
       }
@@ -1331,7 +1333,7 @@ export class TableClient {
   }
 
   // ---------------------------------------------------------------- scenes (DM)
-  async createScene(opts: { name: string; mapUrl?: string | null; mapW?: number; mapH?: number; grid?: Partial<GridSettings>; makeActive?: boolean }): Promise<string> {
+  async createScene(opts: { name: string; mapUrl?: string | null; mapW?: number; mapH?: number; grid?: Partial<GridSettings>; makeActive?: boolean; /** do not look for a printed grid in the map */ gridTried?: boolean }): Promise<string> {
     const tid = this.tableId;
     const sid = this.backend.newKey();
     const order = Math.max(0, ...this.sceneIndex.map((s) => s.order)) + 1;
@@ -1339,13 +1341,14 @@ export class TableClient {
       ...normalizeSceneMeta({}),
       name: opts.name || 'New scene',
       mapUrl: opts.mapUrl ?? null,
+      gridTried: opts.gridTried ?? !opts.mapUrl,
       mapW: opts.mapW ?? 0,
       mapH: opts.mapH ?? 0,
       grid: { ...DEFAULT_GRID, ...opts.grid },
       createdAt: Date.now(),
     };
     await this.backend.update({
-      [P.sceneMeta(tid, sid)]: stripUndefined(meta as unknown as Record<string, unknown>),
+      [P.sceneMeta(tid, sid)]: { ...stripUndefined(meta as unknown as Record<string, unknown>), maps: mapsToWire(meta.maps) },
       [`${P.sceneIndex(tid)}/${sid}`]: { name: meta.name, order },
     });
     if (opts.makeActive || !this.activeSceneId) await this.backend.set(P.activeScene(tid), sid);
@@ -1361,7 +1364,8 @@ export class TableClient {
     for (const [k, v] of Object.entries(patch)) {
       if (k === 'grid' || k === 'fog' || k === 'light') {
         for (const [k2, v2] of Object.entries(v as object)) updates[`${base}/${k}/${k2}`] = v2 === undefined ? null : v2;
-      } else updates[`${base}/${k}`] = v === undefined ? null : v;
+      } else if (k === 'maps') updates[`${base}/maps`] = mapsToWire((v as ExtraMap[] | undefined) ?? []);
+      else updates[`${base}/${k}`] = v === undefined ? null : v;
     }
     if (patch.name) updates[`${P.sceneIndex(this.tableId)}/${sid}/name`] = patch.name;
     if (!Object.keys(updates).length) return;
@@ -1394,7 +1398,7 @@ export class TableClient {
   }
 
   async setSceneMap(url: string, w: number, h: number) {
-    await this.updateScene({ mapUrl: url, mapW: w, mapH: h, mapX: 0, mapY: 0, mapScale: 1, mapLocked: true, mapGrid: null });
+    await this.updateScene({ mapUrl: url, mapW: w, mapH: h, mapX: 0, mapY: 0, mapScale: 1, mapLocked: true, mapGrid: null, gridTried: false });
   }
 
   async deleteScene(sid: string): Promise<void> {
@@ -1551,11 +1555,36 @@ export class TableClient {
     await this.backend.update(updates);
   }
 
-  /** Visible world rect used for camera fitting. */
+  /** Visible world rect used for camera fitting: every map in the scene. */
   sceneRect() {
     const m = this.scene?.meta;
     if (!m) return null;
-    if (m.mapW > 0) return mapRect(m);
-    return { x: 0, y: 0, w: 2000, h: 1500 };
+    return sceneRect(m) ?? { x: 0, y: 0, w: 2000, h: 1500 };
+  }
+
+  // ---------------------------------------------------------------- extra maps (DM)
+  /** Lay another map picture over the scene, just to the right of what is there. Returns its id. */
+  async addExtraMap(url: string, w: number, h: number, name: string): Promise<string | null> {
+    const meta = this.scene?.meta;
+    if (!this.isDM || !meta) return null;
+    if (meta.maps.length >= MAX_EXTRA_MAPS) throw new Error(`A scene can have the main map and ${MAX_EXTRA_MAPS} more.`);
+    const here = sceneRect(meta);
+    const id = this.backend.newKey();
+    const map: ExtraMap = { id, url, w, h, x: here ? here.x + here.w : 0, y: here ? here.y : 0, scale: 1, name: name.slice(0, 60), show: true, locked: false };
+    await this.updateScene({ maps: [...meta.maps, map] });
+    return id;
+  }
+
+  /** Move, resize, rename, show or hide one of the extra maps. */
+  async updateExtraMap(id: string, patch: Partial<Omit<ExtraMap, 'id' | 'url' | 'w' | 'h'>>): Promise<void> {
+    const meta = this.scene?.meta;
+    if (!this.isDM || !meta || !meta.maps.some((m) => m.id === id)) return;
+    await this.updateScene({ maps: meta.maps.map((m) => (m.id === id ? { ...m, ...patch } : m)) });
+  }
+
+  async removeExtraMap(id: string): Promise<void> {
+    const meta = this.scene?.meta;
+    if (!this.isDM || !meta) return;
+    await this.updateScene({ maps: meta.maps.filter((m) => m.id !== id) });
   }
 }

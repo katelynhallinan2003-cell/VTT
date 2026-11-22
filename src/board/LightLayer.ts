@@ -7,10 +7,15 @@ import { canvasTexture } from './textures';
 /** A canvas, the texture on it, and the sprite that shows it. */
 class Paper {
   readonly canvas = document.createElement('canvas');
-  readonly ctx = this.canvas.getContext('2d', { willReadFrequently: false })!;
+  readonly ctx: CanvasRenderingContext2D;
   readonly sprite = new Sprite(Texture.EMPTY);
   private size = '';
   private tex: Texture | null = null;
+
+  /** `readable`: single pixels will be read back from it now and then */
+  constructor(readable = false) {
+    this.ctx = this.canvas.getContext('2d', { willReadFrequently: readable })!;
+  }
 
   /** Make it `w` x `h` and put it at `origin`, `scale` canvas pixels to each world pixel. True when it was remade (so it is blank). */
   fit(w: number, h: number, origin: Vec, scale: number): boolean {
@@ -45,7 +50,8 @@ export class LightLayer {
   readonly container = new Container();
   private shade = new Paper();
   private glow = new Paper();
-  private seenPaper = new Paper();
+  private seenPaper = new Paper(true);
+  private seenFrame: Frame | null = null;
   private litPaper = new Paper();
   private shadeKey = '';
   private seenKey = '';
@@ -87,8 +93,18 @@ export class LightLayer {
     this.litPaper.fit(f.w, f.h, f.origin, f.scale);
     if (!remade && k === this.seenKey) return;
     this.seenKey = k;
+    this.seenFrame = f;
     paintSeen(this.seenPaper.ctx, this.litPaper.ctx, f, lights, viewers, segs);
     this.seenPaper.upload();
+  }
+
+  /** Can the party see this spot right now (when it is dark and sight follows the light)? */
+  seenAt(p: Vec): boolean {
+    const f = this.seenFrame;
+    if (!f) return false;
+    const x = Math.floor((p.x - f.origin.x) * f.scale), y = Math.floor((p.y - f.origin.y) * f.scale);
+    if (x < 0 || y < 0 || x >= f.w || y >= f.h) return false;
+    return this.seenPaper.ctx.getImageData(x, y, 1, 1).data[3] > 127;
   }
 
   /** Give the big canvases back when the scene is not dark. */

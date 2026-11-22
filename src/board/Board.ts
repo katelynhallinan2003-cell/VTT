@@ -1,8 +1,8 @@
 import { Application, Container, Graphics, Sprite, Text, Texture } from 'pixi.js';
 import {
-  clamp, distanceFt, fitCamera, pathFt, gridFromRect, mapRect, normRect, pointInToken, rectContains, snapTokenCenter, snapToCellCenter, snapToCorner, zoomAt,
+  clamp, distanceFt, fitCamera, pathFt, gridFromRect, mapRect, normRect, sceneRect, pointInToken, rectContains, snapTokenCenter, snapToCellCenter, snapToCorner, zoomAt,
 } from '../core/geometry';
-import { FILL_LEVEL, STROKE_CELLS, beamWidthPx, dashSegments, fitPenPoints, handlesOf, hitDrawing, isTemplate, joinPts, resizeDrawing, setLineMeasurer, footprintPx, snapTemplate, templateLabel, templateWidthPx, type HandleId, type TemplateSnapState } from '../core/draw';
+import { FILL_LEVEL, STROKE_CELLS, beamWidthPx, dashSegments, fitPenPoints, handlesOf, hitDrawing, pointInPoly, isTemplate, joinPts, resizeDrawing, setLineMeasurer, footprintPx, snapTemplate, templateLabel, templateWidthPx, type HandleId, type TemplateSnapState } from '../core/draw';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
 import { altitudeOf, groundAt, heightChangeNote, heightNote, isRough, roughOf, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
@@ -10,6 +10,7 @@ import { DEFAULT_CLIFF_FT, cliffSegs, rampCells, walkExtra, walkNote, type WalkE
 import { EMPTY_TERRAIN, MAX_STROKE_CELLS, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, heightColor, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
 import { findGrid, scaleCut, type GridCut } from '../core/gridcut';
+import { AUTO_GRID_STRENGTH, impliedGrid } from '../core/mapgrid';
 import { findHexGrid } from '../core/hexcut';
 import { lightOf, viewerOf, type LightSrc, type Viewer } from '../core/light';
 import { LightLayer } from './LightLayer';
@@ -19,7 +20,7 @@ import type { DrawingPatch, TableClient } from '../state/client';
 import type { StrokeSize, UiState } from '../state/ui';
 import type { Ambient, Aura, DrawKind, Drawing, GridSettings, Ping, Rect, Token, Vec } from '../types';
 import { throttle } from '../core/throttle';
-import { TokenView, type TokenCtx } from './TokenView';
+import { TokenView, isLightMark, type TokenCtx } from './TokenView';
 import { DrawLayer, paintShape } from './DrawLayer';
 import { TerrainLayer } from './TerrainLayer';
 import { WallLayer } from './WallLayer';
@@ -45,6 +46,8 @@ type Drag =
   | { kind: 'rect'; start: Vec; cur: Vec }
   | { kind: 'brush'; pts: Vec[] }
   | { kind: 'map'; start: Vec; orig: Vec; moved: boolean }
+  /** dragging one of the extra maps */
+  | { kind: 'xmap'; id: string; start: Vec; orig: Vec; moved: boolean; cur: Vec }
   | { kind: 'shape'; dk: DrawKind; start: Vec; pts: Vec[]; /** set while drawing a height zone: its height in feet */ hz?: number;
       /** an emanation from a creature: where it comes out, and how wide that creature's space is in feet */ of?: number; fixedOrigin?: Vec;
       /** what the last template snap decided (so it only changes when the pointer clearly moves on) */ snap?: TemplateSnapState }
@@ -85,6 +88,10 @@ export class Board {
 
   private world = new Container();
   private mapLayer = new Container();
+  /** the extra maps, laid over the first one */
+  private extraLayer = new Container();
+  private extras = new Map<string, { url: string; sprite: Sprite }>();
+  private extrasKey = '';
   private gridG = new Graphics();
   private tokenLayer = new Container();
   private fogLayer = new Container();
@@ -240,7 +247,7 @@ export class Board {
     this.distText.anchor.set(0.5, 1);
     this.distText.visible = false;
     this.ghostLayer.sortableChildren = true;
-    this.world.addChild(this.mapLayer, this.gridG, this.terrainLayer.container, this.roughG, this.drawLayer.container, this.wallLayer.container, this.auraG, this.tokenLayer, this.ghostLayer, this.lightLayer.container, this.fogLayer, this.overlayG, this.fxLayer, this.distText);
+    this.world.addChild(this.mapLayer, this.extraLayer, this.gridG, this.terrainLayer.container, this.roughG, this.drawLayer.container, this.wallLayer.container, this.auraG, this.tokenLayer, this.ghostLayer, this.lightLayer.container, this.fogLayer, this.overlayG, this.fxLayer, this.distText);
     app.stage.addChild(this.world);
 
     this.bindInput(app.canvas);
@@ -280,6 +287,7 @@ export class Board {
     for (const f of this.cleanupInput) f();
     this.sendMoves.cancel();
     this.sendMap.cancel();
+    this.clearExtras();
     this.resetCut();
     if (this.mapUrl) releaseTexture(this.mapUrl, 'map');
     if (this.app) {
@@ -310,6 +318,17 @@ export class Board {
     const rect = this.client.sceneRect();
     if (!rect) return;
     this.cam = fitCamera(this.host.clientWidth, this.host.clientHeight, rect, 48);
+    this.applyCamera();
+  }
+
+  /** Fit the whole scene into the part of the screen the toolbar and the right-hand panel leave free. */
+  fitClearOfPanel(rightPx = 350) {
+    const rect = this.client.sceneRect();
+    if (!rect) return;
+    const left = 76;
+    const free = Math.max(240, this.host.clientWidth - rightPx - left);
+    const c = fitCamera(free, this.host.clientHeight, rect, 48);
+    this.cam = { zoom: c.zoom, tx: c.tx + left, ty: c.ty };
     this.applyCamera();
   }
 
@@ -429,6 +448,7 @@ export class Board {
     this.dirty = false;
     if (this.gridDirty) { this.drawGrid(); this.gridDirty = false; }
     this.syncWalls();
+    this.syncExtras();
     this.drawVision();
     this.drawAuras();
     this.drawOverlay();
@@ -517,6 +537,7 @@ export class Board {
     this.drawPreview = null;
     this.ui.set({ drawSel: new Set(), testCount: 0, textEdit: null });
     if (this.mapSprite) { this.mapSprite.destroy(); this.mapSprite = null; }
+    this.clearExtras();
     this.resetCut();
     if (this.mapUrl) { releaseTexture(this.mapUrl, 'map'); this.mapUrl = null; }
     this.mapTex = null;
@@ -557,6 +578,65 @@ export class Board {
     this.updateFog();
   }
 
+  // ------------------------------------------------------------------ extra maps
+  private clearExtras() {
+    for (const e of this.extras.values()) { e.sprite.destroy(); releaseTexture(e.url, 'map'); }
+    this.extras.clear();
+    this.extrasKey = '';
+  }
+
+  /** Keep the extra map pictures in step with the scene: load new ones, move and resize, fade the ones players cannot see yet, drop the removed. */
+  private syncExtras() {
+    const meta = this.client.scene?.meta;
+    const maps = meta?.maps ?? [];
+    const dmView = this.client.isDM && !this.ui.data.dmPreview;
+    const key = `${this.client.scene?.id}|${dmView}|${maps.map((m) => `${m.id},${m.url},${m.x},${m.y},${m.scale},${m.show}`).join(';')}`;
+    if (key === this.extrasKey) return;
+    this.extrasKey = key;
+    const want = new Map(maps.map((m) => [m.id, m]));
+    for (const [id, e] of [...this.extras]) {
+      const m = want.get(id);
+      if (!m || m.url !== e.url) { e.sprite.destroy(); releaseTexture(e.url, 'map'); this.extras.delete(id); }
+    }
+    maps.forEach((m, i) => {
+      let e = this.extras.get(m.id);
+      if (!e) {
+        const sprite = new Sprite(Texture.EMPTY);
+        sprite.visible = false;
+        this.extraLayer.addChild(sprite);
+        e = { url: m.url, sprite };
+        this.extras.set(m.id, e);
+        const entry = e, sid = this.client.scene?.id;
+        void loadTexture(m.url, 'map').then((t) => {
+          if (!t) return;
+          if (this.destroyed || this.extras.get(m.id) !== entry || this.client.scene?.id !== sid) { releaseTexture(m.url, 'map'); return; }
+          sprite.texture = t.texture;
+          (sprite as Sprite & { natScale?: number }).natScale = t.scale;
+          this.extrasKey = '';
+          this.invalidate();
+        });
+      }
+      const nat = (e.sprite as Sprite & { natScale?: number }).natScale;
+      e.sprite.position.set(m.x, m.y);
+      if (nat) { e.sprite.scale.set(m.scale * nat); e.sprite.visible = m.show || dmView; }
+      e.sprite.alpha = m.show ? 1 : 0.45;
+      e.sprite.zIndex = i;
+    });
+    this.extraLayer.sortableChildren = true;
+    this.invalidate();
+  }
+
+  /** The unlocked extra map under a point, topmost first. */
+  private extraAt(p: Vec): string | null {
+    const maps = this.client.scene?.meta?.maps ?? [];
+    for (let i = maps.length - 1; i >= 0; i--) {
+      const m = maps[i];
+      if (m.locked) continue;
+      if (rectContains({ x: m.x, y: m.y, w: m.w * m.scale, h: m.h * m.scale }, p)) return m.id;
+    }
+    return null;
+  }
+
   private resetCut() {
     this.cutSeq++;
     this.mapCutKey = '';
@@ -593,7 +673,7 @@ export class Board {
    * Look for a grid printed on the map picture (the DM's "Find and hide" button).
    * The answer is in pixels of the original picture, so it stays right however big the map is shown.
    */
-  async findMapGrid(): Promise<{ cut: GridCut; strength: number } | { error: string }> {
+  async findMapGrid(opts: { any?: boolean } = {}): Promise<{ cut: GridCut; strength: number } | { error: string }> {
     const tex = this.mapTex;
     const meta = this.client.scene?.meta;
     if (!tex || !meta) return { error: 'Add a map picture first.' };
@@ -605,7 +685,13 @@ export class Board {
     // a hex scene looks for hexes first, a square one for squares; either one still tries the other if nothing fits
     const g = meta.grid;
     const hexFirst = g.shape !== 'square';
-    const squares = () => (hint >= 10 ? findGrid(px.img, hint) : null) ?? findGrid(px.img);
+    // lines near the size of the grid you already have are looked for closely, but they only win when they are as clear as the best lines anywhere in the picture:
+    // a wrong guess can make a spacing that only touches some of the real lines (6 in 7, say) look like a grid
+    const squares = () => {
+      const near = hint >= 10 ? findGrid(px.img, hint) : null;
+      const all = findGrid(px.img);
+      return near && (!all || near.strength >= all.strength * 0.8) ? near : all ?? near;
+    };
     const first = hexFirst ? (g.shape as 'pointy' | 'flat') : 'pointy';
     // a grid size that is far off the printed one can make some other spacing look like hexes, so the hint only wins when it fits as well as looking at everything
     const hexes = () => {
@@ -613,7 +699,12 @@ export class Board {
       const b = findHexGrid(px.img, undefined, first);
       return a && b ? (a.strength >= b.strength * 0.9 ? a : b) : a ?? b;
     };
-    const f = hexFirst ? hexes() ?? squares() : squares() ?? hexes();
+    // `any`: no grid has been set up for this picture yet, so squares and hexes both get a look and the clearer one wins
+    const either = () => {
+      const s = squares(), h = hexes();
+      return s && h ? (h.strength > s.strength * 1.1 ? h : s) : s ?? h;
+    };
+    const f = opts.any ? either() : hexFirst ? hexes() ?? squares() : squares() ?? hexes();
     if (!f) return { error: 'I could not find evenly spaced grid lines in this picture. Some maps have none, or only faint ones.' };
     return { cut: { ...scaleCut(f.cut, tex.scale), on: true }, strength: f.strength };
   }
@@ -656,6 +747,30 @@ export class Board {
     this.gridDirty = true;
     this.updateFog();
     this.invalidate();
+    if (this.client.isDM && meta.mapUrl && !meta.gridTried) {
+      // with the setting off the map is still marked as looked at, so switching it on later does not surprise anyone
+      if (this.ui.data.autoGrid) void this.autoMapGrid(sceneId, url);
+      else void this.client.updateScene({ gridTried: true }, { record: false });
+    }
+  }
+
+  /**
+   * A map that has just been added is looked at once for a printed grid. If one is clearly there it is hidden and the app's own grid is set on it,
+   * so the DM never has to draw it. (One Ctrl+Z puts both back.) Maps with no grid, or only a faint one, are left alone.
+   */
+  private async autoMapGrid(sceneId: string, url: string) {
+    const here = () => !this.destroyed && this.client.scene?.id === sceneId && this.mapUrl === url;
+    // mark it as looked at first, so another tab, or this one loading again while it works, does not do it twice
+    await this.client.updateScene({ gridTried: true }, { record: false });
+    if (!here()) return;
+    const r = await this.findMapGrid({ any: true });
+    if (!here() || 'error' in r || r.strength < AUTO_GRID_STRENGTH) return;
+    const m = this.client.scene?.meta;
+    if (!m || m.mapGrid) return;
+    await this.client.updateScene({ mapGrid: r.cut, grid: impliedGrid(r.cut, m.mapScale, m.mapX, m.mapY) });
+    this.cb.onNotice(r.cut.hex
+      ? `This map has a hex grid printed on it. I hid it and set your grid on it. Ctrl+Z puts it back.`
+      : `This map has a grid printed on it (every ${Math.round(r.cut.p * m.mapScale * 10) / 10} px on the board). I hid it and set your grid on it. Ctrl+Z puts it back.`, 'ok');
   }
 
   // ------------------------------------------------------------------ tokens
@@ -667,7 +782,6 @@ export class Board {
       textRes: this.textRes,
       health: this.healthFor(t),
       alt: this.heightOf(t),
-      mark: c.isDM && !this.ui.data.dmPreview,
     };
   }
 
@@ -736,6 +850,7 @@ export class Board {
     const grid = this.client.grid;
     const list = [...this.views.values()].sort((a, b) => b.container.zIndex - a.container.zIndex);
     for (const v of list) {
+      if (this.outOfSight.has(v.token.id)) continue;
       if (pointInToken({ ...v.token, x: v.display.x, y: v.display.y }, grid, p)) return v.token;
     }
     return null;
@@ -1250,46 +1365,78 @@ export class Board {
   private drawDark(L: ReturnType<Board['lighting']>) {
     const meta = this.client.scene?.meta;
     if (!L || !meta) { this.lightLayer.hide(); return; }
-    const rect = meta.mapW > 0 ? mapRect(meta) : { x: 0, y: 0, w: 2000, h: 1500 };
+    const rect = sceneRect(meta) ?? { x: 0, y: 0, w: 2000, h: 1500 };
     this.lightLayer.paint({ ambient: L.ambient, rect, lights: L.lights, viewers: L.viewers, segs: this.wallSegs().sight, dm: this.client.isDM && !this.ui.data.dmPreview, key: L.key });
   }
 
+  /** Tokens standing on remembered (grey) ground that nobody can see right now: out of sight for the players until someone looks again. */
+  private outOfSight = new Set<string>();
+
   private drawVision() {
+    this.syncOutOfSight(this.drawVisionShape());
+  }
+
+  /** Hide what stands in the grey of the fog from the players, and show it again once it is seen. `test`: can this spot be seen right now (null: no fog to look through). */
+  private syncOutOfSight(test: ((p: Vec) => boolean) | null) {
+    const meta = this.client.scene?.meta;
+    const want = new Set<string>();
+    const dmView = this.client.isDM && !this.ui.data.dmPreview;
+    if (!dmView && test && meta?.fog.enabled && meta.fog.vision && meta.fog.explore && meta.fog.dim && this.fogSprite?.visible) {
+      for (const v of this.views.values()) {
+        const t = v.token;
+        // the party always sees itself, and a light stays where it was seen
+        if (t.ownerUid != null || isLightMark(t)) continue;
+        if (this.fogMask.fogAt(v.display).seen && !test(v.display)) want.add(t.id);
+      }
+    }
+    let changed = want.size !== this.outOfSight.size;
+    if (!changed) for (const id of want) if (!this.outOfSight.has(id)) { changed = true; break; }
+    if (!changed) return;
+    this.outOfSight = want;
+    for (const v of this.views.values()) v.container.visible = !want.has(v.token.id);
+    this.invalidate();
+  }
+
+  /** Cut the fog open where the tokens can see; returns a test for "can this spot be seen right now" (null when there is no fog). */
+  private drawVisionShape(): ((p: Vec) => boolean) | null {
     const L = this.lighting();
     this.drawDark(L);
     const sprite = this.fogSprite;
-    if (!sprite) return;
+    if (!sprite) return null;
     const meta = this.client.scene?.meta;
     // in the dark, a token only sees what is lit (or what its darkvision reaches): the fog is cut open in that shape
     if (L && L.ambient === 'dark' && sprite.visible && meta?.fog.enabled && meta.fog.vision) {
       this.visionG.clear();
       if (!L.viewers.length) {
         if (this.fogMaskKind) { sprite.setMask({ mask: null }); this.fogMaskKind = ''; }
-        return;
+        return () => false;
       }
       const m = this.fogMask;
       this.lightLayer.paintSeen({ origin: m.origin, scale: m.scale, w: m.canvas.width, h: m.canvas.height }, L.lights, L.viewers, this.wallSegs().sight, L.key);
       if (this.fogMaskKind !== 's') { sprite.setMask({ mask: this.lightLayer.seenSprite, inverse: true }); this.fogMaskKind = 's'; }
-      return;
+      return (p) => this.lightLayer.seenAt(p);
     }
     const g = this.visionG;
     g.clear();
     const circles = sprite.visible ? this.visionNow() : [];
     if (!circles.length) {
       if (this.fogMaskKind) { sprite.setMask({ mask: null }); this.fogMaskKind = ''; }
-      return;
+      return sprite.visible ? () => false : null;
     }
     // a wall cuts the circle back to what the token could really see from where it stands
     const sight = this.wallSegs().sight;
+    const shapes: { x: number; y: number; r: number; poly: Vec[] | null }[] = [];
     for (const c of circles) {
       if (sight.length) {
         const v = visibilityPolygon({ x: c.x, y: c.y }, c.r, sight, 64, c.alt);
-        if (!v.free) { g.poly(v.poly.flatMap((q) => [q.x, q.y])); continue; }
+        if (!v.free) { g.poly(v.poly.flatMap((q) => [q.x, q.y])); shapes.push({ ...c, poly: v.poly }); continue; }
       }
       g.circle(c.x, c.y, c.r);
+      shapes.push({ ...c, poly: null });
     }
     g.fill(0xffffff);
     if (this.fogMaskKind !== 'g') { sprite.setMask({ mask: g, inverse: true }); this.fogMaskKind = 'g'; }
+    return (p) => shapes.some((c) => (c.poly ? pointInPoly(p, c.poly) : Math.hypot(p.x - c.x, p.y - c.y) <= c.r));
   }
 
   /** Whose turn is it, as far as this viewer is allowed to know? */
@@ -1325,6 +1472,7 @@ export class Board {
     const z = this.cam.zoom;
     for (const v of this.views.values()) {
       const t = v.token;
+      if (this.outOfSight.has(t.id)) continue;
       for (const a of t.auras) {
         if ((a.dm && !dmView) || a.r <= 0) continue;
         const r = (a.r / grid.ft) * grid.cell + (a.edge ? (t.size * grid.cell) / 2 : 0);
@@ -1473,7 +1621,7 @@ export class Board {
     if (!meta || !meta.grid.visible) return;
     const { cell, ox, oy, color, opacity } = meta.grid;
     if (cell * this.cam.zoom < 5) return;
-    const area = meta.mapW > 0 ? mapRect(meta) : { x: 0, y: 0, w: 2000, h: 1500 };
+    const area = sceneRect(meta) ?? { x: 0, y: 0, w: 2000, h: 1500 };
     const vis = this.visibleRect();
     const x0 = Math.max(area.x, vis.x);
     const x1 = Math.min(area.x + area.w, vis.x + vis.w);
@@ -1500,7 +1648,7 @@ export class Board {
   private updateFog() {
     const meta = this.client.scene?.meta;
     if (!meta || !meta.fog.enabled) { if (this.fogSprite) this.fogSprite.visible = false; this.dirty = true; return; }
-    const rect = meta.mapW > 0 ? mapRect(meta) : { x: 0, y: 0, w: 2000, h: 1500 };
+    const rect = sceneRect(meta) ?? { x: 0, y: 0, w: 2000, h: 1500 };
     const changed = this.fogMask.sync(this.client.fogOpsSorted(), meta.fog, rect);
     const sizeKey = `${this.fogMask.canvas.width}x${this.fogMask.canvas.height}`;
     if (!this.fogSprite) {
@@ -1594,6 +1742,8 @@ export class Board {
       const r = mapRect(meta);
       g.rect(r.x, r.y, r.w, r.h).stroke({ width: lw, color: SELECT });
     }
+    const xm = this.ui.data.extraSel ? meta?.maps.find((m) => m.id === this.ui.data.extraSel) : null;
+    if (xm) g.rect(xm.x, xm.y, xm.w * xm.scale, xm.h * xm.scale).stroke({ width: lw, color: SELECT });
 
     const d = this.drag;
     if (d?.kind === 'marquee') {
@@ -1936,6 +2086,14 @@ export class Board {
       return;
     }
     const meta = this.client.scene?.meta;
+    const xid = this.client.isDM ? this.extraAt(w) : null;
+    if (xid) {
+      const xm = meta!.maps.find((m) => m.id === xid)!;
+      this.ui.set({ extraSel: xid, mapSelected: false, selection: new Set(), drawSel: new Set() });
+      this.drag = { kind: 'xmap', id: xid, start: w, orig: { x: xm.x, y: xm.y }, moved: false, cur: { x: xm.x, y: xm.y } };
+      this.startPress(w, e);
+      return;
+    }
     if (this.client.isDM && meta && !meta.mapLocked && meta.mapW && rectContains(mapRect(meta), w)) {
       this.ui.set({ mapSelected: true, selection: new Set(), drawSel: new Set() });
       this.drag = { kind: 'map', start: w, orig: { x: meta.mapX, y: meta.mapY }, moved: false };
@@ -2597,6 +2755,16 @@ export class Board {
         if (Math.hypot(last.x - w.x, last.y - w.y) > this.client.grid.cell / 8) d.pts.push(w);
         break;
       }
+      case 'xmap': {
+        const dx = w.x - d.start.x, dy = w.y - d.start.y;
+        if (Math.abs(dx) + Math.abs(dy) > 2 / this.cam.zoom) d.moved = true;
+        if (d.moved) {
+          d.cur = { x: d.orig.x + dx, y: d.orig.y + dy };
+          this.extras.get(d.id)?.sprite.position.set(d.cur.x, d.cur.y);
+          this.invalidate();
+        }
+        break;
+      }
       case 'map': {
         const dx = w.x - d.start.x;
         const dy = w.y - d.start.y;
@@ -2710,6 +2878,9 @@ export class Board {
         break;
       case 'map':
         this.sendMap.flush();
+        break;
+      case 'xmap':
+        if (d.moved) { this.extrasKey = ''; void this.client.updateExtraMap(d.id, { x: Math.round(d.cur.x * 10) / 10, y: Math.round(d.cur.y * 10) / 10 }); }
         break;
       case 'shape': this.commitShape(d); break;
       case 'terrain': this.commitTerrain(d); break;

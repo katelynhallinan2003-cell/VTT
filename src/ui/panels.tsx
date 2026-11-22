@@ -1,17 +1,18 @@
 import { useMemo, useRef, useState } from 'preact/hooks';
 import { healthState, HEALTH_LABEL, pctOf } from '../core/combat';
-import { TOKEN_SIZES } from '../core/model';
+import { MAX_EXTRA_MAPS, TOKEN_SIZES } from '../core/model';
 import { gridPeriod, isHex } from '../core/hex';
 import { altitudeOf, altLabel, groundAt, setAltitude, setClearance, zonesOf } from '../core/height';
 import { throttle } from '../core/throttle';
 import { LIGHT_PRESETS } from '../core/light';
+import { customLights, subscribeLights } from '../state/lights';
 import type { Board } from '../board/Board';
 import type { TableClient } from '../state/client';
 import type { DockTab, UiState } from '../state/ui';
 import type { GridCut } from '../core/gridcut';
-import { hexGridFor } from '../core/hexcut';
+import { gridMatches, impliedGrid } from '../core/mapgrid';
 import type { Aura, GridSettings, LabelMode, SceneMeta, Token, TokenShape } from '../types';
-import { Field, Section, SliderField, Toggle, toast, useClient, useUi } from './common';
+import { Field, Section, SliderField, Toggle, toast, useClient, useRerender, useUi } from './common';
 import { uploadImage } from './uploads';
 import { HpBar, parseDamage, tellTemp, tempPct } from './initiative';
 import { FxIcons } from './effects';
@@ -199,8 +200,48 @@ function HpControl(props: { client: TableClient; tokens: Token[] }) {
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Find the grid that is printed on the map picture, hide it on screen, and optionally line the app's own grid up with it. */
-function MapGridCut(props: { client: TableClient; board: Board | null; meta: SceneMeta }) {
-  const { client, board, meta } = props;
+/** More map pictures in the same scene: laid out beside or over the first, each moved, sized, locked, shown to players or hidden on its own. */
+function ExtraMaps(props: { client: TableClient; meta: SceneMeta; ui: UiState; board: Board | null }) {
+  const { client, meta, ui, board } = props;
+  const d = useUi(ui);
+  const [busy, setBusy] = useState(false);
+  const scaleT = useThrottled((a: { id: string; scale: number }) => { void client.updateExtraMap(a.id, { scale: a.scale }); });
+  async function add(f: File) {
+    setBusy(true);
+    try {
+      const up = await uploadImage(client, f, 'map', f.name);
+      const id = await client.addExtraMap(up.url, up.w, up.h, f.name.replace(/\.[^.]+$/, ''));
+      if (id) { ui.set({ extraSel: id, mapSelected: false, selection: new Set(), drawSel: new Set() }); setTimeout(() => board?.fitClearOfPanel(), 250); }
+      toast('Map added to the right of the first one. Drag it into place, then lock it.', 'ok', 5000);
+    } catch (e) { toast((e as Error).message, 'error'); } finally { setBusy(false); }
+  }
+  return (
+    <>
+      {meta.maps.map((m, i) => (
+        <div key={m.id} class={`extra-map ${d.extraSel === m.id ? 'on' : ''}`}>
+          <div class="row" style={{ marginBottom: '6px' }}>
+            <input type="text" value={m.name} placeholder={`Map ${i + 2}`} maxLength={60} aria-label="Map name" onChange={(e) => void client.updateExtraMap(m.id, { name: (e.target as HTMLInputElement).value })} />
+            <button class="btn small" title="Remove this map picture from the scene (the picture itself is not deleted)" onClick={() => { if (d.extraSel === m.id) ui.set({ extraSel: null }); void client.removeExtraMap(m.id); }}>Remove</button>
+          </div>
+          <Toggle checked={m.show} onChange={(v) => void client.updateExtraMap(m.id, { show: v })} label="Players can see it" hint={m.show ? undefined : 'Only you see it, faded, until you turn this on.'} />
+          <Toggle checked={m.locked} onChange={(v) => { void client.updateExtraMap(m.id, { locked: v }); if (v && d.extraSel === m.id) ui.set({ extraSel: null }); else if (!v) ui.set({ extraSel: m.id }); }}
+            label="Locked in place" hint={m.locked ? undefined : 'Drag it on the board to move it.'} />
+          {!m.locked && <SliderField label="Size" value={Math.round(m.scale * 100)} min={10} max={400} step={1} unit="%" onInput={(v) => scaleT({ id: m.id, scale: v / 100 })} />}
+        </div>
+      ))}
+      {meta.maps.length < MAX_EXTRA_MAPS && (
+        <div class="row wrap">
+          <FileButton label={busy ? 'Adding…' : meta.maps.length ? 'Add another map…' : 'Add a second map…'} onFile={(f) => void add(f)} />
+        </div>
+      )}
+      {!meta.maps.length && <p class="hint">A second picture in the same scene: the next floor, the next room along, an overlay. It goes to the right of the first; drag it where it belongs.</p>}
+    </>
+  );
+}
+
+function MapGridCut(props: { client: TableClient; board: Board | null; meta: SceneMeta; ui: UiState }) {
+  const { client, board, meta, ui } = props;
+  const d = useUi(ui);
   const [busy, setBusy] = useState(false);
   const cut = meta.mapGrid;
   const g = meta.grid;
@@ -208,20 +249,9 @@ function MapGridCut(props: { client: TableClient; board: Board | null; meta: Sce
   if (!meta.mapUrl) return <p class="hint">Add a map picture first.</p>;
   const k = meta.mapScale;
   const cutPer = cut ? gridPeriod({ cell: cut.p, shape: cut.hex ?? 'square' }) : { x: 1, y: 1 };
-  const mod = (v: number, m: number) => ((v % m) + m) % m;
   /** where the app's grid would sit to land exactly on the printed lines */
-  const implied: { shape: GridSettings['shape']; cell: number; ox: number; oy: number } | null = !cut ? null
-    : cut.hex ? hexGridFor(cut, k, meta.mapX, meta.mapY)
-    : { shape: 'square', cell: round2(cut.p * k), ox: round2(mod(meta.mapX + (cut.x + 0.5) * k, cut.p * k)), oy: round2(mod(meta.mapY + (cut.y + 0.5) * k, cut.p * k)) };
-  const aligned = (() => {
-    if (!implied) return true;
-    if (implied.shape !== g.shape || Math.abs(g.cell - implied.cell) >= 0.5) return false;
-    const per = gridPeriod(implied);
-    const near = (d: number, m: number) => Math.min(Math.abs(mod(d, m)), Math.abs(m - mod(d, m))) < 1.5;
-    const dx = g.ox - implied.ox, dy = g.oy - implied.oy;
-    // a hex grid looks the same shifted half a box across and half a box down
-    return (near(dx, per.x) && near(dy, per.y)) || (implied.shape !== 'square' && near(dx - per.x / 2, per.x) && near(dy - per.y / 2, per.y));
-  })();
+  const implied = cut ? impliedGrid(cut, k, meta.mapX, meta.mapY) : null;
+  const aligned = !implied || gridMatches(g, implied);
 
   async function find() {
     if (!board || busy) return;
@@ -230,14 +260,18 @@ function MapGridCut(props: { client: TableClient; board: Board | null; meta: Sce
     try {
       const r = await board.findMapGrid();
       if ('error' in r) { toast(r.error, 'error', 7000); return; }
-      await client.updateScene({ mapGrid: r.cut });
-      toast(r.cut.hex ? `Found a hex grid (${round2(r.cut.p)} px between hex centres, lines about ${round2(r.cut.t)} px thick) and hid it.` : `Found lines every ${round2(r.cut.p)} px (about ${round2(r.cut.t)} px thick) and hid them.`, 'ok', 5000);
+      // hide the printed lines and set the app's own grid on them, in one step (one Ctrl+Z puts both back)
+      const m = meta;
+      await client.updateScene({ mapGrid: r.cut, grid: impliedGrid(r.cut, m.mapScale, m.mapX, m.mapY) });
+      toast(r.cut.hex ? `Found a hex grid (${round2(r.cut.p)} px between hex centres, lines about ${round2(r.cut.t)} px thick), hid it and set your grid on it.` : `Found lines every ${round2(r.cut.p)} px (about ${round2(r.cut.t)} px thick), hid them and set your grid on them.`, 'ok', 5000);
     } finally { setBusy(false); }
   }
 
   return (
     <>
-      <p class="hint">If your map picture has a grid drawn on it, this finds it and covers it by filling each line in from the pixels beside it. The picture itself is never changed, and you can switch it back any time.</p>
+      <p class="hint">If your map picture has a grid drawn on it, this finds it, covers it by filling each line in from the pixels beside it, and sets your own grid to the same size, so you never have to draw it. A new map is looked at once, automatically. The picture itself is never changed, and you can switch it back any time.</p>
+      <Toggle checked={d.autoGrid} onChange={(v) => ui.set({ autoGrid: v })} label="Look for a printed grid when I add a map"
+        hint="When one is clearly there, it is hidden and your grid is set on it. Ctrl+Z puts it back. Only for you, in this browser." />
       <div class="row wrap">
         <button class="btn small primary" disabled={busy || !board} onClick={() => void find()}>{busy ? 'Looking…' : cut ? 'Look again' : 'Find and hide it'}</button>
         {cut && <button class="btn small" onClick={() => void client.updateScene({ mapGrid: null })}>Forget it</button>}
@@ -248,7 +282,7 @@ function MapGridCut(props: { client: TableClient; board: Board | null; meta: Sce
             hint={cut.hex ? `A ${cut.hex === 'pointy' ? 'point-up' : 'flat-top'} hex grid, ${round2(cut.p)} px between hex centres in the picture, lines about ${round2(cut.t)} px thick. Everyone sees the same thing.` : `Lines every ${round2(cut.p)} px in the picture, about ${round2(cut.t)} px thick. Everyone sees the same thing.`} />
           {!aligned && implied && (
             <div class="row wrap">
-              <button class="btn small" title="Moves and resizes the app's grid (and switches it to hexes or squares if needed) so it sits exactly on the lines printed on the map"
+              <button class="btn small" title="Moves and resizes the app's grid (and switches it to hexes or squares if needed) so it sits exactly on the lines printed on the map. Finding the grid does this for you; this is for after you have changed your grid by hand."
                 onClick={() => { void client.updateScene({ grid: implied }); toast('Your grid now sits on the printed one', 'ok', 2500); }}>Line my grid up with it</button>
             </div>
           )}
@@ -314,6 +348,7 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
           <SliderField label="Map size" value={Math.round(meta.mapScale * 100)} min={10} max={400} step={1} unit="%"
             onInput={(v) => mapT({ mapScale: v / 100 })} hint="Drag the map on the board to move it." />
         )}
+        <ExtraMaps client={client} meta={meta} ui={ui} board={board} />
         <Field label="Background colour" hint="The surface behind the map. White by default, so drawings show up.">
           <input type="color" value={meta.bg} onInput={(e) => bgT((e.target as HTMLInputElement).value)} />
         </Field>
@@ -355,7 +390,7 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
       </Section>
 
       <Section id="mapgrid" title="Grid printed on the map" defaultOpen={false}>
-        <MapGridCut client={client} board={board} meta={meta} />
+        <MapGridCut client={client} board={board} meta={meta} ui={ui} />
       </Section>
 
       <Section id="fog" title="Fog of war">
@@ -364,8 +399,12 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
           hint="Each token sees as far as its “Sight” setting (token editor). Hidden tokens never do." />
         {meta.fog.vision && (
           <>
-            <Toggle checked={meta.fog.explore} onChange={(v) => { void client.updateScene({ fog: { explore: v } }); }} label="Keep what they have explored"
-              hint="While your browser is open, the ground a token walks over stays revealed, following the route it really took. Hold Q while dragging a token to teleport it without clearing the way." />
+            <Toggle checked={meta.fog.explore} onChange={(v) => { void client.updateScene({ fog: { explore: v } }); }} label="Remember what they have seen"
+              hint="While your browser is open, the ground a token walks past is remembered, following the route it really took. Hold Q while dragging a token to teleport it without marking the way." />
+            {meta.fog.explore && (
+              <Toggle checked={meta.fog.dim} onChange={(v) => { void client.updateScene({ fog: { dim: v } }); }} label="Grey out what they cannot see right now"
+                hint="Three kinds of ground: black where nobody has been, grey where they have looked before but cannot see now (monsters standing there are out of sight), clear where a token sees this moment. Off: remembered ground stays fully clear." />
+            )}
             <SightAll client={client} />
           </>
         )}
@@ -393,10 +432,12 @@ const AMBIENT_HINT = {
 function LightingSection(props: { client: TableClient; ui: UiState; board: Board | null; meta: SceneMeta }) {
   const { client, ui, board, meta } = props;
   const [preset, setPreset] = useState('Torch');
+  useRerender((fn) => subscribeLights(fn), []);
+  const lightChoices = [...LIGHT_PRESETS, ...customLights().map((c) => ({ name: c.name, light: c.light }))];
   const amb = meta.light.ambient;
   const fogSight = meta.fog.enabled && meta.fog.vision;
   async function place() {
-    const p = LIGHT_PRESETS.find((l) => l.name === preset) ?? LIGHT_PRESETS[1];
+    const p = lightChoices.find((l) => l.name === preset) ?? LIGHT_PRESETS[1];
     const at = board?.viewCenterWorld() ?? { x: 500, y: 500 };
     const cell = client.grid.cell;
     // a light sits where you put it, on a square's middle
@@ -424,11 +465,11 @@ function LightingSection(props: { client: TableClient; ui: UiState; board: Board
       )}
       <div class="row wrap">
         <select value={preset} onChange={(e) => setPreset((e.target as HTMLSelectElement).value)} title="The kind of light to place">
-          {LIGHT_PRESETS.map((l) => <option key={l.name} value={l.name}>{l.name} ({l.light.b} + {l.light.d} ft)</option>)}
+          {lightChoices.map((l) => <option key={l.name} value={l.name}>{l.name} ({l.light.b} + {l.light.d} ft)</option>)}
         </select>
         <button class="btn small" disabled={!board} onClick={() => void place()}>Place a light</button>
       </div>
-      <p class="hint">A placed light is a small marker only you can see. A token can carry a light too: Edit token, then Darkness and light. Tokens with sight see lit ground, and darkvision sees the dark as if it were dim.</p>
+      <p class="hint">A placed light is a small flame everyone can see; hide it (Edit token, Hidden from players) to keep it a secret. A token can carry a light too: Edit token, then the Sight and lights tab, where you can also make your own lights. Tokens with sight see lit ground, and darkvision sees the dark as if it were dim.</p>
     </>
   );
 }

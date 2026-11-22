@@ -1,5 +1,5 @@
 import type {
-  Aura, Drawing, FogOp, GridSettings, HpShow, InitEntry, InitPub, InitState, LibraryItem, LivePlot, Permissions, Player, SceneMeta, TableMeta,
+  Aura, Drawing, ExtraMap, FogOp, GridSettings, HpShow, InitEntry, InitPub, InitState, LibraryItem, LivePlot, Permissions, Player, SceneMeta, TableMeta,
   TableSettings, Token, TokenLight, Vec, ViewCall, Handout,
 } from '../types';
 import { cleanHp, emptyInit, orderOf } from './combat';
@@ -49,6 +49,32 @@ export function normalizeGrid(raw: any): GridSettings {
   };
 }
 
+/** Most extra maps a scene can have. */
+export const MAX_EXTRA_MAPS = 4;
+
+/** The extra maps as they are stored (a record by id; arrays are no good in the database), read back as a list in the order they were added. */
+export function normalizeMaps(raw: any): ExtraMap[] {
+  if (!raw || typeof raw !== 'object') return [];
+  const out: ExtraMap[] = [];
+  for (const id of Object.keys(raw).sort()) {
+    const m = raw[id];
+    if (!m || typeof m.u !== 'string' || !m.u) continue;
+    out.push({
+      id, url: m.u, w: Math.max(1, num(m.w, 1)), h: Math.max(1, num(m.h, 1)), x: num(m.x, 0), y: num(m.y, 0),
+      scale: Math.max(0.01, num(m.s, 1)), name: str(m.n, '').slice(0, 60), show: bool(m.v, true), locked: bool(m.l, true),
+    });
+    if (out.length >= MAX_EXTRA_MAPS) break;
+  }
+  return out;
+}
+
+export function mapsToWire(maps: ExtraMap[]): Record<string, unknown> | null {
+  if (!maps.length) return null;
+  const out: Record<string, unknown> = {};
+  for (const m of maps.slice(0, MAX_EXTRA_MAPS)) out[m.id] = { u: m.url, w: m.w, h: m.h, x: Math.round(m.x * 100) / 100, y: Math.round(m.y * 100) / 100, s: Math.round(m.scale * 10000) / 10000, n: m.name || null, v: m.show, l: m.locked };
+  return out;
+}
+
 function normalizeMapGrid(raw: any): SceneMeta['mapGrid'] {
   if (!raw || typeof raw !== 'object') return null;
   const p = num(raw.p, 0);
@@ -70,6 +96,8 @@ export function normalizeSceneMeta(raw: any): SceneMeta {
     mapScale: Math.max(0.01, num(m.mapScale, 1)),
     mapLocked: bool(m.mapLocked, true),
     mapGrid: normalizeMapGrid(m.mapGrid),
+    maps: normalizeMaps(m.maps),
+    gridTried: bool(m.gridTried, true),
     wallStop: bool(m.wallStop, true),
     cliff: Math.min(1000, Math.max(0, Math.round(num(m.cliff, 10)))),
     bg: OLD_DEFAULT_BGS.has(str(m.bg, '')) ? DEFAULT_BG : str(m.bg, DEFAULT_BG),
@@ -79,6 +107,7 @@ export function normalizeSceneMeta(raw: any): SceneMeta {
       base: m.fog?.base === 'clear' ? 'clear' : 'hidden',
       vision: bool(m.fog?.vision, false),
       explore: bool(m.fog?.explore, false),
+      dim: bool(m.fog?.dim, true),
     },
     light: { ambient: m.light?.ambient === 'dim' || m.light?.ambient === 'dark' ? m.light.ambient : 'bright' },
     createdAt: num(m.createdAt, 0),
@@ -305,7 +334,7 @@ export function initPubToWire(p: InitPub | null): Record<string, unknown> | null
 
 export function normalizeFogOp(raw: any): FogOp | null {
   if (!raw || typeof raw.p !== 'string') return null;
-  const m = raw.m === 'h' ? 'h' : 'r';
+  const m = raw.m === 'h' ? 'h' : raw.m === 'x' ? 'x' : 'r';
   if (raw.t === 'rect') return { m, t: 'rect', p: raw.p };
   if (raw.t === 'poly') return { m, t: 'poly', p: raw.p };
   if (raw.t === 'line') return { m, t: 'line', p: raw.p, w: num(raw.w, 40) };

@@ -150,6 +150,8 @@ const fogAt = (wx, wy) => dm.evaluate(([x, y]) => {
   const m = window.__vtt.board.fogMask;
   const px = Math.round((x - m.origin.x) * m.scale), py = Math.round((y - m.origin.y) * m.scale);
   if (px < 0 || py < 0 || px >= m.canvas.width || py >= m.canvas.height) return null;
+  // ground that has been seen counts as remembered (it shows grey now, not black)
+  if (m.fogAt({ x, y }).seen) return 0;
   return m.canvas.getContext('2d').getImageData(px, py, 1, 1).data[3] / 255;
 }, [wx, wy]);
 await dm.evaluate(() => window.__vtt.client.exploreNow());
@@ -181,13 +183,19 @@ await dm.screenshot({ path: '/tmp/shots/u9-explored.png' });
 // ---- the token editor: darkvision and a light of its own
 await dm.evaluate((id) => window.__vtt.ui.select([id]), elf);
 await sleep(300);
-await dm.locator('.tagbar button, .sel-tag button, .flyout button, button', { hasText: /^Edit$/ }).first().click();
-await dm.locator('.modal h4', { hasText: 'Darkness and light' }).waitFor();
-check('the token editor has a Darkness and light section', (await dm.locator('.modal h4', { hasText: 'Darkness and light' }).count()) === 1);
-await dm.locator('.modal .btn', { hasText: /^60 ft$/ }).nth(1).click(); // the second row of chips is darkvision
+await dm.getByRole('button', { name: 'Edit', exact: true }).click();
+await dm.locator('.modal').waitFor();
+await dm.locator('.modal .seg button', { hasText: 'Sight and lights' }).click();
+await sleep(200);
+check('the token editor has Darkvision and Lights sections', (await dm.locator('.modal h4', { hasText: 'Darkvision' }).count()) === 1 && (await dm.locator('.modal h4', { hasText: 'Lights' }).count()) === 1);
+await dm.locator('.modal').getByText('Has darkvision').click();
+await sleep(150);
+await dm.locator('.modal .btn', { hasText: /^60 ft$/ }).first().click();
+if (!(await dm.getByText('Make your own').count())) await dm.locator('.modal').getByText('Gives off light').click();
+await sleep(150);
 await dm.locator('.modal .btn', { hasText: /^Lantern$/ }).click();
-check('picking a lantern shows its two distances', (await dm.locator('.modal label.field-label', { hasText: 'Bright' }).count()) === 1);
-await dm.locator('.modal .btn.primary', { hasText: 'Save' }).click();
+check('picking a lantern shows its two distances', (await dm.locator('.modal label.field-label', { hasText: 'Bright' }).count()) >= 1);
+await dm.getByRole('button', { name: 'Save', exact: true }).click();
 await sleep(500);
 const edited = await dm.evaluate((id) => { const t = window.__vtt.client.scene.tokens.get(id); return { dv: t.dv, light: t.light }; }, elf);
 check('saving keeps the darkvision and the lantern', edited.dv === 60 && edited.light && edited.light.b === 30 && edited.light.d === 30, JSON.stringify(edited));

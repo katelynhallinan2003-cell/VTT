@@ -75,8 +75,8 @@ await dm.screenshot({ path: '/tmp/shots/j1-ledge.png' });
 // ---- a nest painted on top of it wins (newer sits on top)
 await dm.keyboard.press('Escape');
 await dm.evaluate(() => window.__vtt.ui.set({ heightBrush: 1 }));
-await dm.locator('.flyout .numf input').fill('40');
-await dm.locator('.flyout .numf input').blur();
+await dm.locator('.flyout .ht-card .numf input').first().fill('40');
+await dm.locator('.flyout .ht-card .numf input').first().blur();
 check('typing a height works', (await dm.evaluate(() => window.__vtt.ui.data.heightFt)) === 40);
 const c = await screen(dm, 11.5 * cell, 4.5 * cell);
 await dm.mouse.move(c.x, c.y);

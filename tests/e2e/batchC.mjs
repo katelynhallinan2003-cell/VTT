@@ -233,7 +233,7 @@ await sleep(300);
 check('a hidden token with sight reveals nothing for players', (await pl.evaluate(() => window.__vtt.board.visionNow().length)) === 1);
 
 // explore: walk away and the ground stays revealed
-await dm.locator('.toggle', { hasText: 'Keep what they have explored' }).locator('input').check();
+await dm.locator('.toggle', { hasText: 'Remember what they have seen' }).locator('input').check();
 await sleep(900);
 const opsBefore = await dm.evaluate(() => window.__vtt.client.scene.fogOps.size);
 check('turning on exploring reveals where the token stands', opsBefore >= 1);
@@ -244,7 +244,10 @@ check('moving adds to the explored ground', opsAfter > opsBefore, `${opsBefore} 
 await pl.evaluate(() => window.__vtt.board.fit());
 await sleep(400);
 const oldSpot = await toScreen(pl, 3.5 * cell, 4.2 * cell);
-check('the place it left stays clear', (await lum(pl, oldSpot.x, oldSpot.y)) > 60);
+const oldLum = await lum(pl, oldSpot.x, oldSpot.y);
+const farSpot = await toScreen(pl, 14.5 * cell, 2.5 * cell);
+const farLum = await lum(pl, farSpot.x, farSpot.y);
+check('the place it left is remembered (dimmed, not black)', oldLum > 25 && oldLum > farLum + 15, `old ${oldLum}, never seen ${farLum}`);
 await pl.screenshot({ path: '/tmp/shots/77-explored-player.png' });
 await dm.evaluate(() => window.__vtt.ui.set({ dmPreview: false }));
 await dm.screenshot({ path: '/tmp/shots/78-explored-dm.png' });

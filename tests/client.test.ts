@@ -111,7 +111,7 @@ describe('TableClient over the mock backend', () => {
     await dm.addFogOp({ m: 'h', t: 'rect', p: '10,10,20,20' });
     await waitFor(() => pl.scene?.fogOps.size === 2, 'fog ops');
     expect(pl.fogOpsSorted().map(([, o]) => o.m)).toEqual(['r', 'h']);
-    expect(pl.scene!.meta!.fog).toEqual({ enabled: true, base: 'hidden', vision: false, explore: false });
+    expect(pl.scene!.meta!.fog).toEqual({ enabled: true, base: 'hidden', vision: false, explore: false, dim: true });
     await dm.undoFog();
     await waitFor(() => pl.scene?.fogOps.size === 1, 'undo');
     await dm.resetFog('clear');
@@ -434,7 +434,7 @@ describe('TableClient over the mock backend', () => {
     expect(await dm.exploreNow()).toBe(1); // where it stands
     await waitFor(() => dm.scene!.fogOps.size === 1, 'first reveal');
     const first = [...dm.scene!.fogOps.values()][0];
-    expect(first).toMatchObject({ m: 'r', t: 'line' });
+    expect(first).toMatchObject({ m: 'x', t: 'line' }); // remembered, shown grey when out of sight (the default)
     expect((first as any).w).toBe(2 * (6 * 70 + 35)); // 30 ft is 6 squares, plus the token's own radius
 
     expect(await dm.exploreNow()).toBe(0); // no movement, nothing new
@@ -453,5 +453,17 @@ describe('TableClient over the mock backend', () => {
     await waitFor(() => !!dm.scene?.tokens.get(hid), 'hidden token');
     expect(await dm.exploreNow()).toBe(0); // hidden tokens never reveal anything for players
     void sid;
+  });
+
+  it('writes plain reveals instead when remembered ground is not to be greyed', async () => {
+    const { dm } = await setup();
+    const id = await dm.addToken({ x: 350, y: 350, name: 'Scout', size: 1, sight: 30 }, { record: false });
+    await waitFor(() => !!dm.scene?.tokens.get(id), 'token');
+    await dm.resetFog('hidden');
+    await dm.updateScene({ fog: { vision: true, explore: true, dim: false } });
+    await waitFor(() => dm.scene?.meta?.fog.dim === false, 'dim off');
+    expect(await dm.exploreNow()).toBe(1);
+    await waitFor(() => dm.scene!.fogOps.size === 1, 'reveal');
+    expect([...dm.scene!.fogOps.values()][0]).toMatchObject({ m: 'r', t: 'line' });
   });
 });

@@ -13,7 +13,7 @@
 // Everything here works on plain pixel arrays so it can be tested without a browser.
 import type { GridSettings } from '../types';
 import { hexCentersIn, hexCorners, S3 } from './hex';
-import { exact, luma, medianAbs, round2, thickness, type Found, type GridCut, type PixelImage } from './gridcut';
+import { FEATHER, exact, luma, medianAbs, round2, thickness, type Found, type GridCut, type PixelImage } from './gridcut';
 
 type HexShape = 'pointy' | 'flat';
 type Vec = { x: number; y: number };
@@ -247,43 +247,66 @@ export function findHexGrid(img: PixelImage, hint?: number, shape: HexShape = 'p
   return a && b ? (b.strength > a.strength * 1.1 ? b : a) : a ?? b;
 }
 
-/** Fill the hex sides in from the pixels around them, on a copy of the picture's pixels (changed in place). */
+/**
+ * Fill the hex sides in from the pixels around them, on a copy of the picture's pixels (changed in place).
+ * Like the square version it works to a fraction of a pixel: pixels on a side are replaced, pixels just beyond it only partly (so no
+ * seam is left), and the colour comes from the nearest pixels outside in all eight directions, each averaged with the one after it.
+ */
 export function hideHexGrid(img: PixelImage, cut: Pick<GridCut, 'p' | 'x' | 'y' | 't' | 'hex'>): void {
   const { width: W, height: H, data } = img;
   const shape = cut.hex ?? 'pointy';
-  const half = Math.ceil(cut.t / 2) + 1;
-  const mask = new Uint8Array(W * H);
+  const half = Math.max(0.5, cut.t / 2) + 0.5;
+  const reach = half + FEATHER;
+  // how much of each pixel is covered by a side (0 to 255): all of it on the side, fading out beyond
+  const cov = new Uint8Array(W * H);
   for (const [a, b] of hexSides(cut, shape, W, H)) {
-    const x0 = Math.max(0, Math.floor(Math.min(a.x, b.x) - half - 1)), x1 = Math.min(W - 1, Math.ceil(Math.max(a.x, b.x) + half + 1));
-    const y0 = Math.max(0, Math.floor(Math.min(a.y, b.y) - half - 1)), y1 = Math.min(H - 1, Math.ceil(Math.max(a.y, b.y) + half + 1));
+    const x0 = Math.max(0, Math.floor(Math.min(a.x, b.x) - reach - 1)), x1 = Math.min(W - 1, Math.ceil(Math.max(a.x, b.x) + reach + 1));
+    const y0 = Math.max(0, Math.floor(Math.min(a.y, b.y) - reach - 1)), y1 = Math.min(H - 1, Math.ceil(Math.max(a.y, b.y) + reach + 1));
     const ex = b.x - a.x, ey = b.y - a.y, l2 = ex * ex + ey * ey;
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
         const t = l2 ? Math.max(0, Math.min(1, ((x - a.x) * ex + (y - a.y) * ey) / l2)) : 0;
-        if (Math.hypot(x - (a.x + ex * t), y - (a.y + ey * t)) <= half) mask[y * W + x] = 1;
+        const d = Math.hypot(x - (a.x + ex * t), y - (a.y + ey * t));
+        if (d > reach) continue;
+        const c = Math.round(255 * (d <= half ? 1 : 1 - (d - half) / FEATHER));
+        if (c > cov[y * W + x]) cov[y * W + x] = c;
       }
     }
   }
   const src = Uint8ClampedArray.from(data);
-  const R = half * 2 + 4;
+  const R = Math.ceil(reach) * 2 + 4;
   const dirs: [number, number, number][] = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, Math.SQRT2], [-1, -1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, 1, Math.SQRT2]];
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
-      if (!mask[y * W + x]) continue;
+      const w0 = cov[y * W + x];
+      if (!w0) continue;
       let r = 0, g = 0, b = 0, w = 0;
       for (const [dx, dy, len] of dirs) {
         for (let k = 1; k <= R; k++) {
           const xx = x + dx * k, yy = y + dy * k;
           if (xx < 0 || yy < 0 || xx >= W || yy >= H) break;
           const j = yy * W + xx;
-          if (mask[j]) continue;
+          if (cov[j]) continue;
           const wt = 1 / ((k * len) * (k * len));
-          const o = j * 4;
-          r += src[o] * wt; g += src[o + 1] * wt; b += src[o + 2] * wt; w += wt;
+          let o = j * 4;
+          let pr = src[o], pg = src[o + 1], pb = src[o + 2];
+          // the pixel after it, if that is clear too, so one speck does not get copied
+          const x2 = xx + dx, y2 = yy + dy;
+          if (x2 >= 0 && y2 >= 0 && x2 < W && y2 < H && !cov[y2 * W + x2]) {
+            o = (y2 * W + x2) * 4;
+            pr = (pr + src[o]) / 2; pg = (pg + src[o + 1]) / 2; pb = (pb + src[o + 2]) / 2;
+          }
+          r += pr * wt; g += pg * wt; b += pb * wt; w += wt;
           break;
         }
       }
-      if (w > 0) { const o = (y * W + x) * 4; data[o] = r / w; data[o + 1] = g / w; data[o + 2] = b / w; }
+      if (w > 0) {
+        const a = w0 / 255;
+        const o = (y * W + x) * 4;
+        data[o] = src[o] * (1 - a) + (r / w) * a;
+        data[o + 1] = src[o + 1] * (1 - a) + (g / w) * a;
+        data[o + 2] = src[o + 2] * (1 - a) + (b / w) * a;
+      }
     }
   }
 }

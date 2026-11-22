@@ -144,6 +144,17 @@ export function zoomAt(cam: { zoom: number; tx: number; ty: number }, sx: number
   return { zoom, tx: sx - (sx - cam.tx) * f, ty: sy - (sy - cam.ty) * f };
 }
 
+/** The room the scene takes up: the main map and every extra map, at their current places and sizes (null when there is no map at all). */
+export function sceneRect(meta: { mapX: number; mapY: number; mapW: number; mapH: number; mapScale: number; maps?: { x: number; y: number; w: number; h: number; scale: number }[] }): Rect | null {
+  const rects: Rect[] = [];
+  if (meta.mapW > 0) rects.push(mapRect(meta));
+  for (const m of meta.maps ?? []) rects.push({ x: m.x, y: m.y, w: m.w * m.scale, h: m.h * m.scale });
+  if (!rects.length) return null;
+  const x0 = Math.min(...rects.map((r) => r.x)), y0 = Math.min(...rects.map((r) => r.y));
+  const x1 = Math.max(...rects.map((r) => r.x + r.w)), y1 = Math.max(...rects.map((r) => r.y + r.h));
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
 /** Largest world-rect the scene occupies (the map, at its current transform). */
 export function mapRect(meta: { mapX: number; mapY: number; mapW: number; mapH: number; mapScale: number }): Rect {
   return { x: meta.mapX, y: meta.mapY, w: meta.mapW * meta.mapScale, h: meta.mapH * meta.mapScale };

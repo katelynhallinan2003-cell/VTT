@@ -55,10 +55,10 @@ const flatHex = (g, p) => {
 // ---- the Scene tab has a grid type
 if (!(await dm.locator('.dock-scene').count())) await dm.locator('.rail-tab', { hasText: 'Scene' }).click();
 await sleep(200);
-const gridSeg = dm.locator('.seg button', { hasText: /^Hex, point up$/ });
+const gridSeg = dm.locator('.seg button', { hasText: /^Hex, rows$/ });
 if (!(await gridSeg.count())) await dm.locator('.section-head, summary, h4, button', { hasText: /^Grid$/i }).first().click().catch(() => {});
 await gridSeg.waitFor({ timeout: 4000 });
-check('the Scene tab offers Squares, Hex point up and Hex flat top', (await dm.locator('.seg button', { hasText: /^Squares$/ }).count()) === 1 && (await dm.locator('.seg button', { hasText: /^Hex, flat top$/ }).count()) === 1);
+check('the Scene tab offers all four overlays', await dm.getByRole('group', { name: 'Grid type' }).getByRole('button').count() === 4);
 check('it starts on squares', (await grid()).shape === 'square');
 const cell = (await grid()).cell;
 
@@ -71,7 +71,7 @@ await sleep(400);
 await gridSeg.click();
 await sleep(500);
 let g = await grid();
-check('Hex, point up switches the scene', g.shape === 'pointy');
+check('Hex, rows switches the scene', g.shape === 'pointy');
 check('the player sees it too', (await grid(pl)).shape === 'pointy');
 await dm.screenshot({ path: '/tmp/shots/k1-pointy.png' });
 await dm.keyboard.press('Control+z');

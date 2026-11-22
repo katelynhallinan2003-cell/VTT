@@ -134,6 +134,9 @@ input.num { width: 74px; flex: none; padding: 4px 6px; }
 .seg button { background: var(--raise); border: none; padding: 6px 12px; cursor: pointer; border-right: 1px solid var(--border); }
 .seg button:last-child { border-right: none; }
 .seg button.on { background: var(--accent-2); color: var(--on-accent); }
+.seg.grid-choices { display: grid; grid-template-columns: repeat(2, 1fr); }
+.grid-choices button:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
+.grid-choices button:nth-child(2n) { border-right: none; }
 .seg button.on.reveal { background: #2b8a3e; }
 .seg button.on.hide { background: #c92a2a; }
 .tabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
@@ -595,6 +598,7 @@ input[type=text], input[type=number], input[type=password], select { border-radi
 /* ---------------- tool panels: rows of choices never run off the side of the panel */
 .flyout { overflow-x: hidden; }
 .flyout .seg { display: flex; max-width: 100%; }
+.flyout .grid-choices { display: grid; }
 .flyout .seg button { padding: 6px 4px; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .flyout .seg.wrap button { flex: 1 0 28%; }
 

@@ -126,3 +126,5 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
   other line. The full-resolution check now compares the smaller spacings that could produce that repeat. Verified
   57 px squares on the original JPEG both on upload and through “Look again” in a scene with the old grid.
   Added two dotted maps to the corpus and checked for extra lines as well as missing lines.
+- [x] **#15 Calibrate gridless pictures** (added 2026-11-22, completed 2026-11-22): an inconclusive scan turns off the overlay and snapping and invites the DM to mark ten feet with two clicks. Verified the diagonal ruler on the supplied snow map.
+- [x] **#16 Name the four scene overlay choices** (added 2026-11-22, completed 2026-11-22): the setup prompt and Scene panel offer Squares, Hex, rows, Hex, columns and Gridless. Switching overlays keeps the calibrated scale.

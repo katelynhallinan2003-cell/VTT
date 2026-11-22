@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { Board } from '../board/Board';
 import * as geometry from '../core/geometry';
 import { snapTokenCenter } from '../core/geometry';
+import { GridChoices } from './GridChoices';
 import { loadImage } from '../core/images';
 import type { TableClient } from '../state/client';
 import { UiState } from '../state/ui';
@@ -354,6 +355,18 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       </nav>
 
       {d.tool === 'draw' && <DrawFlyout ui={ui} client={client} />}
+      {d.tool === 'scale' && client.isDM && scene?.meta && (
+        <div class="flyout" aria-label="Map scale">
+          <div class="flyout-title">Set map scale</div>
+          <p aria-live="polite">{d.scaleEnd ? 'These points are 10 ft apart. Choose an overlay.' :
+            d.scaleStart ? 'Click the second point, 10 ft from the first.' : 'Click the first of two points 10 ft apart.'}</p>
+          {d.scaleEnd && <GridChoices onChoose={(choice) => void board?.chooseGridOverlay(choice)} />}
+          <div class="row">
+            {d.scaleStart && <button class="btn small" onClick={() => ui.set({ tool: 'scale' })}>Start over</button>}
+            <button class="btn small" onClick={() => ui.set({ tool: 'select' })}>Cancel</button>
+          </div>
+        </div>
+      )}
       {d.tool === 'template' && <TemplateFlyout ui={ui} client={client} />}
       {d.tool === 'ruler' && <RulerFlyout ui={ui} client={client} />}
       {d.tool === 'height' && client.isDM && <HeightFlyout ui={ui} client={client} />}

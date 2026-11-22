@@ -26,6 +26,7 @@ import { WallLayer } from './WallLayer';
 import { WALL_NAME, boxSegments, chainSegments, circlePoints, distToSeg, endNear, freehandCorners, hatchTicks, moveSegs, pathBlocked, sightSegs, snapWallPoint, visibilityPolygon, wallMid, wallNear, wallVisDefault, type Seg, type Wall } from '../core/walls';
 import { canvasTexture, loadTexture, releaseTexture, setTextureFailHandler, type LoadedTexture, gridlessTexture, readPixels } from './textures';
 import { diagnoseImage } from '../core/images';
+import { currentOverlay, overlaySettings, type GridOverlay } from '../core/gridOverlay';
 
 export interface BoardCallbacks {
   onContextMenu(info: { clientX: number; clientY: number; tokenId: string | null; world: Vec }): void;
@@ -534,6 +535,7 @@ export class Board {
   }
 
   private onSceneChanged(scene: TableClient['scene']) {
+    if (this.ui.data.tool === 'scale') this.ui.set({ tool: 'select' });
     this.glideSeq++;
     this.sceneRef = scene;
     for (const v of this.views.values()) v.destroy();
@@ -579,6 +581,7 @@ export class Board {
     if (!meta) return;
 
     if (meta.mapUrl !== this.mapUrl) {
+      if (this.ui.data.tool === 'scale') this.ui.set({ tool: 'select' });
       const saved = this.mapUrl === undefined ? this.cams.get(scene.id) : undefined;
       if (this.mapUrl) releaseTexture(this.mapUrl, 'map');
       this.mapUrl = meta.mapUrl;
@@ -719,6 +722,21 @@ export class Board {
     return { cut: { ...scaleCut(f.cut, pixelScale), on: true }, strength: f.strength };
   }
 
+  async chooseGridOverlay(choice: GridOverlay) {
+    const scene = this.client.scene;
+    if (!this.client.isDM || !scene?.meta || scene !== this.sceneRef || scene.meta.mapUrl !== this.mapUrl) return;
+    const grid = scene.meta.grid;
+    const { tool, scaleStart, scaleEnd } = this.ui.data;
+    const cell = tool === 'scale' && scaleStart && scaleEnd
+      ? Math.hypot(scaleEnd.x - scaleStart.x, scaleEnd.y - scaleStart.y) * grid.ft / 10 : grid.cell;
+    try {
+      await this.client.updateScene({ grid: { ...overlaySettings({ ...grid, cell }, choice), cell } });
+      if (tool === 'scale' && scene === this.client.scene && this.ui.data.tool === 'scale' && this.ui.data.scaleEnd === scaleEnd) {
+        this.ui.set({ tool: 'select' });
+      }
+    } catch (e) { this.cb.onNotice((e as Error).message, 'error'); }
+  }
+
   /** Try loading the map picture again (the banner's "Try again" button). */
   retryMap() {
     const url = this.mapUrl;
@@ -772,22 +790,25 @@ export class Board {
 
   /**
    * A map that has just been added is looked at once for a printed grid. If one is clearly there it is hidden and the app's own grid is set on it,
-   * so the DM never has to draw it. (One Ctrl+Z puts both back.) Maps with no grid, or only a faint one, are left alone.
+   * so the DM never has to draw it. An inconclusive scan opens the two-point scale tool with the overlay off.
    */
   private async autoMapGrid(here: () => boolean) {
     const r = await this.findMapGrid({ any: true });
     if (!here() || this.client.scene?.meta?.gridTried) return;
     if ('error' in r && !r.noGrid) { this.cb.onNotice(r.error, 'error'); return; }
-    // An interrupted load must leave the next opening free to finish the scan.
-    await this.client.updateScene({ gridTried: true }, { record: false });
-    if (!here()) return;
     if ('error' in r || r.strength < AUTO_GRID_STRENGTH) {
+      await this.client.updateScene({ gridTried: true, grid: overlaySettings(this.client.grid, 'none') }, { record: false });
+      if (!here()) return;
+      this.ui.set({ tool: 'scale' });
       this.cb.onNotice('No clear printed grid found.', 'info');
       return;
     }
+    await this.client.updateScene({ gridTried: true }, { record: false });
+    if (!here()) return;
     const m = this.client.scene?.meta;
     if (!m || m.mapGrid) return;
-    await this.client.updateScene({ mapGrid: r.cut, grid: impliedGrid(r.cut, m.mapScale, m.mapX, m.mapY) });
+    const aligned = impliedGrid(r.cut, m.mapScale, m.mapX, m.mapY);
+    await this.client.updateScene({ mapGrid: r.cut, grid: { ...aligned, ...(currentOverlay(m.grid) === 'none' ? { visible: true, snap: true } : {}) } });
     this.cb.onNotice(`This map has a ${r.cut.hex ? 'hex grid' : 'grid'} printed on it. It is hidden now, and your grid is set to match. Ctrl+Z undoes both.`, 'ok');
   }
 
@@ -1733,6 +1754,14 @@ export class Board {
     for (const t of this.plotLabels) t.visible = false;
     const z = this.cam.zoom;
     const lw = 2.5 / z;
+    const { tool, scaleStart, scaleEnd } = this.ui.data;
+    if (tool === 'scale' && scaleStart) {
+      const end = scaleEnd ?? this.pointerW;
+      if (end) g.moveTo(scaleStart.x, scaleStart.y).lineTo(end.x, end.y).stroke({ color: SELECT, width: lw });
+      for (const p of [scaleStart, scaleEnd]) {
+        if (p) g.circle(p.x, p.y, 4 / z).fill(SELECT).stroke({ color: 0xffffff, width: 1.5 / z });
+      }
+    }
     const grid = this.client.grid;
 
     if (this.press) {
@@ -2053,6 +2082,16 @@ export class Board {
     if (e.button !== 0) return;
 
     const tool = this.ui.data.tool;
+    if (tool === 'scale' && this.client.isDM) {
+      const { scaleStart, scaleEnd } = this.ui.data;
+      if (!scaleStart) this.ui.set({ scaleStart: w });
+      else if (!scaleEnd) {
+        const cell = Math.hypot(w.x - scaleStart.x, w.y - scaleStart.y) * this.client.grid.ft / 10;
+        if (cell < 4) this.cb.onNotice('Those points are too close. Choose a second point farther away.', 'info');
+        else this.ui.set({ scaleEnd: w });
+      }
+      return;
+    }
     if (tool === 'select' || tool === 'height' || (tool === 'draw' && this.ui.data.drawTool !== 'erase')) {
       const hh = this.handleAt(w);
       if (hh) { this.drag = { kind: 'drawresize', id: hh.d.id, handle: hh.h.id, orig: hh.d, patch: null }; return; }
@@ -2714,6 +2753,7 @@ export class Board {
   private onPointerMove(e: PointerEvent) {
     const w = this.screenToWorld(e.clientX, e.clientY);
     this.pointerW = w;
+    if (this.ui.data.tool === 'scale' && this.ui.data.scaleStart && !this.ui.data.scaleEnd) this.invalidate();
     this.altDown = e.altKey;
     this.shiftDown = e.shiftKey;
     if (this.press && Math.hypot(e.clientX - this.press.x, e.clientY - this.press.y) > 6) this.cancelPress();

@@ -48,6 +48,8 @@ Read `CLAUDE.md` (this file) and `WIP.md` before doing anything else in a sessio
 
 ## Design precedents
 
+- **Maps without a clear printed grid.** Start gridless with free movement and straight-line measurement. The DM can calibrate ten feet with two points, then choose squares, hex rows, hex columns or no overlay. Changing the overlay preserves the map scale.
+
 - **Where data lives.** Anything the DM alone may see or write goes under `tables/$tid/dm/` (owner-only, free-form: scene index, scene folders, character hit-point memory). Public scene data is under `scenes/$sid`. Things tied to the DM's Google account (image library, saved token templates) are under `users/$uid` and only the allow-listed DM can write there.
 - **Players have no account.** They are anonymous per browser, so nothing a player wants to keep may be tied to their browser's uid. A player's saved characters live in the table (`tables/$tid/chars/$rid`), and a player's `rid` (identity) says which library is theirs. A returning player picks their name on the join screen to take their `rid` back; the DM's screen then gives the old entry's tokens to the new uid and removes the old entry once it is offline.
 - **Hit points are the DM's.** Players only see what the token's health display allows; the DM's screen files each saved character's hit points (`dm/chars/$cid`) and restores them when the character arrives in another scene.

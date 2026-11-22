@@ -1,9 +1,9 @@
 import type { Unsub } from '../backend/types';
 import { FONT_KEYS, type FillMode, type SphereSnap } from '../core/draw';
-import type { Effect } from '../types';
+import type { Effect, Vec } from '../types';
 import type { Side, WallKind, WallSnap } from '../core/walls';
 
-export type Tool = 'select' | 'grid' | 'fog' | 'draw' | 'template' | 'ruler' | 'height' | 'wall';
+export type Tool = 'select' | 'grid' | 'scale' | 'fog' | 'draw' | 'template' | 'ruler' | 'height' | 'wall';
 export type DrawTool = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'erase';
 export type TemplateKind = 'cone' | 'cube' | 'sphere' | 'emanation' | 'beam';
 export type StrokeSize = 'thin' | 'medium' | 'thick';
@@ -13,6 +13,8 @@ export type InitPos = 'top' | 'side';
 
 export interface UiData {
   tool: Tool;
+  scaleStart: Vec | null;
+  scaleEnd: Vec | null;
   fogMode: 'r' | 'h';
   fogShape: FogShape;
   /** brush diameter in grid squares */
@@ -137,7 +139,7 @@ function readStr<T extends string>(key: string, dflt: T, allowed: readonly T[]):
 /** Tiny observable store for UI-level state that both the board and the panels need. */
 export class UiState {
   data: UiData = {
-    tool: 'select', fogMode: 'r', fogShape: 'rect', brushSize: 2,
+    tool: 'select', scaleStart: null, scaleEnd: null, fogMode: 'r', fogShape: 'rect', brushSize: 2,
     selection: new Set(), mapSelected: false, extraSel: null, dmPreview: false, zoom: 1, status: null,
     dockTab: null,
     drawTool: readStr('vtt-draw-tool', 'pen', ['pen', 'line', 'arrow', 'rect', 'ellipse', 'text', 'erase'] as const),
@@ -205,6 +207,7 @@ export class UiState {
     if (patch.testMove === true && this.data.tool !== 'select' && patch.tool === undefined) patch = { ...patch, tool: 'select' }; // test move works on tokens, so it takes over from any other tool
     // picking any other tool ends the test move (it only ever goes with the plain select tool)
     if (patch.tool !== undefined && patch.tool !== 'select' && this.data.testMove && patch.testMove === undefined) patch = { ...patch, testMove: false };
+    if (patch.tool !== undefined) patch = { ...patch, scaleStart: null, scaleEnd: null };
     try {
       if (patch.drawTool !== undefined) localStorage.setItem('vtt-draw-tool', patch.drawTool);
       if (patch.tplKind !== undefined) localStorage.setItem('vtt-tpl-kind', patch.tplKind);

@@ -2,6 +2,8 @@ import { useMemo, useRef, useState } from 'preact/hooks';
 import { healthState, HEALTH_LABEL, pctOf } from '../core/combat';
 import { MAX_EXTRA_MAPS, TOKEN_SIZES } from '../core/model';
 import { gridPeriod, isHex } from '../core/hex';
+import { currentOverlay } from '../core/gridOverlay';
+import { GridChoices } from './GridChoices';
 import { altitudeOf, altLabel, groundAt, setAltitude, setClearance, zonesOf } from '../core/height';
 import { throttle } from '../core/throttle';
 import { LIGHT_PRESETS } from '../core/light';
@@ -269,7 +271,7 @@ function MapGridCut(props: { client: TableClient; board: Board | null; meta: Sce
       if ('error' in r) { toast(r.error, 'error', 7000); return; }
       // hide the printed lines and set the app's own grid on them, in one step (one Ctrl+Z puts both back)
       const m = meta;
-      await client.updateScene({ mapGrid: r.cut, grid: impliedGrid(r.cut, m.mapScale, m.mapX, m.mapY) });
+      await client.updateScene({ mapGrid: r.cut, grid: { ...impliedGrid(r.cut, m.mapScale, m.mapX, m.mapY), visible: true } });
       toast(r.cut.hex ? `Found a hex grid (${round2(r.cut.p)} px between hex centres, lines about ${round2(r.cut.t)} px thick), hid it and set your grid on it.` : `Found lines every ${round2(r.cut.p)} px (about ${round2(r.cut.t)} px thick), hid them and set your grid on them.`, 'ok', 5000);
     } finally { setBusy(false); }
   }
@@ -327,12 +329,6 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
   const setGrid = (p: Partial<GridSettings>) => { void client.updateScene({ grid: p }); };
   const hex = isHex(g);
   const per = gridPeriod(g);
-  /** Changing the shape keeps the size, and puts the offsets back inside what the new shape repeats over. */
-  const switchShape = (shape: GridSettings['shape']) => {
-    if (shape === g.shape) return;
-    const np = gridPeriod({ cell: g.cell, shape });
-    setGrid({ shape, ox: Math.round(((g.ox % np.x) + np.x) % np.x * 100) / 100, oy: Math.round(((g.oy % np.y) + np.y) % np.y * 100) / 100 });
-  };
 
   async function replaceMap(f: File) {
     try {
@@ -362,15 +358,13 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
       </Section>
 
       <Section id="grid" title="Grid">
-        <Field label="Grid type" hint={hex ? 'Every step counts the same on hexes. Draw a box (below) to line them up with your map.' : undefined}>
-          <div class="seg">
-            <button class={g.shape === 'square' ? 'on' : ''} onClick={() => switchShape('square')}>Squares</button>
-            <button class={g.shape === 'pointy' ? 'on' : ''} title="Hexes with a point at the top: rows run straight across" onClick={() => switchShape('pointy')}>Hex, point up</button>
-            <button class={g.shape === 'flat' ? 'on' : ''} title="Hexes with a flat top: columns run straight up and down" onClick={() => switchShape('flat')}>Hex, flat top</button>
-          </div>
-        </Field>
+        <div class="field">
+          <span class="field-label">Grid type</span>
+          <GridChoices selected={currentOverlay(g)} onChoose={(choice) => void board?.chooseGridOverlay(choice)} />
+        </div>
         <Toggle checked={g.visible} onChange={(v) => setGrid({ visible: v })} label="Show grid" />
         <Toggle checked={g.snap} onChange={(v) => setGrid({ snap: v })} label="Snap tokens to grid" hint="Hold Alt while dragging to skip snapping." />
+        {meta.mapUrl && <button class="btn" onClick={() => ui.set({ tool: 'scale' })}>Set scale with two points</button>}
         <button class={`btn ${d.tool === 'grid' ? 'primary' : ''}`} onClick={() => ui.set({ tool: d.tool === 'grid' ? 'select' : 'grid' })}>
           {d.tool === 'grid' ? (hex ? 'Drag a box around some hexes…' : 'Drag a box over the grid squares…') : 'Draw a box to set the grid'}
         </button>

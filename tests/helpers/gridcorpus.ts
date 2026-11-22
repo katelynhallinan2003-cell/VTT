@@ -22,6 +22,7 @@ const noGrid = (name: string, spec: MapSpec, more: Partial<Case> = {}): Case => 
 
 export const CORPUS: Case[] = [
   // ---- squares
+  withGrid('faint dark ink across fine painted texture at half-pixel boundaries', { W: 1750, H: 2450, seed: 94, ground: 'painted', clutter: 45 }, sq(70, 69.5, 69.5, 2, 25, { mul: true })),
   withGrid('plain stone, clear lines', { W: 1400, H: 1000, seed: 1 }, sq(70, 23, 41, 2, 60)),
   withGrid('painted ground, see-through lines', { W: 1400, H: 1000, seed: 2, ground: 'painted' }, sq(70, 11, 52, 1.5, 45, { mul: true })),
   withGrid('painted ground, very faint lines, big squares', { W: 2100, H: 1500, seed: 3, ground: 'painted' }, sq(140, 64, 20, 1.3, 22, { mul: true })),

@@ -104,6 +104,38 @@ describe('finding a printed grid', () => {
 });
 
 describe('hiding the grid', () => {
+  it('removes the repeating RGB fringe on both sides of translucent dots', () => {
+    const width = 720, height = 560, p = 47;
+    const data = new Uint8ClampedArray(width * height * 4), ground = data.slice();
+    const tint = (across: number, along: number) => {
+      const d = (across + 6) % p - 6, bright = along % 4 < 2;
+      if (d === 0 || d === 1) return bright ? -46 : -13;
+      if (d === -1 || d === 2) return bright ? -12 : 7;
+      if (d === -2 || d === 3) return bright ? 6 : -5;
+      return 0;
+    };
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      const q = 4 * (width*y + x), slope = 25 * Math.sin((x + 0.6*y)/90);
+      const ink = tint(x,y) + tint(y,x);
+      for (const [k, balance] of [1, 0.72, -0.23].entries()) {
+        ground[q+k] = 152 - 20*k + slope;
+        data[q+k] = ground[q+k] + ink*balance;
+      }
+      ground[q+3] = data[q+3] = 255;
+    }
+    hideGrid({ data, width, height }, { p, x: 0.5, y: 0.5, t: 2.25 });
+    for (const horizontal of [false, true]) for (let dx = -2; dx <= 3; dx++) {
+      const sums = new Float64Array(12), counts = new Uint32Array(4);
+      for (let j = 70; j < 440; j++) {
+        if (j % p < 10 || j % p > p-10) continue;
+        const x = horizontal ? j : p*5+dx, y = horizontal ? p*5+dx : j;
+        const q = (y*width+x)*4, phase = j%4;
+        counts[phase]++;
+        for (let k = 0; k < 3; k++) sums[3*phase+k] += data[q+k]-ground[q+k];
+      }
+      for (let i = 0; i < sums.length; i++) expect(Math.abs(sums[i]/counts[Math.floor(i/3)])).toBeLessThan(3);
+    }
+  });
   it.each([[4, false], [7, true]])('preserves ink-free pixels while removing dots (repeat %i, light %s)', (repeat, light) => {
     const period = Number(repeat);
     const { width, height, data } = mapWith(610, 490, 49, 0, 0, 2, { noGrid: true });
@@ -157,6 +189,14 @@ describe('hiding the grid', () => {
     const img = mapWith(200, 200, 50, 10, 10, 2);
     hideGrid(img, { p: 50, x: 10, y: 10, t: 2 });
     for (let i = 3; i < img.data.length; i += 4) expect(img.data[i]).toBe(255);
+  });
+
+  it('preserves a colored artwork mark covering a dark grid line', () => {
+    const img = mapWith(500, 400, 50, 13, 7, 2);
+    const q = (31 * img.width + 113) * 4;
+    img.data.set([245, 12, 27], q);
+    hideGrid(img, { p: 50, x: 13, y: 7, t: 2 });
+    expect(Array.from(img.data.slice(q, q + 3))).toEqual([245, 12, 27]);
   });
 
   it('copes with lines at the very edge of the picture', () => {

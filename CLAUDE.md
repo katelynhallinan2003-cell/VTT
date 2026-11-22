@@ -48,7 +48,7 @@ Read `CLAUDE.md` (this file) and `WIP.md` before doing anything else in a sessio
 
 ## Design precedents
 
-- **Dotted square grids.** When a short repeating dot pattern is visible across parallel grid lines, repair only the dot cores that show ink contrast. Keep the gaps and surrounding texture intact.
+- **Printed square grids.** Learn the ink's RGB shift from repeated strokes and nearby terrain. On dotted JPEGs, account for the recurring light and dark fringes around the dots. Check the rendered result at native-pixel zoom on both smooth ground and painted edges.
 
 - **Library picture deletion.** Keep ImgBB's private deletion link with the owning DM's library item. Campaign exports and shared scene and token data carry only picture URLs. The DM confirms hosted deletion on ImgBB before finishing removal in the VTT.
 

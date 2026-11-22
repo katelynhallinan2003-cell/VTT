@@ -423,6 +423,15 @@ export function findGrid(img: PixelImage): Found | null {
   if (W0 < 60 || H0 < 60) return null;
   const L0 = luma(img);
   const f = Math.max(1, Math.ceil(Math.max(W0, H0) / WORK_SIDE));
+  const reduced = findAtResolution(L0, W0, H0, f);
+  const faintRepeat = reduced?.info?.faint && reduced.info.explained > 0.85 && reduced.info.contrast >= 10;
+  if ((reduced && !faintRepeat) || f === 1 || Math.max(W0, H0) > 2 * WORK_SIDE) return reduced;
+  // A one-pixel stroke can disappear during averaging. Verify at native resolution on the bounded scan canvas.
+  const native = findAtResolution(L0, W0, H0, 1);
+  return native && (!reduced || native.strength > reduced.strength) ? native : reduced;
+}
+
+function findAtResolution(L0: Uint8Array, W0: number, H0: number, f: number): Found | null {
   const small = f > 1 ? shrink(L0, W0, H0, f) : { L: L0 as Lum, W: W0, H: H0 };
   const { W, H } = small;
   const B = bandProfiles(small.L, W, H, REACH);
@@ -474,18 +483,18 @@ export const FILL_BAND = 3;
 /**
  * Fill the lines in, on a copy of the picture's pixels (changed in place).
  *
- * Continuous lines blend into the surrounding pixels at their soft edges. For dotted lines, fill only the
- * measured dot cores where the local contrast also agrees with the ink. Measure both axes before editing either.
+ * Measure the dot rhythm before editing either axis. Then learn the RGB shift at each position across the stroke.
  */
 export function hideGrid(img: PixelImage, cut: Pick<GridCut, 'p' | 'x' | 'y' | 't'>): void {
+  if (![cut.p, cut.x, cut.y, cut.t].every(Number.isFinite) || cut.p < 2 || cut.t <= 0) return;
   const { width: W, height: H } = img;
   // down the vertical lines, then across the horizontal ones (the crossings are filled from rows that are already clean)
   const vertical = { along: H, alongStride: W * 4, across: W, acrossStride: 4 };
   const horizontal = { along: W, alongStride: 4, across: H, acrossStride: W * 4 };
-  const verticalDots = dotPattern(img.data, vertical, cut.x, cut.y, cut.p, cut.t);
-  const horizontalDots = dotPattern(img.data, horizontal, cut.y, cut.x, cut.p, cut.t);
-  fillLines(img.data, vertical, cut.x, cut.p, cut.t, verticalDots);
-  fillLines(img.data, horizontal, cut.y, cut.p, cut.t, horizontalDots);
+  const verticalDots = dotPeriod(img.data, vertical, cut.x, cut.y, cut.p, cut.t);
+  const horizontalDots = dotPeriod(img.data, horizontal, cut.y, cut.x, cut.p, cut.t);
+  repairAxis(img.data, vertical, cut.x, cut.y, cut.p, cut.t, verticalDots);
+  repairAxis(img.data, horizontal, cut.y, cut.x, cut.p, cut.t, horizontalDots);
 }
 
 interface Axis {
@@ -497,15 +506,13 @@ interface Axis {
   acrossStride: number;
 }
 
-interface DotPattern { ink: Uint8Array; sign: number }
-
 /** Read the ink along parallel strokes. A dotted grid has a short repeating pulse with clear paper between dots. */
-function dotPattern(data: PixelImage['data'], ax: Axis, first: number, crossing: number, p: number, t: number): DotPattern | null {
+function dotPeriod(data: PixelImage['data'], ax: Axis, first: number, crossing: number, p: number, t: number): number {
   const flank = Math.ceil(t / 2) + 1;
   const centres: number[] = [];
   const step = Math.max(1, Math.ceil(ax.across / p / 64)) * p;
   for (let c = first + Math.ceil((flank - first) / p) * p; c < ax.across - flank - 1; c += step) centres.push(Math.round(c) * ax.acrossStride);
-  if (centres.length < 5 || ax.along < 48) return null;
+  if (centres.length < 5 || ax.along < 48) return 1;
   const brightness = (q: number) => (data[q] + 2 * data[q + 1] + data[q + 2]) / 4;
   const profile = new Float32Array(ax.along);
   const valid = new Uint8Array(ax.along);
@@ -524,12 +531,12 @@ function dotPattern(data: PixelImage['data'], ax: Axis, first: number, crossing:
     valid[i] = 1;
     values.push(profile[i]);
   }
-  if (values.length < 32) return null;
+  if (values.length < 32) return 1;
   values.sort((a, b) => a - b);
   const lo = values[Math.floor(values.length * 0.12)], hi = values[Math.floor(values.length * 0.88)];
   const sign = Math.abs(hi) >= Math.abs(lo) ? 1 : -1;
   const peak = sign === 1 ? hi : -lo, gap = sign === 1 ? lo : -hi;
-  if (peak < 6 || gap > 0.35 * peak) return null;
+  if (peak < 6 || gap > 0.35 * peak) return 1;
   // Compare the pulse to itself. Solid strokes with incidental texture should stay on the solid-line path.
   const threshold = (peak + gap) / 2;
   const ink = Uint8Array.from(profile, v => Number(sign * v > threshold));
@@ -544,21 +551,308 @@ function dotPattern(data: PixelImage['data'], ax: Axis, first: number, crossing:
     if (mismatches / pairs > 0.27) sawMismatch = true;
     if (sawMismatch && mismatches / pairs < 0.12) { period = lag; break; }
   }
-  if (!period) return null;
-  // Perpendicular strokes obscure the pulse at intersections. Read the nearest clear cycle on either side.
-  for (let i = 0; i < ink.length; i++) if (!valid[i]) {
-    let vote = 0, count = 0;
-    for (const dir of [-1, 1]) {
-      for (let j = i + dir * period; j >= 0 && j < ink.length; j += dir * period) {
-        if (valid[j]) { vote += ink[j]; count++; break; }
-      }
-    }
-    ink[i] = Number(count > 0 && vote * 2 > count);
-  }
-  return { ink, sign };
+  return period || 1;
 }
 
-function fillLines(data: Uint8ClampedArray | Uint8Array, ax: Axis, first: number, p: number, t: number, dots: DotPattern | null): void {
+// A translucent stroke shifts each background channel toward the ink color. Fit that shift
+// against the clean RGB gradient outside the stroke, separately for its core, edges and dot phases.
+class InkFit {
+  weight = 0;
+  ground = [0, 0, 0];
+  shift = [0, 0, 0];
+  square = 0;
+  product = 0;
+  slope = 0;
+  support = 0;
+  halo = false;
+  finish() {
+    if (!this.weight) return;
+    let variance = this.square / this.weight, covariance = this.product / this.weight;
+    for (let k = 0; k < 3; k++) {
+      this.ground[k] /= this.weight;
+      this.shift[k] /= this.weight;
+      variance -= this.ground[k] ** 2;
+      covariance -= this.ground[k] * this.shift[k];
+    }
+    this.slope = Math.max(-0.9, Math.min(0.35, covariance / (Math.max(0, variance) + 160)));
+  }
+}
+
+function repairAxis(data: PixelImage['data'], ax: Axis, first: number, crossing: number, p: number, t: number, period: number) {
+  const { along, across, alongStride, acrossStride } = ax;
+  if (across / p < 5 || along < 64) { fillLines(data, ax, first, p, t); return; }
+  const dotted = period > 1;
+  // Compression can give alternate dots different soft edges inside an eight-pixel JPEG block.
+  const phases = dotted && 8 % period === 0 ? 8 : period;
+  const reach = Math.max(1, Math.min(Math.ceil(t / 2) + (dotted ? 7 : 2), Math.floor(p / 2) - 2));
+  const span = 2 * reach + 1;
+  const block = Math.ceil(along / Math.max(1, Math.round(along / Math.max(384, phases * 64))));
+  const jpegGroups = dotted && across / p > 40;
+  const groups = jpegGroups ? 8 : Math.abs(p - Math.round(p)) > 0.001 ? 4 : 1;
+  const count = Math.ceil(along / block) * groups * phases * span;
+  let fits = Array.from({ length: count }, () => new InkFit());
+  let prior: InkFit[] | undefined;
+  const rgb = [0, 0, 0], shift = [0, 0, 0], expected = [0, 0, 0];
+  const centers: number[] = [];
+  for (let c = first - Math.ceil((first + reach) / p) * p; c < across + reach; c += p) centers.push(c);
+  // The first fit locates the color band. Robust reweighting in the second fit reduces the influence of painted contours.
+  for (let pass = 0; pass < 3; pass++) {
+    const painting = pass === 2;
+    const ringing = painting && dotted && fits.filter(f => f.halo).length > count * 0.015;
+    for (const c of centers) {
+      const center = Math.round(c);
+      const left = center - reach - 1, right = center + reach + 1;
+      if (right < 0 || left >= across) continue;
+      const x0 = Math.max(0, left + 1), x1 = Math.min(right - 1, across - 1);
+      const complete = left >= 0 && right < across;
+      if (!complete && !painting) continue;
+      const aCol = (left >= 0 ? left : right) * acrossStride, bCol = (right < across ? right : left) * acrossStride;
+      const group = jpegGroups ? (center % 8 + 8) % 8 : Math.min(groups - 1, Math.floor((c - center + 0.5) * groups));
+      // JPEG ringing is confined to the blocks containing the stroke. Require local evidence
+      // that the stroke is present before repairing its softer, sometimes opposite-color ripples.
+      const printed = new Uint8Array(Math.ceil(along / 32));
+      if (ringing && center >= 0 && center < across) {
+        for (let strip = 0; strip < printed.length; strip++) {
+          let evidence = 0, samples = 0, pulseEvidence = 0, pulseSamples = 0;
+          for (let i = strip * 32; i < Math.min(along, (strip + 1) * 32); i++) {
+            const delta = i - crossing;
+            if (Math.abs(delta - Math.round(delta / p) * p) < reach) continue;
+            const q = i * alongStride, z = q + center * acrossStride;
+            const fit = fits[((Math.floor(i / block) * groups + group) * phases + i % phases) * span + reach];
+            // A cliff can put the two banks on entirely different colors. In that case test
+            // the alternating ink/gap contrast along the stroke itself.
+            const halfPeriod = Math.floor(period / 2);
+            if (i >= halfPeriod && i + halfPeriod < along) {
+              const opposite = fits[((Math.floor(i / block) * groups + group) * phases + (i + halfPeriod) % phases) * span + reach];
+              const direction = fit.shift[1] - opposite.shift[1];
+              if (Math.abs(direction) >= 3) {
+                const delta = data[z + 1] - (data[z - halfPeriod * alongStride + 1] + data[z + halfPeriod * alongStride + 1]) / 2;
+                pulseEvidence += Math.max(-1, Math.min(1, Math.sign(direction) * delta / 4));
+                pulseSamples++;
+              }
+            }
+            let predicted = 0, projection = 0;
+            for (let k = 0; k < 3; k++) {
+              const ground = (data[q + aCol + k] + data[q + bCol + k]) / 2;
+              const weight = k === 1 ? 2 : 1;
+              predicted += weight * (fit.shift[k] + fit.slope * (ground - fit.ground[k]));
+              projection += weight * (data[z + k] - ground);
+            }
+            if (Math.abs(predicted) < 10) continue;
+            evidence += Math.min(1, Math.max(-1, projection / predicted));
+            samples++;
+          }
+          printed[strip] = Number((samples >= 2 && evidence / samples > 0.25) ||
+            (pulseSamples >= 4 && pulseEvidence / pulseSamples > 0.33));
+        }
+      }
+      if (ringing) {
+        cleanDotRipple(data, ax, x0, x1, c, crossing, p, t, phases, printed, fits, group, groups, span, block);
+        continue;
+      }
+      for (let i = 0; i < along; i++) {
+        const delta = i - crossing;
+        if (!painting && Math.abs(delta - Math.round(delta / p) * p) <= reach + 1) continue;
+        const row = i * alongStride;
+        let a = row + aCol, b = row + bCol;
+        // Continue a slanting outline across the missing pixels by comparing small patches on both banks.
+        const crossDist = Math.abs(delta - Math.round(delta / p) * p);
+        if (painting && complete && i >= 5 && i < along - 5 && crossDist > reach + 4) {
+          let best = Infinity, direction = 0;
+          for (const d of [0, -1, 1, -2, 2, -4, 4]) {
+            let cost = Math.abs(d) * 9;
+            for (let j = -1; j <= 1; j++) for (let k = 0; k < 3; k++) {
+              cost += Math.abs(data[a + (j - d) * alongStride + k] - data[b + (j + d) * alongStride + k]);
+            }
+            if (cost < best) { best = cost; direction = d; }
+          }
+          a -= direction * alongStride; b += direction * alongStride;
+        }
+        const edge = Math.max(Math.abs(data[a] - data[b]), Math.abs(data[a+1] - data[b+1]), Math.abs(data[a+2] - data[b+2]));
+        const base = ((Math.floor(i / block) * groups + group) * phases + i % phases) * span;
+        for (let x = x0; x <= x1; x++) {
+          const index = base + x - center + reach, fit = fits[index], q = row + x * acrossStride;
+          const f = (x - left) / (right - left);
+          const model = painting ? fit : prior?.[index];
+          let error = 0, power = 0, dot = 0;
+          for (let k = 0; k < 3; k++) {
+            rgb[k] = data[a + k] * (1 - f) + data[b + k] * f;
+            shift[k] = data[q + k] - rgb[k];
+            if (model) {
+              expected[k] = model.shift[k] + model.slope * (rgb[k] - model.ground[k]);
+              error = Math.max(error, Math.abs(shift[k] - expected[k]));
+              power += expected[k] ** 2;
+              dot += shift[k] * expected[k];
+            }
+          }
+          if (!painting) {
+            const w = 1 / ((1 + (edge / 28) ** 2) * (1 + (error / 18) ** 2));
+            fit.weight += w;
+            for (let k = 0; k < 3; k++) {
+              fit.ground[k] += w * rgb[k]; fit.shift[k] += w * shift[k];
+              fit.square += w * rgb[k] ** 2; fit.product += w * rgb[k] * shift[k];
+            }
+          } else {
+            const strength = Math.sqrt(power / 3);
+            if (fit.weight < 4 || fit.support === 0) continue;
+            // Good color matches use the clean gradient. At a textured edge undo the estimated tint
+            // instead, retaining detail in the source pixel. A blank or covered stroke gives no correction.
+            const near = Math.max(Math.abs(shift[0]), Math.abs(shift[1]), Math.abs(shift[2]));
+            const dr = shift[0] - expected[0], dg = shift[1] - expected[1], db = shift[2] - expected[2];
+            const hueError = Math.max(dr, dg, db) - Math.min(dr, dg, db);
+            if (dot <= 0 || near <= 2 || hueError > 32 + edge * 0.65 + strength * 0.5) continue;
+            const agreement = Math.min(1, 3 * dot / Math.max(1, power));
+            const keepDetail = Math.min(1, error / (12 + strength)) * Math.min(1, (edge + error) / 36);
+            for (let k = 0; k < 3; k++) {
+              const restored = rgb[k] + (shift[k] - expected[k]) / (1 + fit.slope);
+              const value = rgb[k] + keepDetail * (restored - rgb[k]);
+              data[q + k] = Math.max(0, Math.min(255, Math.round(data[q + k] + agreement * (value - data[q + k]))));
+            }
+          }
+        }
+      }
+    }
+    if (!painting) for (const fit of fits) fit.finish();
+    if (pass === 1) {
+      for (let base = 0; base < count; base += span * phases) {
+        for (let x = 0; x < span; x++) {
+          let pulse = 0;
+          for (let k = 0; k < 3; k++) {
+            let lo = Infinity, hi = -Infinity;
+            for (let j = 0; j < phases; j++) {
+              const v = fits[base + j * span + x].shift[k];
+              lo = Math.min(lo, v); hi = Math.max(hi, v);
+            }
+            pulse = Math.max(pulse, hi - lo);
+          }
+          for (let j = 0; j < phases; j++) {
+            const fit = fits[base + j * span + x];
+            const threshold = Math.max(2.5, 80 / Math.sqrt(Math.max(1, fit.weight)));
+            const mean = Math.max(...fit.shift.map(Math.abs));
+            fit.support = Number(mean > threshold);
+            // Alternating JPEG fringes can reverse color between successive dots. Include the gaps
+            // only where that periodic fringe is also visible outside the measured stroke core.
+            fit.halo = dotted && Math.abs(x - reach) > t / 2 + 0.5 && pulse > threshold * 2;
+            if (fit.halo) fit.support = 1;
+          }
+        }
+        // If this strip has a measured fringe, use the wider color band through its center as well.
+        if (dotted && fits.slice(base, base + phases * span).some(fit => fit.halo)) {
+          for (let j = 0; j < phases; j++) for (let x = 0; x < span; x++) if (Math.abs(x - reach) <= t / 2 + 1) {
+            const fit = fits[base + j * span + x]; fit.halo = true; fit.support = 1;
+          }
+        }
+      }
+    }
+    if (pass === 0) { prior = fits; fits = Array.from({ length: count }, () => new InkFit()); }
+  }
+}
+
+/** Remove the repeated color oscillation along the stroke before using either bank to fill its ink.
+ * A wall may also depart sharply from its surroundings, but its contour seldom repeats at the dot phase. */
+function cleanDotRipple(data: PixelImage['data'], ax: Axis, x0: number, x1: number, c: number, crossing: number,
+  p: number, t: number, phases: number, printed: Uint8Array, fits: InkFit[], group: number, groups: number, span: number, block: number) {
+  const { along, alongStride, acrossStride } = ax;
+  const half = phases / 2, reach = (span - 1) / 2;
+  const nearCross = (i: number) => Math.abs(i - crossing - Math.round((i - crossing) / p) * p) <= t / 2 + 2;
+  const cycle = new Float32Array(along * 3), ripple = new Float32Array(along * 3);
+  const clamp = (i: number) => Math.max(0, Math.min(along - 1, i));
+  for (let x = x0; x <= x1; x++) {
+    const col = x * acrossStride;
+    for (let i = 0; i < along; i++) {
+      let weight = 0;
+      for (let d = -Math.floor(half); d <= Math.floor(half); d++) {
+        const j = clamp(i + d), w = Math.abs(d) === half ? 0.5 : 1;
+        weight += w;
+        for (let k = 0; k < 3; k++) cycle[i*3+k] += w * data[col + j*alongStride+k];
+      }
+      for (let k = 0; k < 3; k++) {
+        cycle[i*3+k] /= weight;
+        ripple[i*3+k] = data[col+i*alongStride+k] - cycle[i*3+k];
+      }
+    }
+    for (let i = 0; i < along; i++) {
+      if (!printed[i >> 5]) continue;
+      const estimate = [0, 0, 0];
+      let weight = 0;
+      for (let d = -3; d <= 3; d++) {
+        const j = i + d * phases;
+        if (d === 0 || j < 0 || j >= along || nearCross(j)) continue;
+        let difference = 0;
+        for (let k = 0; k < 3; k++) difference = Math.max(difference, Math.abs(cycle[i*3+k] - cycle[j*3+k]));
+        const w = 1 / (Math.abs(d) * (1 + (difference / 10) ** 2));
+        weight += w;
+        for (let k = 0; k < 3; k++) estimate[k] += w * ripple[j*3+k];
+      }
+      if (weight < 0.12) continue;
+      for (let k = 0; k < 3; k++) {
+        const repeated = estimate[k] / weight, here = ripple[i*3+k];
+        if (Math.abs(repeated) < 0.8 || here * repeated <= 0) continue;
+        const remove = Math.abs(here - repeated) < 5 ? here : Math.sign(repeated) * Math.min(Math.abs(here), Math.abs(repeated));
+        const q = col+i*alongStride+k;
+        data[q] = Math.max(0, Math.min(255, Math.round(data[q] - remove)));
+      }
+    }
+    cycle.fill(0);
+  }
+  // The remaining ink is the mean tint across a cycle. Its clean banks are now close to the core.
+  const radius = t / 2 + 1;
+  const left = Math.max(0, Math.ceil(c-radius)-1), right = Math.min(ax.across-1, Math.floor(c+radius)+1);
+  const offset = Math.round(c);
+  for (let i = 0; i < along; i++) {
+    if (!printed[i >> 5]) continue;
+    const row = i*alongStride;
+    const a = row + (c-radius < 0 ? right : left)*acrossStride, b = row + (c+radius >= ax.across-1 ? left : right)*acrossStride;
+    for (let x = Math.max(x0, Math.ceil(c-radius)); x <= Math.min(x1, Math.floor(c+radius)); x++) {
+      const f = (x - left) / Math.max(1, right - left), q = row + x*acrossStride;
+      const base = (Math.floor(i/block)*groups+group)*phases*span+x-offset+reach;
+      for (let k = 0; k < 3; k++) {
+        const ground = data[a+k]*(1-f) + data[b+k]*f;
+        let tint = 0;
+        for (let j = 0; j < phases; j++) {
+          const fit = fits[base+j*span];
+          tint += fit.shift[k] + fit.slope*(ground-fit.ground[k]);
+        }
+        tint /= phases;
+        const delta = data[q+k] - ground;
+        // Keep the underlying edge when its jump is larger than the plausible ink band.
+        if (delta * tint < 0 && Math.abs(delta) > 8) continue;
+        const excess = Math.abs(delta - tint);
+        const keep = Math.min(1, Math.max(0, (excess - 8) / 18));
+        data[q+k] = Math.max(0, Math.min(255, Math.round(ground + keep*(delta-tint))));
+      }
+    }
+  }
+  // On smooth ground JPEG quantization can leave a low-contrast checkerboard through the
+  // entire affected block. Use its actual boundaries as clean anchors. Limit the adjustment
+  // by RGB agreement so lettering and rock contours keep their recovered detail.
+  const bankL = Math.floor(Math.ceil(c - t / 2) / 8) * 8 - 1;
+  const bankR = Math.floor(Math.floor(c + t / 2) / 8) * 8 + 8;
+  if (bankL < 0 || bankR >= ax.across) return;
+  const leftRGB = [0, 0, 0], rightRGB = [0, 0, 0];
+  for (let i = 0; i < along; i++) {
+    if (!printed[i >> 5]) continue;
+    leftRGB.fill(0); rightRGB.fill(0);
+    let spread = 0;
+    for (let k = 0; k < 3; k++) {
+      for (const [bank, rgb] of [[bankL, leftRGB], [bankR, rightRGB]] as const) {
+        const q = i*alongStride + bank*acrossStride+k;
+        const before = data[clamp(i-1)*alongStride+bank*acrossStride+k], after = data[clamp(i+1)*alongStride+bank*acrossStride+k];
+        rgb[k] = (before + data[q]*2 + after)/4;
+        spread = Math.max(spread, Math.abs(before-after));
+      }
+    }
+    for (let x = Math.max(x0,bankL+1); x <= Math.min(x1,bankR-1); x++) {
+      const f = (x-bankL)/(bankR-bankL), q=i*alongStride+x*acrossStride;
+      let distance = 0;
+      for (let k=0;k<3;k++) distance = Math.max(distance, Math.abs(data[q+k] - (leftRGB[k]*(1-f)+rightRGB[k]*f)));
+      const weight = 1 / (1 + (distance/15)**4 + (spread/14)**4);
+      for (let k=0;k<3;k++) data[q+k] = Math.round(data[q+k]*(1-weight)+(leftRGB[k]*(1-f)+rightRGB[k]*f)*weight);
+    }
+  }
+}
+
+function fillLines(data: Uint8ClampedArray | Uint8Array, ax: Axis, first: number, p: number, t: number): void {
   const half = Math.max(0.5, t / 2) + 0.5;
   const reach = half + FEATHER;
   // where the pixels the fill is taken from begin (kept clear of the next line when the lines are close)
@@ -570,28 +864,6 @@ function fillLines(data: Uint8ClampedArray | Uint8Array, ax: Axis, first: number
   let c = first - Math.ceil((first + reach) / p) * p;
   for (; c < across + reach; c += p) {
     if (c + reach < 0 || c - reach > across - 1) continue;
-    if (dots) {
-      const radius = Math.max(0.5, t / 2);
-      const start = Math.max(0, Math.ceil(c - radius)), end = Math.min(across - 1, Math.floor(c + radius));
-      const left = start - 1, right = end + 1;
-      if (left < 0 && right >= across) continue;
-      for (let i = 0; i < along; i++) {
-        if (!dots.ink[i]) continue;
-        const row = i * alongStride;
-        const a = row + (left >= 0 ? left : right) * acrossStride;
-        const b = row + (right < across ? right : left) * acrossStride;
-        const lightA = data[a] + 2 * data[a + 1] + data[a + 2];
-        const lightB = data[b] + 2 * data[b + 1] + data[b + 2];
-        for (let x = start; x <= end; x++) {
-          const f = (x - left) / (right - left);
-          const q = row + x * acrossStride;
-          const light = data[q] + 2 * data[q + 1] + data[q + 2];
-          if (dots.sign * (lightA * (1 - f) + lightB * f - light) <= 8) continue; // two luma levels
-          for (let k = 0; k < 3; k++) data[q + k] = Math.round(data[a + k] * (1 - f) + data[b + k] * f);
-        }
-      }
-      continue;
-    }
     const lo = Math.round(c - gap - n + 1), hi = Math.round(c - gap);
     const lo2 = Math.round(c + gap), hi2 = Math.round(c + gap + n - 1);
     const x0 = Math.max(0, Math.ceil(c - reach)), x1 = Math.min(across - 1, Math.floor(c + reach));

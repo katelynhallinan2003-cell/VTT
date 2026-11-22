@@ -6,9 +6,10 @@ import { FILL_LEVEL, STROKE_CELLS, beamWidthPx, dashSegments, fitPenPoints, hand
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
 import { altitudeOf, groundAt, heightChangeNote, heightNote, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
-import { EMPTY_TERRAIN, MAX_STROKE_CELLS, areaAt, areaLabel, areasSelected, cellKey, cellsAlong, heightColor, newAreaId, type Area, type Terrain } from '../core/terrain';
+import { EMPTY_TERRAIN, MAX_STROKE_CELLS, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, heightColor, newAreaId, type Area, type Terrain } from '../core/terrain';
 import { cellPoly } from '../core/cells';
 import { findGrid, scaleCut, type GridCut } from '../core/gridcut';
+import { findHexGrid } from '../core/hexcut';
 import { DEFAULT_GRID } from '../core/model';
 import { pctOf, toPub, visionCircles } from '../core/combat';
 import type { DrawingPatch, TableClient } from '../state/client';
@@ -19,7 +20,7 @@ import { TokenView, type TokenCtx } from './TokenView';
 import { DrawLayer, paintShape } from './DrawLayer';
 import { TerrainLayer } from './TerrainLayer';
 import { WallLayer } from './WallLayer';
-import { WALL_NAME, boxSegments, distToSeg, endNear, moveSegs, pathBlocked, sightSegs, snapWallPoint, visibilityPolygon, wallMid, wallNear, wallVisDefault, type Seg, type Wall } from '../core/walls';
+import { WALL_NAME, boxSegments, chainSegments, circlePoints, distToSeg, endNear, freehandCorners, hatchTicks, moveSegs, pathBlocked, sightSegs, snapWallPoint, visibilityPolygon, wallMid, wallNear, wallVisDefault, type Seg, type Wall } from '../core/walls';
 import { canvasTexture, loadTexture, releaseTexture, setTextureFailHandler, type LoadedTexture, gridlessTexture, readPixels } from './textures';
 import { diagnoseImage } from '../core/images';
 
@@ -49,7 +50,7 @@ type Drag =
   | { kind: 'terrain'; erase: boolean; /** the area it paints into (empty: rub out of every area) */ group: string; h: number; add: boolean; /** the cells covered so far (null for a free brush) */ cells: Map<string, Vec> | null; pts: Vec[]; last: Vec; size: number }
   | { kind: 'ruler' }
   /** drawing a wall (or a box of walls) with the Walls tool; `cont` when it carries on from the last wall */
-  | { kind: 'wall'; a: Vec; b: Vec; down: Vec; moved: boolean; cont: boolean; box: boolean }
+  | { kind: 'wall'; a: Vec; b: Vec; down: Vec; moved: boolean; cont: boolean; shape: 'line' | 'box' | 'free' | 'circle'; /** the pointer's path (freehand walls) */ pts: Vec[] }
   /** dragging the end of a wall (and every other wall end that sits on the same spot) */
   | { kind: 'wallend'; moves: { id: string; end: 'a' | 'b' }[]; from: Vec; to: Vec; moved: boolean }
   /** dragging the selected walls */
@@ -82,14 +83,22 @@ export class Board {
   private fogLayer = new Container();
   private drawLayer = new DrawLayer();
   private terrainLayer = new TerrainLayer();
+  /** 0 (hidden) to 1 (fully shown): the ground fades in and out */
+  private heightFade = 0;
+  /** until when the ground stays on show without a drag (a keyboard step, say) */
+  private heightsUntil = 0;
+  private warmTimer = 0;
   private wallLayer = new WallLayer();
   private wallPreview: Map<string, { a: Vec; b: Vec }> | null = null;
   private wallPrevSeq = 0;
   private wallHover: string | null = null;
   /** where the wall being drawn carries on from (a click that has not been followed by a second point yet) */
   private wallStart: Vec | null = null;
+  /** where the run of walls being drawn began, and how many it has so far (coming back to the start closes the loop) */
+  private wallRunFirst: Vec | null = null;
+  private wallRunCount = 0;
   private seenWallRev = -1;
-  private segCache: { scene: unknown; rev: number; sight: Seg[]; move: Seg[] } = { scene: null, rev: -1, sight: [], move: [] };
+  private segCache: { scene: unknown; rev: number; ground: string; sight: Seg[]; move: Seg[] } = { scene: null, rev: -1, ground: '', sight: [], move: [] };
   private auraG = new Graphics();
   private ghostLayer = new Container();
   private overlayG = new Graphics();
@@ -101,7 +110,7 @@ export class Board {
   private liveSent = false;
   private seenDrawRev = -1;
   private seenLiveRev = -1;
-  private prevUi = { testMove: false, sharePlot: false, tool: 'select' as string, rulerColor: '', cover: true, heights: true, draft: null as unknown, sel: null as unknown };
+  private prevUi = { testMove: false, sharePlot: false, tool: 'select' as string, rulerColor: '', cover: true, heights: 'auto' as string, draft: null as unknown, sel: null as unknown };
   private distText!: Text;
 
   private cam = { zoom: 1, tx: 0, ty: 0 };
@@ -356,6 +365,7 @@ export class Board {
     if (moving) this.dirty = true;
     if (this.pings.length) { this.tickPings(); this.dirty = true; }
     if (this.press) this.dirty = true;
+    this.tickHeights(dt);
     if (!this.dirty) return;
     this.dirty = false;
     if (this.gridDirty) { this.drawGrid(); this.gridDirty = false; }
@@ -495,7 +505,7 @@ export class Board {
     const cut = this.client.scene?.meta?.mapGrid;
     if (!sprite || !tex) return;
     const want = cut && cut.on ? cut : null;
-    const key = want ? `${this.mapUrl}|${want.p}|${want.x}|${want.y}|${want.t}` : '';
+    const key = want ? `${this.mapUrl}|${want.p}|${want.x}|${want.y}|${want.t}|${want.hex ?? ''}` : '';
     if (key === this.mapCutKey) return;
     this.mapCutKey = key;
     const seq = ++this.cutSeq;
@@ -528,8 +538,18 @@ export class Board {
     if (!px) return { error: "This browser would not let me read the map picture, so I can't look for lines in it." };
     // the grid you already set is a good guess at the spacing; if nothing is there, look at every spacing
     const hint = meta.grid.cell / (meta.mapScale * tex.scale);
-    let f = hint >= 10 ? findGrid(px.img, hint) : null;
-    if (!f) f = findGrid(px.img);
+    // a hex scene looks for hexes first, a square one for squares; either one still tries the other if nothing fits
+    const g = meta.grid;
+    const hexFirst = g.shape !== 'square';
+    const squares = () => (hint >= 10 ? findGrid(px.img, hint) : null) ?? findGrid(px.img);
+    const first = hexFirst ? (g.shape as 'pointy' | 'flat') : 'pointy';
+    // a grid size that is far off the printed one can make some other spacing look like hexes, so the hint only wins when it fits as well as looking at everything
+    const hexes = () => {
+      const a = hint >= 10 ? findHexGrid(px.img, hint, first) : null;
+      const b = findHexGrid(px.img, undefined, first);
+      return a && b ? (a.strength >= b.strength * 0.9 ? a : b) : a ?? b;
+    };
+    const f = hexFirst ? hexes() ?? squares() : squares() ?? hexes();
     if (!f) return { error: 'I could not find evenly spaced grid lines in this picture. Some maps have none, or only faint ones.' };
     return { cut: { ...scaleCut(f.cut, tex.scale), on: true }, strength: f.strength };
   }
@@ -607,7 +627,7 @@ export class Board {
       return pct == null ? null : { pct, bar: true };
     }
     if (t.hpShow === 'off' || t.hpPct == null) return null;
-    return { pct: t.hpPct, bar: t.hpShow === 'bar' };
+    return { pct: t.hpPct, bar: t.hpShow === 'bar' || t.hpShow === 'numbers', nums: t.hpShow === 'numbers' && t.hpNow != null && t.hpCap != null ? { now: t.hpNow, cap: t.hpCap } : undefined };
   }
 
   private visibleToViewer(t: Token) { return !t.hidden || (this.client.isDM && !this.ui.data.dmPreview); }
@@ -700,9 +720,11 @@ export class Board {
     const scene = this.client.scene;
     if (!scene) return { sight: [], move: [] };
     const c = this.segCache;
-    if (c.scene !== scene || c.rev !== scene.wallRev) {
+    // how tall a wall's top is depends on the ground it stands on, so the pieces are rebuilt when the ground changes too
+    if (c.scene !== scene || c.rev !== scene.wallRev || c.ground !== this.zones.sig) {
       const list = [...scene.walls.values()];
-      this.segCache = { scene, rev: scene.wallRev, sight: sightSegs(list), move: moveSegs(list) };
+      const topOf = (w: Wall) => groundAt(this.zones, wallMid(w)) + w.h;
+      this.segCache = { scene, rev: scene.wallRev, ground: this.zones.sig, sight: sightSegs(list, topOf), move: moveSegs(list, topOf) };
     }
     return this.segCache;
   }
@@ -762,15 +784,21 @@ export class Board {
     return this.wallSegs().move;
   }
 
-  /** Does a step from→to go through a wall? A token already standing on a wall can still step off it. */
-  private stepBlocked(from: Vec, to: Vec, segs: Seg[]): boolean {
-    return pathBlocked(from, to, segs.filter((s) => distToSeg(from, s) > 0.75));
+  /** Does a step from→to go through a wall? A token already standing on a wall can still step off it. `alt` is how high it is (flyers go over low walls). */
+  private stepBlocked(from: Vec, to: Vec, segs: Seg[], alt?: number): boolean {
+    return pathBlocked(from, to, segs.filter((s) => distToSeg(from, s) > 0.75), alt);
+  }
+
+  /** How high a token is when it stands (or flies) at `pos`. */
+  private altAt(id: string, pos: Vec): number | undefined {
+    const t = this.client.scene?.tokens.get(id);
+    return t ? this.heightOf(t, pos).alt : undefined;
   }
 
   /** Whether a token may go from→to (arrow keys, jumps and the like). */
-  private moveAllowed(from: Vec, to: Vec): boolean {
+  private moveAllowed(from: Vec, to: Vec, id?: string): boolean {
     const segs = this.moveBlockers();
-    return !segs.length || !this.stepBlocked(from, to, segs);
+    return !segs.length || !this.stepBlocked(from, to, segs, id ? this.altAt(id, from) : undefined);
   }
 
   /**
@@ -781,8 +809,11 @@ export class Board {
     const segs = this.moveBlockers();
     const cur = d.cur ?? { x: 0, y: 0 };
     if (!segs.length) return want;
-    const origins = d.ids.map((id) => d.origins.get(id)).filter((o): o is Vec => !!o);
-    const clear = (v: Vec) => origins.every((o) => !this.stepBlocked({ x: o.x + cur.x, y: o.y + cur.y }, { x: o.x + v.x, y: o.y + v.y }, segs));
+    const origins = d.ids.map((id) => ({ id, o: d.origins.get(id) })).filter((x): x is { id: string; o: Vec } => !!x.o);
+    const clear = (v: Vec) => origins.every(({ id, o }) => {
+      const from = { x: o.x + cur.x, y: o.y + cur.y };
+      return !this.stepBlocked(from, { x: o.x + v.x, y: o.y + v.y }, segs, this.altAt(id, from));
+    });
     if (clear(want)) return want;
     const len = Math.hypot(want.x - cur.x, want.y - cur.y);
     const n = Math.min(200, Math.max(4, Math.ceil(len / 3)));
@@ -811,30 +842,82 @@ export class Board {
     return snapWallPoint(grid, w, ends, u.wallSnap, 10 / this.cam.zoom);
   }
 
+  /** What the next wall is drawn as: doors are always one piece. */
+  private wallShapeNow(): 'line' | 'box' | 'free' | 'circle' {
+    const u = this.ui.data;
+    return u.wallKind === 'door' ? 'line' : u.wallShape;
+  }
+
+  /** The corners of a freehand wall, simplified as much as the detail setting says. */
+  private freehandOf(pts: Vec[]): { pts: Vec[]; closed: boolean } {
+    const cell = this.client.grid.cell;
+    const tol = cell * { low: 0.35, mid: 0.18, high: 0.08 }[this.ui.data.wallDetail];
+    const ends: Vec[] = [];
+    for (const x of this.client.scene?.walls.values() ?? []) ends.push(x.a, x.b);
+    return freehandCorners(pts, tol, Math.max(cell * 0.4, 12 / this.cam.zoom), ends);
+  }
+
+  /** The walls a shape being drawn would make (a box, a round room, or a hand-drawn line). */
+  private wallShapeSegs(shape: 'line' | 'box' | 'free' | 'circle', a: Vec, b: Vec, pts: Vec[]): { a: Vec; b: Vec }[] {
+    const cell = this.client.grid.cell;
+    if (shape === 'box') return boxSegments(a, b);
+    if (shape === 'circle') {
+      const r = Math.hypot(b.x - a.x, b.y - a.y);
+      if (r < cell * 0.2) return [];
+      const n = { low: 12, mid: 20, high: 32 }[this.ui.data.wallDetail];
+      return chainSegments(circlePoints(a, r, n, Math.atan2(b.y - a.y, b.x - a.x)), true);
+    }
+    if (shape === 'free') {
+      if (pts.length < 2) return [];
+      const f = this.freehandOf(pts);
+      return chainSegments(f.pts, f.closed, cell * 0.08);
+    }
+    return [{ a, b }];
+  }
+
   private startWall(w: Vec, e: PointerEvent) {
     const u = this.ui.data;
     if (u.wallMode === 'edit') { this.startWallEdit(w, e); return; }
-    const p = this.wallPoint(w, e, this.wallStart);
-    this.drag = { kind: 'wall', a: this.wallStart ?? p, b: p, down: p, moved: false, cont: !!this.wallStart, box: u.wallShape === 'box' };
+    const shape = this.wallShapeNow();
+    // a hand-drawn wall is free of the grid: only its ends find other walls
+    const p = shape === 'free' ? w : this.wallPoint(w, e, this.wallStart);
+    const from = shape === 'free' ? p : this.wallStart ?? p;
+    this.drag = { kind: 'wall', a: from, b: p, down: p, moved: false, cont: shape !== 'free' && !!this.wallStart, shape, pts: shape === 'free' ? [p] : [] };
+  }
+
+  /** The new walls' settings: kind, whether the players see them, which side stops, how tall. */
+  private newWall(a: Vec, b: Vec): Omit<Wall, 'id'> {
+    const u = this.ui.data;
+    return { a, b, k: u.wallKind, open: false, vis: u.wallVis ?? wallVisDefault(u.wallKind), one: u.wallKind === 'door' ? 0 : u.wallOne, h: u.wallH };
   }
 
   private commitWall(d: Extract<Drag, { kind: 'wall' }>) {
     const u = this.ui.data;
     const tiny = this.client.grid.cell * 0.1;
-    const vis = u.wallVis ?? wallVisDefault(u.wallKind);
     const fail = (err: Error) => this.cb.onNotice(err.message, 'error');
-    // a plain click with nothing started yet only marks where the wall will begin
-    if (!d.cont && !d.moved) { this.wallStart = d.a; return; }
-    if (d.box) {
+    if (d.shape === 'free') {
       this.wallStart = null;
-      if (Math.abs(d.b.x - d.a.x) < tiny || Math.abs(d.b.y - d.a.y) < tiny) return;
-      void this.client.addWalls(boxSegments(d.a, d.b).map((s) => ({ a: s.a, b: s.b, k: u.wallKind, open: false, vis })), 'Draw walls').catch(fail);
+      if (!d.moved) return;
+      const segs = this.wallShapeSegs('free', d.a, d.b, d.pts);
+      if (segs.length) void this.client.addWalls(segs.map((s) => this.newWall(s.a, s.b)), 'Draw walls').catch(fail);
+      return;
+    }
+    // a plain click with nothing started yet only marks where the wall will begin
+    if (!d.cont && !d.moved) { this.wallStart = d.a; this.wallRunFirst = d.a; this.wallRunCount = 0; return; }
+    if (d.shape === 'box' || d.shape === 'circle') {
+      this.wallStart = null;
+      if (d.shape === 'box' && (Math.abs(d.b.x - d.a.x) < tiny || Math.abs(d.b.y - d.a.y) < tiny)) return;
+      const segs = this.wallShapeSegs(d.shape, d.a, d.b, []);
+      if (segs.length) void this.client.addWalls(segs.map((s) => this.newWall(s.a, s.b)), 'Draw walls').catch(fail);
       return;
     }
     if (Math.hypot(d.b.x - d.a.x, d.b.y - d.a.y) < tiny) { this.wallStart = null; return; } // clicking the last point again ends the run
-    void this.client.addWalls([{ a: d.a, b: d.b, k: u.wallKind, open: false, vis }], u.wallKind === 'wall' ? 'Draw wall' : `Draw ${WALL_NAME[u.wallKind].toLowerCase()}`).catch(fail);
-    // walls run on from where the last one stopped; a door or window is one piece
-    this.wallStart = u.wallKind === 'wall' ? d.b : null;
+    void this.client.addWalls([this.newWall(d.a, d.b)], u.wallKind === 'wall' ? 'Draw wall' : `Draw ${WALL_NAME[u.wallKind].toLowerCase()}`).catch(fail);
+    if (!d.cont) { this.wallRunFirst = d.a; this.wallRunCount = 0; }
+    this.wallRunCount++;
+    // walls run on from where the last one stopped (a door or window is one piece), and coming back to where the run began closes the loop
+    const closes = !!this.wallRunFirst && this.wallRunCount >= 3 && Math.hypot(d.b.x - this.wallRunFirst.x, d.b.y - this.wallRunFirst.y) < 1;
+    this.wallStart = u.wallKind === 'wall' && !closes ? d.b : null;
   }
 
   private startWallEdit(w: Vec, e: PointerEvent) {
@@ -874,7 +957,11 @@ export class Board {
     const z = this.cam.zoom;
     const walls = this.client.scene?.walls;
     if (d.kind === 'wall') {
-      d.b = this.wallPoint(w, e, d.a);
+      if (d.shape === 'free') {
+        const last = d.pts[d.pts.length - 1];
+        if (Math.hypot(w.x - last.x, w.y - last.y) * z >= 3) d.pts.push(w);
+        d.b = w;
+      } else d.b = this.wallPoint(w, e, d.a);
       if (Math.hypot(d.b.x - d.down.x, d.b.y - d.down.y) * z > 4) d.moved = true;
     } else if (d.kind === 'wallend') {
       d.to = this.wallPoint(w, e, null, (wl, end) => d.moves.some((m) => m.id === wl.id && m.end === end));
@@ -915,6 +1002,32 @@ export class Board {
     void this.client.moveWallEnds(moves, d.ids.length > 1 ? 'Move walls' : 'Move wall').catch(fail).finally(done);
   }
 
+  /**
+   * Double-clicking in the Walls tool's edit mode: a door opens or closes, a corner where two walls meet is taken out,
+   * and a wall gets a new corner right there (drag it to bend the wall). Anywhere else it ends the run of walls being drawn.
+   */
+  private wallDoubleClick(w: Vec) {
+    if (this.ui.data.wallMode !== 'edit') { this.wallStart = null; return; }
+    const z = this.cam.zoom;
+    const list = this.client.wallsList();
+    const fail = (err: Error) => this.cb.onNotice(err.message, 'error');
+    const door = wallNear(list.filter((x) => x.k === 'door'), w, 8 / z);
+    if (door) { void this.client.toggleDoor(door.wall.id).catch(fail); return; }
+    const en = endNear(list, w, 9 / z);
+    if (en) {
+      void this.client.joinWallsAt(en.wall[en.end], 0.5).then((ok) => { if (!ok) this.cb.onNotice('A corner can only be taken out where exactly two walls of the same kind meet.', 'info'); }).catch(fail);
+      return;
+    }
+    const hit = wallNear(list, w, 8 / z);
+    if (hit) {
+      // a corner lands on the grid when the wall passes through a grid point there, otherwise right where you clicked
+      const snapped = snapWallPoint(this.client.grid, hit.at, [], this.ui.data.wallSnap, 0);
+      const at = distToSeg(snapped, hit.wall) < 1.5 ? snapped : hit.at;
+      if (Math.hypot(at.x - hit.wall.a.x, at.y - hit.wall.a.y) < 2 || Math.hypot(at.x - hit.wall.b.x, at.y - hit.wall.b.y) < 2) return;
+      void this.client.splitWall(hit.wall.id, at).then((ids) => { if (ids.length) this.ui.set({ wallSel: new Set(ids) }); }).catch(fail);
+    }
+  }
+
   private updateWallHover(w: Vec) {
     const u = this.ui.data;
     let id: string | null = null;
@@ -936,16 +1049,39 @@ export class Board {
     };
     const marker = (p: Vec) => { g.circle(p.x, p.y, 4.5 / z).fill({ color: 0x000000, alpha: 0.35 }).stroke({ width: 1.5 / z, color: 0xffffff }); };
     if (u.wallMode === 'draw') {
-      const box = u.wallShape === 'box';
+      const shape = this.wallShapeNow();
+      const one = u.wallKind === 'door' ? 0 : u.wallOne;
+      const ticks = (a: Vec, b: Vec, alpha: number) => {
+        if (!one) return;
+        for (const t of hatchTicks(a, b, one, grid.cell * 0.32, grid.cell * 0.16)) g.moveTo(t.a.x, t.a.y).lineTo(t.b.x, t.b.y);
+        g.stroke({ width: Math.max(1.5 / z, grid.cell * 0.025), color: col, alpha, cap: 'round' });
+      };
+      const segs = (list: { a: Vec; b: Vec }[], alpha: number) => { for (const s of list) { line(s.a, s.b, alpha); ticks(s.a, s.b, alpha); } };
       if (d?.kind === 'wall') {
-        if (d.box) for (const s of boxSegments(d.a, d.b)) line(s.a, s.b, 0.9);
-        else { line(d.a, d.b, 0.9); label(d.a, d.b); }
+        if (d.shape === 'free') {
+          if (d.pts.length > 1) {
+            // the stroke itself, thin, and the walls it will turn into
+            g.moveTo(d.pts[0].x, d.pts[0].y);
+            for (const q of d.pts.slice(1)) g.lineTo(q.x, q.y);
+            g.stroke({ width: 1.5 / z, color: col, alpha: 0.35 });
+            const f = this.freehandOf(d.pts);
+            segs(chainSegments(f.pts, f.closed, grid.cell * 0.08), 0.9);
+            for (const q of f.pts) g.circle(q.x, q.y, 3 / z).fill({ color: 0xffffff, alpha: 0.9 });
+          }
+        } else if (d.shape === 'box') segs(boxSegments(d.a, d.b), 0.9);
+        else if (d.shape === 'circle') {
+          segs(this.wallShapeSegs('circle', d.a, d.b, []), 0.9);
+          const ft = Math.round((Math.hypot(d.b.x - d.a.x, d.b.y - d.a.y) / grid.cell) * grid.ft * 10) / 10;
+          if (ft > 0) this.plotLabel(li++, `${ft} ft radius`, d.a.x, d.a.y - 10 / z, col);
+        } else { segs([{ a: d.a, b: d.b }], 0.9); label(d.a, d.b); }
         marker(d.b);
       } else if (!d && this.pointerW) {
-        const p = this.wallPoint(this.pointerW, { altKey: this.altDown, shiftKey: this.shiftDown }, this.wallStart);
-        if (this.wallStart) {
-          if (box) for (const s of boxSegments(this.wallStart, p)) line(s.a, s.b, 0.6);
-          else { line(this.wallStart, p, 0.6); label(this.wallStart, p); }
+        const free = shape === 'free';
+        const p = free ? this.pointerW : this.wallPoint(this.pointerW, { altKey: this.altDown, shiftKey: this.shiftDown }, this.wallStart);
+        if (this.wallStart && !free) {
+          if (shape === 'box') segs(boxSegments(this.wallStart, p), 0.6);
+          else if (shape === 'circle') segs(this.wallShapeSegs('circle', this.wallStart, p, []), 0.6);
+          else { segs([{ a: this.wallStart, b: p }], 0.6); label(this.wallStart, p); }
           g.circle(this.wallStart.x, this.wallStart.y, 6 / z).stroke({ width: 2 / z, color: col });
         }
         marker(p);
@@ -954,19 +1090,29 @@ export class Board {
       const r = normRect(d.start, d.cur);
       g.rect(r.x, r.y, r.w, r.h).fill({ color: SELECT, alpha: 0.08 }).stroke({ width: 1 / z, color: SELECT });
     }
+    if (u.wallMode === 'edit') {
+      // how tall the selected (or hovered) walls are
+      const ids = new Set([...u.wallSel, ...(this.wallHover ? [this.wallHover] : [])]);
+      for (const id of ids) {
+        const wl = this.client.scene?.walls.get(id);
+        if (wl && wl.h > 0 && li < 12) { const m = wallMid(wl); this.plotLabel(li++, `${wl.h} ft tall`, m.x, m.y - 10 / z, WALL_COLOR[wl.k]); }
+      }
+    }
     return li;
   }
 
   // ------------------------------------------------------------------ vision (fog around tokens that can see)
   /** Tokens that clear fog: visible ones with a sight distance. Hidden tokens never do, and a test move does not peek ahead. */
-  visionNow(): { id: string; x: number; y: number; r: number }[] {
+  visionNow(): { id: string; x: number; y: number; r: number; alt?: number }[] {
     const meta = this.client.scene?.meta;
     if (!meta || !meta.fog.enabled || !meta.fog.vision) return [];
     const toks = [...this.views.values()].filter((v) => !v.token.hidden);
-    return visionCircles(toks.map((v) => v.token), meta.grid, (t) => {
+    const circles = visionCircles(toks.map((v) => v.token), meta.grid, (t) => {
       const v = this.views.get(t.id)!;
       return v.testPos ? { x: v.token.x, y: v.token.y } : v.display;
     });
+    // how high each one is: something above a wall's top sees over it
+    return circles.map((c) => ({ ...c, alt: this.altAt(c.id, { x: c.x, y: c.y }) }));
   }
 
   private drawVision() {
@@ -983,7 +1129,7 @@ export class Board {
     const sight = this.wallSegs().sight;
     for (const c of circles) {
       if (sight.length) {
-        const v = visibilityPolygon({ x: c.x, y: c.y }, c.r, sight);
+        const v = visibilityPolygon({ x: c.x, y: c.y }, c.r, sight, 64, c.alt);
         if (!v.free) { g.poly(v.poly.flatMap((q) => [q.x, q.y])); continue; }
       }
       g.circle(c.x, c.y, c.r);
@@ -1036,13 +1182,13 @@ export class Board {
   private onUiChange() {
     const u = this.ui.data;
     const prev = this.prevUi;
-    this.prevUi = { testMove: u.testMove, sharePlot: u.sharePlot, tool: u.tool, rulerColor: u.rulerColor, cover: u.tplCover, heights: u.showHeights, draft: u.fxDraft, sel: u.drawSel };
+    this.prevUi = { testMove: u.testMove, sharePlot: u.sharePlot, tool: u.tool, rulerColor: u.rulerColor, cover: u.tplCover, heights: u.heightView, draft: u.fxDraft, sel: u.drawSel };
     if (u.drawSel !== prev.sel && this.client.scene) this.refreshDraws();
     if (u.fxDraft !== prev.draft && this.client.scene) this.reconcileTokens();
     if (prev.testMove && !u.testMove && this.testMoves.size) this.resetTestMoves();
     if (u.sharePlot !== prev.sharePlot) this.publishLive(true);
     if (u.rulerColor !== prev.rulerColor) { this.publishLive(); this.invalidate(); }
-    if (u.tplCover !== prev.cover || u.showHeights !== prev.heights || (prev.tool === 'height') !== (u.tool === 'height')) this.refreshDraws();
+    if (u.tplCover !== prev.cover || u.heightView !== prev.heights || (prev.tool === 'height') !== (u.tool === 'height')) this.refreshDraws();
     if (prev.tool !== u.tool) {
       this.cancelPress();
       if (prev.tool === 'height' && this.selectedAreas().length) this.ui.selectDrawings([]);
@@ -1584,7 +1730,35 @@ export class Board {
   }
 
   /** height zones show when the view setting is on, or while the Heights tool is open */
-  private zonesVisible(): boolean { return this.ui.data.showHeights || this.ui.data.tool === 'height'; }
+  private zonesVisible(): boolean { return this.ui.data.heightView === 'always' || this.ui.data.tool === 'height'; }
+
+  /** Should the ground be on show right now? (the setting says: always, only in the Heights tool, or while something moves over it) */
+  private heightsWanted(): boolean {
+    const u = this.ui.data;
+    if (u.tool === 'height' || u.heightView === 'always') return true;
+    if (u.heightView !== 'auto') return false;
+    const d = this.drag;
+    if ((d?.kind === 'tokens' && d.moved) || d?.kind === 'ruler') return true;
+    return performance.now() < this.heightsUntil;
+  }
+
+  /** Keep the ground on show for a moment (after a keyboard step or a height change, when nothing is being dragged). */
+  private showHeightsBriefly(ms = 1600) {
+    this.heightsUntil = performance.now() + ms;
+    this.dirty = true;
+  }
+
+  /** Fade the ground in or out (called every frame; cheap when nothing changes). */
+  private tickHeights(dt: number) {
+    const want = this.heightsWanted();
+    if (this.heightsUntil && performance.now() >= this.heightsUntil) { this.heightsUntil = 0; this.dirty = true; }
+    else if (this.heightsUntil) this.dirty = true;
+    const target = want ? 1 : 0;
+    if (this.heightFade === target) return;
+    this.heightFade = target > this.heightFade ? Math.min(1, this.heightFade + dt / 0.16) : Math.max(0, this.heightFade - dt / 0.28);
+    this.dirty = true;
+    this.syncTerrain();
+  }
 
   private shownDrawing(id: string): Drawing | undefined {
     const d = this.client.scene?.draws.get(id);
@@ -1607,7 +1781,15 @@ export class Board {
   private syncTerrain() {
     const pv = this.drawPreview;
     const t = pv ? zonesOf(this.client.drawingsSorted().map((d) => (d.id === pv.id ? { ...d, ...pv.patch } : d)), this.client.grid) : this.zones;
-    this.terrainLayer.sync(t, new Set(this.selectedAreas().map((a) => a.id)), this.textRes, this.zonesVisible());
+    const shown = this.heightFade > 0.001;
+    this.terrainLayer.container.alpha = this.heightFade;
+    const sel = new Set(this.selectedAreas().map((a) => a.id));
+    this.terrainLayer.sync(t, sel, this.textRes, shown, this.ui.data.tool === 'height');
+    // build the picture a moment after the ground changes, so it is ready when someone starts dragging (no hitch then)
+    if (!shown && t.areas.length) {
+      window.clearTimeout(this.warmTimer);
+      this.warmTimer = window.setTimeout(() => { if (!this.destroyed && this.heightFade <= 0.001) this.terrainLayer.sync(t, sel, this.textRes, false, false, true); }, 400);
+    }
   }
 
   /** The resize handle under the pointer, for the one drawing that is selected. */
@@ -1673,7 +1855,7 @@ export class Board {
     const t0 = this.client.scene!.tokens.get(ids[0])!;
     const a0 = this.heightOf(t0);
     const to = Math.max(a0.ground, a0.alt + ft);
-    this.cb.onNotice(ids.length === 1 ? (to > a0.ground ? `${t0.name || 'Token'} flies at ${to} ft` : `${t0.name || 'Token'} lands`) : `${ids.length} tokens ${ft > 0 ? 'up' : 'down'} ${Math.abs(ft)} ft`, 'info');
+    this.cb.onNotice(ids.length === 1 ? (to > a0.ground ? `${t0.name || 'Token'} flies ${to - a0.ground} ft above the ground` : `${t0.name || 'Token'} lands`) : `${ids.length} tokens ${ft > 0 ? 'up' : 'down'} ${Math.abs(ft)} ft`, 'info');
   }
 
   /** The area the brush adds to: the one area that is selected (an old-style box or circle cannot take more paint). */
@@ -1779,7 +1961,7 @@ export class Board {
       } else if (d) g.circle(d.pts[0].x, d.pts[0].y, r).fill({ color: col, alpha: 0.45 });
       g.circle(at.x, at.y, r).stroke({ width: 1.5 / z, color: col, alpha: 0.9 });
     }
-    if (!erase) this.plotLabel(li++, areaLabel(h, add), at.x, at.y - Math.max(grid.cell * 0.7, 18 / z), col);
+    if (!erase) this.plotLabel(li++, areaLabelAt(add ? groundAt(this.zones, at) + h : h, h, add), at.x, at.y - Math.max(grid.cell * 0.7, 18 / z), col);
     return li;
   }
 
@@ -1914,7 +2096,7 @@ export class Board {
       k, p: joinPts(pts), color: u.drawColor, w: isT ? Math.max(2, stroke) : stroke,
       fill: !isT && closed ? FILL_LEVEL[u.drawFillMode] : 0, fc: closed ? u.drawFillColor : '',
       dash: !isT && u.drawDash, txt: '', fs: 28, bw: u.tplWidth, of: k === 'emanation' && d.of ? d.of : undefined,
-    }, { onId: (id) => { if (closed || k === 'line' || k === 'arrow') this.ui.selectDrawings([id]); } }).catch((err: Error) => this.cb.onNotice(err.message, 'error'));
+    }, { onId: (id) => { if (closed || k === 'line' || k === 'arrow' || k === 'pen') this.ui.selectDrawings([id]); } }).catch((err: Error) => this.cb.onNotice(err.message, 'error'));
   }
 
   // ------------------------------------------------------------------ text
@@ -1995,9 +2177,7 @@ export class Board {
     }
     if (this.ui.data.tool === 'wall' && this.client.isDM) {
       const w = this.screenToWorld(e.clientX, e.clientY);
-      const hit = this.ui.data.wallMode === 'edit' ? wallNear(this.client.wallsList().filter((x) => x.k === 'door'), w, 8 / this.cam.zoom) : null;
-      if (hit) void this.client.toggleDoor(hit.wall.id);
-      else this.wallStart = null; // a double-click ends the run of walls
+      this.wallDoubleClick(w);
       this.invalidate();
       return;
     }
@@ -2258,6 +2438,11 @@ export class Board {
     }
     if (e.key === 'Enter' && ui.data.tool === 'fog' && this.polyPts.length >= 3) { this.finishPoly(); return; }
     if (e.key === 'Enter' && ui.data.tool === 'wall' && this.wallStart) { this.wallStart = null; this.invalidate(); return; }
+    if (e.key.toLowerCase() === 'x' && ui.data.tool === 'wall' && ui.data.wallMode === 'edit' && ui.data.wallSel.size && c.isDM) {
+      void c.flipWalls([...ui.data.wallSel]);
+      e.preventDefault();
+      return;
+    }
     if ((e.key === 'Delete' || e.key === 'Backspace') && ui.data.tool === 'wall' && ui.data.wallSel.size && c.isDM) {
       void c.removeWalls([...ui.data.wallSel]);
       ui.set({ wallSel: new Set() });
@@ -2321,6 +2506,7 @@ export class Board {
       const step = c.grid.cell;
       const dir = e.key === 'ArrowLeft' ? 'left' : e.key === 'ArrowRight' ? 'right' : e.key === 'ArrowUp' ? 'up' : 'down';
       // a square grid steps one square; on hexes the step follows the staggering so up and down stay in line
+      this.showHeightsBriefly();
       const delta = (at: Vec): Vec => (isHex(c.grid) ? hexNudge(c.grid, at, dir) : { x: dir === 'left' ? -step : dir === 'right' ? step : 0, y: dir === 'up' ? -step : dir === 'down' ? step : 0 });
       const moves = [...ui.data.selection]
         .map((id) => c.scene?.tokens.get(id))
@@ -2330,12 +2516,12 @@ export class Board {
         for (const m of moves) {
           const v = this.views.get(m.id);
           const cur = this.testMoves.get(m.id)?.to ?? (v ? { x: v.token.x, y: v.token.y } : null);
-          if (cur) { const d = delta(cur); const to = this.nudged(m, this.views.get(m.id)?.token.size ?? 1, { x: cur.x + d.x, y: cur.y + d.y }); if (this.moveAllowed(cur, to)) this.setTest(m.id, to); }
+          if (cur) { const d = delta(cur); const to = this.nudged(m, this.views.get(m.id)?.token.size ?? 1, { x: cur.x + d.x, y: cur.y + d.y }); if (this.moveAllowed(cur, to, m.id)) this.setTest(m.id, to); }
         }
         this.afterTestChange();
       } else if (moves.length) {
         // a wall in the way stops that token (the rest of the group still steps)
-        const free = moves.filter((m) => { const t = c.scene!.tokens.get(m.id)!; return this.moveAllowed({ x: t.x, y: t.y }, m); });
+        const free = moves.filter((m) => { const t = c.scene!.tokens.get(m.id)!; return this.moveAllowed({ x: t.x, y: t.y }, m, m.id); });
         const before = free.map((m) => { const t = c.scene!.tokens.get(m.id)!; return { id: t.id, x: t.x, y: t.y }; });
         if (free.length) void c.moveTokens(free, before);
       }

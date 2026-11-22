@@ -98,6 +98,19 @@ function NumField(props: { label: string; value: number; min?: number; max?: num
   );
 }
 
+/** Changes made in a drawing panel also go to the drawings that are selected (the ones you just drew), so you see the result straight away. */
+function liveEdit(ui: UiState, client: TableClient) {
+  const pick = (match: (x: Drawing) => boolean) =>
+    [...ui.data.drawSel].map((id) => client.scene?.draws.get(id)).filter((x): x is Drawing => !!x && x.k !== 'terrain' && client.canEditDrawing(x) && match(x));
+  return {
+    count: (match: (x: Drawing) => boolean) => pick(match).length,
+    apply(match: (x: Drawing) => boolean, patch: Parameters<TableClient['updateDrawings']>[1]) {
+      const ids = pick(match).map((x) => x.id);
+      if (ids.length) void client.updateDrawings(ids, patch);
+    },
+  };
+}
+
 export function DrawFlyout(props: { ui: UiState; client: TableClient }) {
   const { ui, client } = props;
   const d = useUi(ui);
@@ -106,6 +119,9 @@ export function DrawFlyout(props: { ui: UiState; client: TableClient }) {
   const closed = d.drawTool === 'rect' || d.drawTool === 'ellipse';
   const isText = d.drawTool === 'text';
   const wide = d.drawTool !== 'erase';
+  // the drawing that is still selected after you draw it follows these controls as you change them
+  const live = liveEdit(ui, client);
+  const nSel = live.count((x) => x.hz == null && !isTemplate(x.k));
   return (
     <div class="flyout">
       <div class="flyout-title">Draw</div>
@@ -113,20 +129,21 @@ export function DrawFlyout(props: { ui: UiState; client: TableClient }) {
       <div class="seg wrap">
         {TOOLS.map((t) => <button key={t.id} class={d.drawTool === t.id ? 'on' : ''} onClick={() => ui.set({ drawTool: t.id })}>{t.label}</button>)}
       </div>
-      {wide && <Colors value={d.drawColor} onPick={(c) => ui.set({ drawColor: c })} />}
+      {wide && <Colors value={d.drawColor} onPick={(c) => { ui.set({ drawColor: c }); live.apply((x) => x.hz == null && !isTemplate(x.k), { color: c }); }} />}
       {wide && (
         <div class="seg">
-          {(['thin', 'medium', 'thick'] as StrokeSize[]).map((s) => <button key={s} class={d.drawSize === s ? 'on' : ''} onClick={() => ui.set({ drawSize: s })}>{isText ? (s === 'thin' ? 'Small' : s === 'medium' ? 'Medium' : 'Large') : s === 'thin' ? 'Thin' : s === 'medium' ? 'Medium' : 'Thick'}</button>)}
+          {(['thin', 'medium', 'thick'] as StrokeSize[]).map((s) => <button key={s} class={d.drawSize === s ? 'on' : ''} onClick={() => { ui.set({ drawSize: s }); live.apply((x) => x.k === 'text', { fs: Math.round(client.grid.cell * (s === 'thin' ? 0.32 : s === 'thick' ? 0.7 : 0.45)) }); live.apply((x) => x.hz == null && x.k !== 'text' && !isTemplate(x.k), { w: Math.max(1.5, STROKE_CELLS[s] * client.grid.cell) }); }}>{isText ? (s === 'thin' ? 'Small' : s === 'medium' ? 'Medium' : 'Large') : s === 'thin' ? 'Thin' : s === 'medium' ? 'Medium' : 'Thick'}</button>)}
         </div>
       )}
-      {closed && <FillControls mode={d.drawFillMode} color={d.drawFillColor} outline={d.drawColor} onMode={(m) => ui.set({ drawFillMode: m })} onColor={(c) => ui.set({ drawFillColor: c })} />}
+      {closed && <FillControls mode={d.drawFillMode} color={d.drawFillColor} outline={d.drawColor} onMode={(m) => { ui.set({ drawFillMode: m }); live.apply((x) => x.hz == null && (x.k === 'rect' || x.k === 'ellipse'), { fill: FILL_LEVEL[m] }); }} onColor={(c) => { ui.set({ drawFillColor: c }); live.apply((x) => x.hz == null && (x.k === 'rect' || x.k === 'ellipse'), { fc: c }); }} />}
       {isText && (
         <div class="row wrap">
-          <FontSelect value={d.textFont} onChange={(k) => ui.set({ textFont: k })} />
-          <StyleButtons b={d.textBold} i={d.textItalic} u={d.textUnderline} onB={(v) => ui.set({ textBold: v })} onI={(v) => ui.set({ textItalic: v })} onU={(v) => ui.set({ textUnderline: v })} />
+          <FontSelect value={d.textFont} onChange={(k) => { ui.set({ textFont: k }); live.apply((x) => x.k === 'text', { font: k }); }} />
+          <StyleButtons b={d.textBold} i={d.textItalic} u={d.textUnderline} onB={(v) => { ui.set({ textBold: v }); live.apply((x) => x.k === 'text', { b: v }); }} onI={(v) => { ui.set({ textItalic: v }); live.apply((x) => x.k === 'text', { i: v }); }} onU={(v) => { ui.set({ textUnderline: v }); live.apply((x) => x.k === 'text', { u: v }); }} />
         </div>
       )}
-      {wide && !isText && <Toggle checked={d.drawDash} onChange={(v) => ui.set({ drawDash: v })} label="Dashed" />}
+      {wide && !isText && <Toggle checked={d.drawDash} onChange={(v) => { ui.set({ drawDash: v }); live.apply((x) => x.hz == null && x.k !== 'text' && !isTemplate(x.k), { dash: v }); }} label="Dashed" />}
+      {nSel > 0 && <p class="hint">{nSel === 1 ? 'The drawing you just made is still selected, so changes here apply to it as you make them.' : `${nSel} drawings are selected, so changes here apply to them as you make them.`}</p>}
       <p class="hint">{tool.hint}</p>
       <div class="row wrap">
         <button class="btn small" onClick={async () => { const n = await client.clearDrawings((x) => x.uid === client.uid && !isTemplate(x.k) && x.hz == null && x.k !== 'terrain', 'Clear my drawings'); toast(n ? `Cleared ${n} drawing${n > 1 ? 's' : ''}` : 'Nothing of yours to clear', 'info', 1800); }}>Clear mine</button>
@@ -188,15 +205,15 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient }) {
           <span class="grow" />
           {editing && <button class="btn small" title="Let go of this ground so the next stroke starts a new one (Esc)" onClick={() => ui.selectDrawings([])}>New area</button>}
         </div>
-        <NumField label="Height" value={shownH} min={-1000} max={5000} step={5} unit="ft" title="How high this ground is. Negative is a pit." onCommit={setH} />
+        <NumField label={shownAdd ? 'Raise by' : 'Height'} value={shownH} min={-1000} max={5000} step={5} unit="ft" title={shownAdd ? 'How much higher this makes the ground it sits on. Negative digs it down.' : 'How high this ground is. Negative is a pit.'} onCommit={setH} />
         <div class="chips">
           {ZONE_PRESETS.map((h) => (
-            <button key={h} class={`chip ${shownH === h ? 'on' : ''}`} style={{ borderColor: zoneColor(h) }} onClick={() => setH(h)}>{h > 0 ? `+${h}` : h}</button>
+            <button key={h} class={`chip ${shownH === h ? 'on' : ''}`} style={{ borderColor: zoneColor(h) }} onClick={() => setH(h)}>{h}</button>
           ))}
         </div>
         <div class="seg">
-          <button class={!shownAdd ? 'on' : ''} disabled={editing && !paintable.length} title="This ground is exactly this high, whatever is under it" onClick={() => setAdds(false)}>Sets height</button>
-          <button class={shownAdd ? 'on' : ''} disabled={editing && !paintable.length} title="This ground is this much higher than whatever is under it, so overlapping areas stack up" onClick={() => setAdds(true)}>Adds to ground</button>
+          <button class={!shownAdd ? 'on' : ''} disabled={editing && !paintable.length} title="This ground is exactly this high above the map base, whatever is under it" onClick={() => setAdds(false)}>Exact height</button>
+          <button class={shownAdd ? 'on' : ''} disabled={editing && !paintable.length} title="Raises (or lowers) whatever ground is already under it by this much, so overlapping areas stack: a 5 ft step on a 20 ft hill is 25 ft" onClick={() => setAdds(true)}>Added on top</button>
         </div>
         {editing ? (
           <div class="row wrap">
@@ -210,7 +227,13 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient }) {
         {d.heightMode === 'erase' && (editing ? 'Rubs out of the selected area only.' : 'Rubs out of every area. Select an area first to rub out of just that one.')}
         {d.heightMode === 'move' && `Click an area to select it, then drag it. Ground made of whole ${cellWord}s moves a ${cellWord} at a time (Alt moves it freely). Shift-click adds more.`}
       </p>
-      <Toggle checked={d.showHeights} onChange={(v) => ui.set({ showHeights: v })} label="Show heights on the map" hint="Only changes what you see. Everyone gets the same ground." />
+      <span class="field-label">Show the ground heights</span>
+      <div class="seg">
+        {([['auto', 'When moving'], ['always', 'Always'], ['tool', 'In tool']] as const).map(([k, label]) => (
+          <button key={k} class={d.heightView === k ? 'on' : ''} onClick={() => ui.set({ heightView: k })}>{label}</button>
+        ))}
+      </div>
+      <p class="hint">{d.heightView === 'auto' ? 'The ground fades in while you drag a token or measure, and fades out again.' : d.heightView === 'always' ? 'The ground is always drawn on the map.' : 'The ground is only drawn while this tool is open.'} Only changes your own screen.</p>
       <p class="hint">{'] and [ raise and lower the selected tokens.'}</p>
       <div class="row wrap">
         <span class="hint">{n ? `${n} height area${n > 1 ? 's' : ''} on this map` : 'No height areas yet'}</span>
@@ -227,6 +250,8 @@ const WALL_HINT: Record<WallKind, string> = {
   window: 'You can see and cast through it, but not walk through.',
 };
 
+const SHAPE_HINT = { line: 'One wall at a time, run on from point to point', box: 'A room: four walls at once', free: 'Draw a line by hand', circle: 'A round room' } as const;
+
 export function WallFlyout(props: { ui: UiState; client: TableClient }) {
   const { ui, client } = props;
   const d = useUi(ui);
@@ -236,6 +261,7 @@ export function WallFlyout(props: { ui: UiState; client: TableClient }) {
   const sel = [...d.wallSel].map((id) => client.scene?.walls.get(id)).filter((w): w is NonNullable<typeof w> => !!w);
   const ids = sel.map((w) => w.id);
   const doors = sel.filter((w) => w.k === 'door');
+  const canOne = sel.filter((w) => w.k !== 'door');
   const kinds = new Set(sel.map((w) => w.k));
   const allVis = sel.length > 0 && sel.every((w) => w.vis);
   const shownVis = d.wallVis ?? wallVisDefault(d.wallKind);
@@ -253,19 +279,44 @@ export function WallFlyout(props: { ui: UiState; client: TableClient }) {
           </div>
           <p class="hint">{WALL_HINT[d.wallKind]}</p>
           <Toggle checked={shownVis} onChange={(v) => ui.set({ wallVis: v })} label="Draw it for the players" hint="Off: only you see it, but it still blocks. Plain walls start off (the map already shows them)." />
-          <span class="field-label">Shape</span>
-          <div class="seg">
-            <button class={d.wallShape === 'line' ? 'on' : ''} onClick={() => ui.set({ wallShape: 'line' })}>Line by line</button>
-            <button class={d.wallShape === 'box' ? 'on' : ''} onClick={() => ui.set({ wallShape: 'box' })}>Box (a room)</button>
+          {d.wallKind !== 'door' && (
+            <>
+              <span class="field-label">Shape</span>
+              <div class="seg wrap">
+                {([['line', 'Lines'], ['box', 'Box'], ['free', 'Freehand'], ['circle', 'Round']] as const).map(([k, label]) => (
+                  <button key={k} class={d.wallShape === k ? 'on' : ''} title={SHAPE_HINT[k]} onClick={() => ui.set({ wallShape: k })}>{label}</button>
+                ))}
+              </div>
+              {(d.wallShape === 'free' || d.wallShape === 'circle') && (
+                <>
+                  <span class="field-label">Corners</span>
+                  <div class="seg">
+                    {([['low', 'Few'], ['mid', 'Some'], ['high', 'Many']] as const).map(([k, label]) => <button key={k} class={d.wallDetail === k ? 'on' : ''} onClick={() => ui.set({ wallDetail: k })}>{label}</button>)}
+                  </div>
+                </>
+              )}
+              <Toggle checked={d.wallOne !== 0} onChange={(v) => ui.set({ wallOne: v ? (d.wallOne || 1) : 0 })} label="One-way (a cliff edge)"
+                hint="It only stops what is on one side. The little ticks show the side that is stopped: stand there and you just see a wall. From the other side you see and walk right past it." />
+              {d.wallOne !== 0 && (
+                <div class="seg">
+                  <button class={d.wallOne === 1 ? 'on' : ''} title="The side on your right as you draw from the first point to the next" onClick={() => ui.set({ wallOne: 1 })}>Stops its right</button>
+                  <button class={d.wallOne === -1 ? 'on' : ''} title="The side on your left as you draw from the first point to the next" onClick={() => ui.set({ wallOne: -1 })}>Stops its left</button>
+                </div>
+              )}
+            </>
+          )}
+<div>
+            <NumField label="Height" value={d.wallH} min={0} max={1000} step={5} unit="ft" title="How tall it is above the ground it stands on. 0 means too tall to get over. Anything higher than the top sees and flies over it." onCommit={(n) => ui.set({ wallH: Math.max(0, Math.round(n)) })} />
           </div>
           <span class="field-label">Snap ends to</span>
           <div class="seg wrap">
             {([['corner', 'Corners'], ['half', 'Halves too'], ['off', 'Free']] as const).map(([k, label]) => <button key={k} class={d.wallSnap === k ? 'on' : ''} onClick={() => ui.set({ wallSnap: k })}>{label}</button>)}
           </div>
           <p class="hint">
-            {d.wallShape === 'box'
-              ? 'Drag out a room, or click two opposite corners.'
-              : 'Click points and the walls run on; double-click, Enter, Esc or right-click to stop. Or drag one wall at a time.'}
+            {d.wallKind === 'door' || d.wallShape === 'line' ? 'Click points and the walls run on; double-click, Enter, Esc or right-click to stop. Or drag one wall at a time.'
+              : d.wallShape === 'box' ? 'Drag out a room, or click two opposite corners.'
+              : d.wallShape === 'circle' ? 'Drag from the middle out to the edge, or click the middle and then the edge.'
+              : 'Draw the outline with the mouse held down. Come back to where you started to close it. It becomes ordinary walls you can bend afterwards.'}
             {' '}Ends snap onto other walls. Shift: straight or 45°. Alt: no snapping. A door or window drawn along a wall cuts a gap in it.
           </p>
         </>
@@ -282,6 +333,17 @@ export function WallFlyout(props: { ui: UiState; client: TableClient }) {
                 {WALL_KINDS.map((k) => <button key={k} class={kinds.size === 1 && kinds.has(k) ? 'on' : ''} onClick={() => void client.updateWalls(ids, { k }, 'Change wall type')}>{WALL_NAME[k]}</button>)}
               </div>
               <Toggle checked={allVis} onChange={(v) => void client.updateWalls(ids, { vis: v }, v ? 'Show wall to players' : 'Hide wall from players')} label="Drawn for the players" />
+              {canOne.length > 0 && (
+                <>
+                  <Toggle checked={canOne.every((w) => w.one !== 0)} onChange={(v) => void client.updateWalls(canOne.map((w) => w.id), { one: v ? 1 : 0 }, v ? 'Make one-way' : 'Make two-way')} label="One-way (a cliff edge)"
+                    hint="Stops only what is on the ticked side." />
+                  {canOne.some((w) => w.one !== 0) && <button class="btn small" title="Swap which side is stopped (X)" onClick={() => void client.flipWalls(ids)}>Flip the stopped side (X)</button>}
+                </>
+              )}
+              <div>
+                <NumField label="Height" value={sel[0].h} min={0} max={1000} step={5} unit="ft" title="How tall above the ground it stands on. 0 means too tall to get over. Anything higher than the top sees and flies over it."
+                  onCommit={(n) => void client.updateWalls(ids, { h: Math.max(0, Math.round(n)) }, 'Change wall height')} />
+              </div>
               {doors.length > 0 && (
                 <div class="seg">
                   <button class={doors.every((w) => !w.open) ? 'on' : ''} onClick={() => void client.updateWalls(doors.map((w) => w.id), { open: false }, 'Close door')}>Closed</button>
@@ -292,7 +354,7 @@ export function WallFlyout(props: { ui: UiState; client: TableClient }) {
                 <button class="btn small danger" onClick={() => { void client.removeWalls(ids); ui.set({ wallSel: new Set() }); }}>Delete {sel.length > 1 ? 'walls' : WALL_NAME[sel[0].k].toLowerCase()}</button>
               </div>
             </>
-          ) : <p class="hint">Click a wall, or drag a box around several. Drag a dot to move one end (every wall that meets there follows), or drag the wall itself to move it. Shift-click adds more. Delete removes them. Double-click a door to open it.</p>}
+          ) : <p class="hint">Click a wall, or drag a box around several. Drag a dot to move one end (every wall that meets there follows), or drag the wall itself to move it. Shift-click adds more. Delete removes them. Double-click a door to open it, a wall to add a corner you can drag to bend it, or a corner to take it out.</p>}
         </div>
       )}
       <div class="ht-card">
@@ -330,7 +392,7 @@ export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
       <div class="seg wrap">
         {TEMPLATES.map((x) => <button key={x.id} class={d.tplKind === x.id ? 'on' : ''} onClick={() => ui.set({ tplKind: x.id })}>{x.label}</button>)}
       </div>
-      <Colors value={d.drawColor} onPick={(c) => ui.set({ drawColor: c })} />
+      <Colors value={d.drawColor} onPick={(c) => { ui.set({ drawColor: c }); liveEdit(ui, client).apply((x) => isTemplate(x.k), { color: c }); }} />
       {d.tplKind === 'beam' && (
         <label class="field"><span class="field-label">Line width</span>
           <select value={d.tplWidth} onChange={(e) => ui.set({ tplWidth: Number((e.target as HTMLSelectElement).value) })}>
@@ -474,7 +536,7 @@ export function DrawInspector(props: { ui: UiState; client: TableClient; board: 
               onCommit={(n) => { const h = Math.round(n); upd({ hz: h, color: zoneColor(h), fc: zoneColor(h) }); }} />
             <div class="chips">
               {ZONE_PRESETS.map((h) => (
-                <button key={h} class={`chip ${first.hz === h ? 'on' : ''}`} style={{ borderColor: zoneColor(h) }} onClick={() => upd({ hz: h, color: zoneColor(h), fc: zoneColor(h) })}>{h > 0 ? `+${h}` : h}</button>
+                <button key={h} class={`chip ${first.hz === h ? 'on' : ''}`} style={{ borderColor: zoneColor(h) }} onClick={() => upd({ hz: h, color: zoneColor(h), fc: zoneColor(h) })}>{h}</button>
               ))}
             </div>
           </div>

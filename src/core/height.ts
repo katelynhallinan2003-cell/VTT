@@ -30,10 +30,13 @@ export function altitudeOf(t: { fly: boolean; elev: number }, ground: number): A
 /** Fill colour for ground of a height: sand to brown as it gets higher, then pale rock; blue for pits. */
 export const zoneColor = heightColor;
 
-/** What the altitude badge says: ↑ for something in the air, ▲ for high ground, ▼ for low ground. */
+/**
+ * What the altitude badge says: ↑ and the feet above the ground for something in the air (the number changes as the ground under it
+ * rises and falls), ▲ for a walker on high ground, ▼ for a walker in a pit.
+ */
 export function altLabel(a: Altitude, flying: boolean): string {
   if (a.alt === 0 && a.clear === 0) return '';
-  if (flying && a.clear > 0) return `↑${a.alt}`;
+  if (flying && a.clear > 0) return `↑${a.clear}`;
   return `${a.alt > 0 ? '▲' : '▼'}${Math.abs(a.alt)}`;
 }
 
@@ -49,6 +52,11 @@ export function heightChangeNote(fromAlt: number, toAlt: number): string {
   if (d > 0) return `climbs ${d} ft`;
   const dice = fallDice(-d);
   return dice ? `drops ${-d} ft (${dice}d6 if it falls)` : `drops ${-d} ft`;
+}
+
+/** The move that puts a token `up` feet above the ground that is under it (0 or less lands it). */
+export function setClearance(up: number, ground: number): { fly: boolean; elev: number } {
+  return setAltitude(ground + Math.round(up), ground);
 }
 
 /** The move needed to put a token at `alt` feet while flying. Landing (at or below the ground) turns flying off. */

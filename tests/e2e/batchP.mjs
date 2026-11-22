@@ -71,8 +71,7 @@ await click([gx(10), gy(14)]);
 await click([gx(10), gy(10)]);
 ws = await walls();
 check('clicking the corners one after another draws the other three sides', ws.length === 4, `${ws.length}`);
-await click([gx(10), gy(10)]);
-check('clicking the last point again ends the run', (await dm.evaluate(() => window.__vtt.board.wallStart)) === null && (await walls()).length === 4);
+check('coming back to where the run started closes the loop and ends the run', (await dm.evaluate(() => window.__vtt.board.wallStart)) === null && (await walls()).length === 4);
 await dm.screenshot({ path: '/tmp/shots/p1-room.png' });
 
 // ---- a door cuts a gap in the wall it is drawn on
@@ -235,7 +234,7 @@ check('a box is four walls', (await walls()).length === before + 4);
 await dm.keyboard.press('Control+z');
 await sleep(400);
 check('and one Ctrl+Z takes the whole room back', (await walls()).length === before);
-await dm.locator('.flyout .seg button', { hasText: /^Line by line/ }).click();
+await dm.locator('.flyout .seg button', { hasText: /^Lines$/ }).click();
 
 // ---- snapping
 await dm.locator('.flyout .seg button', { hasText: /^Halves too/ }).click();

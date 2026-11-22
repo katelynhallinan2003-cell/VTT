@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_GRID } from '../src/core/model';
 import {
-  blocksMove, blocksSight, boxSegments, carveWalls, clampMove, endNear, firstCrossing, inPoly, lineOfSight, moveSegs, normalizeWall, pathBlocked, reachableCells, routeReveal,
-  sightSegs, simplifyPoly, snapWallPoint, visibilityPolygon, wallNear, wallToWire, type Wall,
+  blocksMove, blocksSight, boxSegments, carveWalls, chainSegments, circlePoints, clampMove, endNear, firstCrossing, freehandCorners, hatchTicks, inPoly, joinAt, lineOfSight, moveSegs, normalizeWall,
+  onBlockedSide, pathBlocked, reachableCells, routeReveal, segsFrom, sideOf, sightSegs, simplifyPath, simplifyPoly, snapWallPoint, splitPieces, visibilityPolygon, wallNear, wallToWire, type Seg, type Wall,
 } from '../src/core/walls';
 
 const grid = { ...DEFAULT_GRID, cell: 100, ox: 0, oy: 0 };
-const W = (id: string, ax: number, ay: number, bx: number, by: number, k: Wall['k'] = 'wall', open = false, vis = false): Wall => ({ id, a: { x: ax, y: ay }, b: { x: bx, y: by }, k, open, vis });
+const W = (id: string, ax: number, ay: number, bx: number, by: number, k: Wall['k'] = 'wall', open = false, vis = false): Wall => ({ id, a: { x: ax, y: ay }, b: { x: bx, y: by }, k, open, vis, one: 0, h: 0 });
 
 describe('what each kind of wall stops', () => {
   it('walls stop sight and walking; windows only walking; doors only while closed', () => {
@@ -185,7 +185,7 @@ describe('picking and snapping', () => {
 });
 
 describe('carving a gap for a door', () => {
-  const wall = (id: string, ax: number, ay: number, bx: number, by: number, k: Wall['k'] = 'wall'): Wall => ({ id, a: { x: ax, y: ay }, b: { x: bx, y: by }, k, open: false, vis: false });
+  const wall = (id: string, ax: number, ay: number, bx: number, by: number, k: Wall['k'] = 'wall'): Wall => ({ id, a: { x: ax, y: ay }, b: { x: bx, y: by }, k, open: false, vis: false, one: 0, h: 0 });
   it('splits a wall around a door drawn along it', () => {
     const r = carveWalls([wall('w1', 0, 0, 300, 0)], { a: { x: 100, y: 0 }, b: { x: 160, y: 0 } }, 3);
     expect(r.remove).toEqual(['w1']);
@@ -226,5 +226,213 @@ describe('what a spell reaches', () => {
   it('flows through a doorway', () => {
     const wall = [{ a: { x: 200, y: 0 }, b: { x: 200, y: 40 } }, { a: { x: 200, y: 60 }, b: { x: 200, y: 100 } }];
     expect(reachableCells(cells, { x: 50, y: 50 }, wall).length).toBe(4);
+  });
+});
+
+
+describe('one-way walls (a cliff edge)', () => {
+  // a wall along the top of a cliff, running left to right; side 1 is the screen-down side, which is the bottom of the cliff
+  const cliff: Seg = { a: { x: 0, y: 0 }, b: { x: 200, y: 0 }, one: 1 };
+  const bottom = { x: 100, y: 80 }, top = { x: 100, y: -80 };
+
+  it('knows which side of a wall a point is on', () => {
+    expect(sideOf(cliff, bottom)).toBe(1);
+    expect(sideOf(cliff, top)).toBe(-1);
+    expect(sideOf(cliff, { x: 50, y: 0 })).toBe(0);
+  });
+
+  it('stops what stands at the bottom, but not what stands at the top', () => {
+    expect(pathBlocked(bottom, top, [cliff])).toBe(true);
+    expect(pathBlocked(top, bottom, [cliff])).toBe(false);
+    expect(lineOfSight(bottom, top, [cliff])).toBe(false);
+    expect(lineOfSight(top, bottom, [cliff])).toBe(true);
+    expect(clampMove(bottom, top, [cliff], 4).y).toBeGreaterThan(0); // held back this side of it
+    expect(clampMove(top, bottom, [cliff], 4)).toEqual(bottom); // walks off the edge
+  });
+
+  it('a two-way wall stops both', () => {
+    const plain: Seg = { a: cliff.a, b: cliff.b };
+    expect(pathBlocked(bottom, top, [plain])).toBe(true);
+    expect(pathBlocked(top, bottom, [plain])).toBe(true);
+  });
+
+  it('sight is cut at the bottom and open from the top', () => {
+    const fromBottom = visibilityPolygon(bottom, 300, [cliff]);
+    const fromTop = visibilityPolygon(top, 300, [cliff]);
+    expect(fromBottom.free).toBe(false);
+    expect(fromTop.free).toBe(true);
+    expect(inPoly({ x: 100, y: -50 }, fromBottom.poly)).toBe(false);
+    expect(inPoly({ x: 100, y: 150 }, fromTop.poly)).toBe(true);
+  });
+
+  it('a spell from the bottom stops at it, from the top it does not', () => {
+    const cells = [{ x: 100, y: 50 }, { x: 100, y: -50 }];
+    expect(reachableCells(cells, { x: 100, y: 20 }, [cliff])).toEqual([{ x: 100, y: 50 }]);
+    expect(reachableCells(cells, { x: 100, y: -20 }, [cliff])).toEqual(cells);
+  });
+
+  it('tells which side is the blocked one', () => {
+    const w = W('c', 0, 0, 200, 0);
+    expect(onBlockedSide(w, top)).toBe(true); // a two-way wall has no free side
+    expect(onBlockedSide({ ...w, one: 1 }, bottom)).toBe(true);
+    expect(onBlockedSide({ ...w, one: 1 }, top)).toBe(false);
+    expect(onBlockedSide({ ...w, one: -1 }, top)).toBe(true);
+  });
+
+  it('is kept on the wire, and flipping the wall flips what it stops', () => {
+    const w = { ...W('c', 0, 0, 200, 0), one: 1 as const };
+    expect(wallToWire(w).s).toBe(1);
+    expect(wallToWire(W('d', 0, 0, 5, 5))).not.toHaveProperty('s');
+    expect(normalizeWall('c', wallToWire(w))?.one).toBe(1);
+    expect(normalizeWall('c', { p: '0,0,5,5', s: -1 })?.one).toBe(-1);
+    expect(normalizeWall('c', { p: '0,0,5,5', s: 7 })?.one).toBe(0);
+  });
+
+  it('a window or a segment that is not one-way keeps both sides', () => {
+    expect(segsFrom([{ a: { x: 0, y: 0 }, b: { x: 10, y: 0 } }], top)).toHaveLength(1);
+  });
+
+  it('puts ticks on the stopped side only', () => {
+    const t = hatchTicks({ x: 0, y: 0 }, { x: 200, y: 0 }, 1, 40, 16);
+    expect(t.length).toBe(5);
+    for (const k of t) { expect(k.a.y).toBeCloseTo(0); expect(k.b.y).toBeCloseTo(16); }
+    const l = hatchTicks({ x: 0, y: 0 }, { x: 200, y: 0 }, -1, 40, 16);
+    for (const k of l) expect(k.b.y).toBeCloseTo(-16);
+    expect(hatchTicks({ x: 0, y: 0 }, { x: 200, y: 0 }, 0, 40, 16)).toEqual([]);
+  });
+});
+
+describe('walls with a height', () => {
+  const low: Seg = { a: { x: 0, y: 0 }, b: { x: 200, y: 0 }, top: 10 };
+  const left = { x: 100, y: 60 }, right = { x: 100, y: -60 };
+
+  it('what is higher than the top passes, what is not does not', () => {
+    expect(pathBlocked(left, right, [low], 0)).toBe(true);
+    expect(pathBlocked(left, right, [low], 10)).toBe(true); // level with the top is still not over it
+    expect(pathBlocked(left, right, [low], 11)).toBe(false);
+    expect(pathBlocked(left, right, [low])).toBe(true); // unknown height: blocked
+  });
+
+  it('sees over it from above', () => {
+    expect(visibilityPolygon(left, 300, [low], 64, 30).free).toBe(true);
+    expect(visibilityPolygon(left, 300, [low], 64, 5).free).toBe(false);
+  });
+
+  it('a tall wall is never passed', () => {
+    expect(pathBlocked(left, right, [{ a: low.a, b: low.b }], 500)).toBe(true);
+  });
+
+  it('is kept on the wire, and the top is worked out from the ground it stands on', () => {
+    const w = { ...W('c', 0, 0, 200, 0), h: 15 };
+    expect(wallToWire(w).h).toBe(15);
+    expect(wallToWire(W('d', 0, 0, 5, 5))).not.toHaveProperty('h');
+    expect(normalizeWall('c', { p: '0,0,5,5', h: 12 })?.h).toBe(12);
+    expect(normalizeWall('c', { p: '0,0,5,5', h: -3 })?.h).toBe(0);
+    const segs = sightSegs([w, W('e', 0, 10, 50, 10)], (x) => 30 + x.h);
+    expect(segs[0].top).toBe(45);
+    expect(segs[1].top).toBeUndefined();
+  });
+
+  it('a low one-way wall stops its side only until you are higher than its top', () => {
+    const both: Seg = { a: { x: 0, y: 0 }, b: { x: 200, y: 0 }, one: 1, top: 10 };
+    expect(pathBlocked(left, right, [both], 0)).toBe(true); // from the stopped side, on the ground
+    expect(pathBlocked(left, right, [both], 20)).toBe(false); // from the stopped side, flying over
+    expect(pathBlocked(right, left, [both], 0)).toBe(false); // from the open side
+  });
+});
+
+describe('carrying a wall\'s settings over', () => {
+  it('the pieces left around a door keep the one-way side and the height', () => {
+    const w = { ...W('w1', 0, 0, 300, 0), one: -1 as const, h: 20 };
+    const r = carveWalls([w], { a: { x: 100, y: 0 }, b: { x: 160, y: 0 } }, 3);
+    expect(r.add.every((p) => p.one === -1 && p.h === 20)).toBe(true);
+  });
+});
+
+describe('freehand and round walls', () => {
+  it('simplifying keeps the ends and drops points on a straight run', () => {
+    const line = Array.from({ length: 11 }, (_, i) => ({ x: i * 10, y: 0 }));
+    expect(simplifyPath(line, 1)).toEqual([line[0], line[10]]);
+    const bent = [...line.slice(0, 6), ...Array.from({ length: 5 }, (_, i) => ({ x: 50, y: (i + 1) * 10 }))];
+    const out = simplifyPath(bent, 1);
+    expect(out).toHaveLength(3);
+    expect(out[1]).toEqual({ x: 50, y: 0 });
+    expect(simplifyPath([{ x: 0, y: 0 }, { x: 5, y: 5 }], 1)).toHaveLength(2);
+  });
+
+  it('a looser tolerance gives fewer corners', () => {
+    const arc = Array.from({ length: 40 }, (_, i) => ({ x: i * 5, y: Math.sin(i / 6) * 30 }));
+    expect(simplifyPath(arc, 12).length).toBeLessThan(simplifyPath(arc, 2).length);
+  });
+
+  it('a circle is n points around the middle, going on from the start angle', () => {
+    const c = circlePoints({ x: 100, y: 100 }, 50, 8, 0);
+    expect(c).toHaveLength(8);
+    expect(c[0].x).toBeCloseTo(150); expect(c[0].y).toBeCloseTo(100);
+    expect(c[2].x).toBeCloseTo(100); expect(c[2].y).toBeCloseTo(150); // a quarter turn clockwise on the screen is down
+    for (const p of c) expect(Math.hypot(p.x - 100, p.y - 100)).toBeCloseTo(50);
+  });
+
+  it('a chain joins points one after another, and closed joins the last to the first', () => {
+    const pts = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }];
+    expect(chainSegments(pts, false)).toHaveLength(2);
+    const closed = chainSegments(pts, true);
+    expect(closed).toHaveLength(3);
+    expect(closed[2]).toEqual({ a: pts[2], b: pts[0] });
+    expect(chainSegments([{ x: 0, y: 0 }, { x: 0.5, y: 0 }, { x: 20, y: 0 }], false, 2)).toHaveLength(1); // the tiny step is skipped
+  });
+
+  it('a stroke that comes back to its start closes into a loop', () => {
+    const loop = [...circlePoints({ x: 0, y: 0 }, 100, 40, 0), { x: 98, y: 4 }];
+    const r = freehandCorners(loop, 3, 30, []);
+    expect(r.closed).toBe(true);
+    expect(r.pts.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it('an open stroke stays open, and its ends land on walls that are close by', () => {
+    const stroke = [{ x: 3, y: 2 }, { x: 50, y: 1 }, { x: 100, y: -2 }, { x: 150, y: 1 }, { x: 197, y: 4 }];
+    const r = freehandCorners(stroke, 3, 12, [{ x: 0, y: 0 }, { x: 200, y: 0 }]);
+    expect(r.closed).toBe(false);
+    expect(r.pts[0]).toEqual({ x: 0, y: 0 });
+    expect(r.pts[r.pts.length - 1]).toEqual({ x: 200, y: 0 });
+  });
+
+  it('a single point makes nothing', () => {
+    expect(freehandCorners([{ x: 1, y: 1 }], 3, 10, []).pts).toHaveLength(1);
+    expect(chainSegments([{ x: 1, y: 1 }], false)).toEqual([]);
+  });
+});
+
+describe('adding and taking out a corner', () => {
+  it('a wall split in two keeps its settings and the two halves meet at the corner', () => {
+    const w = { ...W('w', 0, 0, 200, 0, 'window', false, true), one: 1 as const, h: 8 };
+    const [p, q] = splitPieces(w, { x: 120, y: 0 });
+    expect(p.a).toEqual({ x: 0, y: 0 }); expect(p.b).toEqual({ x: 120, y: 0 });
+    expect(q.a).toEqual({ x: 120, y: 0 }); expect(q.b).toEqual({ x: 200, y: 0 });
+    for (const x of [p, q]) expect(x).toMatchObject({ k: 'window', vis: true, one: 1, h: 8 });
+  });
+
+  it('exactly two walls meeting at a spot become one wall again', () => {
+    const j = joinAt([W('a', 0, 0, 100, 0), W('b', 100, 0, 100, 100), W('c', 500, 0, 600, 0)], { x: 100, y: 0 }, 0.5);
+    expect(j?.remove.sort()).toEqual(['a', 'b']);
+    expect(j?.add.a).toEqual({ x: 0, y: 0 });
+    expect(j?.add.b).toEqual({ x: 100, y: 100 });
+  });
+
+  it('refuses when it is not exactly two, or they differ', () => {
+    expect(joinAt([W('a', 0, 0, 100, 0), W('b', 100, 0, 100, 100), W('c', 100, 0, 150, 0)], { x: 100, y: 0 }, 0.5)).toBeNull();
+    expect(joinAt([W('a', 0, 0, 100, 0)], { x: 100, y: 0 }, 0.5)).toBeNull();
+    expect(joinAt([W('a', 0, 0, 100, 0), W('b', 100, 0, 100, 100, 'window')], { x: 100, y: 0 }, 0.5)).toBeNull();
+    expect(joinAt([W('a', 0, 0, 100, 0), { ...W('b', 100, 0, 200, 0), h: 5 }], { x: 100, y: 0 }, 0.5)).toBeNull();
+  });
+
+  it('joins one-way walls only when they stop the same side once they run the same way', () => {
+    const a = { ...W('a', 0, 0, 100, 0), one: 1 as const };
+    const same = { ...W('b', 100, 0, 200, 0), one: 1 as const };
+    const flipped = { ...W('b', 200, 0, 100, 0), one: -1 as const }; // drawn the other way round, stops the same side
+    const wrong = { ...W('b', 100, 0, 200, 0), one: -1 as const };
+    expect(joinAt([a, same], { x: 100, y: 0 }, 0.5)?.add.one).toBe(1);
+    expect(joinAt([a, flipped], { x: 100, y: 0 }, 0.5)?.add.one).toBe(1);
+    expect(joinAt([a, wrong], { x: 100, y: 0 }, 0.5)).toBeNull();
   });
 });

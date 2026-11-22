@@ -11,7 +11,7 @@ export interface TokenCtx {
   showLabel: boolean;
   textRes: number;
   /** how healthy this token looks to whoever is watching (null = show nothing) */
-  health: { pct: number; bar: boolean } | null;
+  health: { pct: number; bar: boolean; nums?: { now: number; cap: number } } | null;
   /** how high it is: flying, or standing on high or low ground */
   alt: Altitude;
 }
@@ -65,6 +65,7 @@ export class TokenView {
   private maskG = new Graphics();
   private ring = new Graphics();
   private healthG = new Graphics();
+  private hpText: Text;
   private initial: Text;
   private label: Text;
   private key = '';
@@ -83,9 +84,11 @@ export class TokenView {
       style: { fontFamily: 'system-ui, sans-serif', fontWeight: '600', fill: 0xffffff, fontSize: 14, stroke: { color: 0x000000, width: 4, join: 'round' } },
     });
     this.label.anchor.set(0.5, 0);
+    this.hpText = new Text({ text: '', style: { fontFamily: 'system-ui, sans-serif', fontWeight: '700', fill: 0xffffff, fontSize: 11, stroke: { color: 0x000000, width: 3, join: 'round' } } });
+    this.hpText.anchor.set(0.5);
     this.altText = new Text({ text: '', style: { fontFamily: 'system-ui, sans-serif', fontWeight: '700', fill: 0xffffff, fontSize: 12 } });
     this.altText.anchor.set(0.5);
-    this.container.addChild(this.shadowG, this.fxBack, this.base, this.maskG, this.initial, this.tintG, this.ring, this.healthG, this.fxFront, this.altG, this.altText, this.label);
+    this.container.addChild(this.shadowG, this.fxBack, this.base, this.maskG, this.initial, this.tintG, this.ring, this.healthG, this.hpText, this.fxFront, this.altG, this.altText, this.label);
   }
 
   /** the effects to draw: the real ones, plus the one being previewed (which replaces a real one of the same name, like adding it would) */
@@ -96,7 +99,7 @@ export class TokenView {
     const g = ctx.grid;
     this.health = ctx.health;
     const key = [token.size, token.shape, token.ring, token.ringW, token.imgScale, token.imgX, token.imgY, token.imgBg, token.name ? token.name[0] : '?', g.cell,
-      ctx.health ? `${ctx.health.pct}/${ctx.health.bar}` : '', fxKey(this.fxList(token))].join('|');
+      ctx.health ? `${ctx.health.pct}/${ctx.health.bar}/${ctx.health.nums ? `${ctx.health.nums.now}of${ctx.health.nums.cap}` : ''}` : '', fxKey(this.fxList(token))].join('|');
     if (key !== this.key) {
       this.key = key;
       this.redraw(token, ctx);
@@ -285,6 +288,7 @@ export class TokenView {
     const r = D / 2;
     const h = this.health;
     let labelY = r + 2;
+    this.hpText.text = '';
     if (h) {
       const state = healthState(h.pct);
       const col = hex(HEALTH_COLOR[state]);
@@ -299,11 +303,17 @@ export class TokenView {
       }
       if (h.bar) {
         const bw = Math.max(24, D * 0.9);
-        const bh = Math.max(5, ctx.grid.cell * 0.1);
+        // with the numbers on it the bar is taller, so they fit inside it
+        const bh = h.nums ? Math.max(13, ctx.grid.cell * 0.2) : Math.max(5, ctx.grid.cell * 0.1);
         const y = r + 3;
         g.roundRect(-bw / 2 - 1.5, y - 1.5, bw + 3, bh + 3, bh / 2 + 1.5).fill({ color: 0x000000, alpha: 0.72 });
         if (h.pct > 0) g.roundRect(-bw / 2, y, Math.max(bh, (bw * h.pct) / 100), bh, bh / 2).fill(col);
         labelY = y + bh + 4;
+        if (h.nums) {
+          this.hpText.text = `${h.nums.now}/${h.nums.cap}`;
+          this.hpText.style.fontSize = Math.max(9, bh * 0.82);
+          this.hpText.position.set(0, y + bh / 2 + 0.5);
+        }
       }
     }
     this.label.position.set(0, labelY);

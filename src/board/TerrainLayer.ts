@@ -1,7 +1,7 @@
 import { Container, Sprite, Text, type Texture } from 'pixi.js';
 import { cellPoly } from '../core/cells';
-import { areaLabel, heightColor, type Area, type Terrain } from '../core/terrain';
-import type { GridSettings, Vec } from '../types';
+import { areaLabelAt, heightColor, type Area, type Terrain } from '../core/terrain';
+import type { Vec } from '../types';
 import { canvasTexture } from './textures';
 
 const MAX_SIDE = 2048;
@@ -23,10 +23,36 @@ export function labelSpot(a: Area): Vec {
   return best;
 }
 
+/** Blur a field with a box of radius `r` (edges repeat), twice, which is close enough to a Gaussian for shading. */
+function blur(src: Float32Array, W: number, H: number, r: number): Float32Array {
+  if (r < 1) return src;
+  const tmp = new Float32Array(src.length);
+  const out = new Float32Array(src.length);
+  const run = (from: Float32Array, to: Float32Array, len: number, lines: number, stride: number, step: number) => {
+    const n = 2 * r + 1;
+    for (let l = 0; l < lines; l++) {
+      const base = l * stride;
+      let sum = 0;
+      for (let k = -r; k <= r; k++) sum += from[base + Math.max(0, Math.min(len - 1, k)) * step];
+      for (let i = 0; i < len; i++) {
+        to[base + i * step] = sum / n;
+        sum += from[base + Math.min(len - 1, i + r + 1) * step] - from[base + Math.max(0, i - r) * step];
+      }
+    }
+  };
+  let a = src, b = tmp;
+  for (let pass = 0; pass < 2; pass++) {
+    run(a, b, W, H, W, 1);
+    run(b, out, H, W, 1, W);
+    a = out; b = tmp;
+  }
+  return out;
+}
+
 /**
- * Paints all the high and low ground as one picture: every pixel is coloured by how high the ground is there once the areas are stacked up
- * (so ground that adds to ground shows its total), with an edge wherever the height changes. Areas that are selected get a bright outline.
- * The picture is rebuilt only when the ground, the grid or the selection changes.
+ * Paints all the high and low ground as one soft picture: a light tint by height (ground that adds to ground shows its total), a shadow
+ * that falls on the lower side of every drop and a faint highlight on the upper side, and a thin line wherever the height changes.
+ * Areas that are selected get a bright outline. The picture is rebuilt only when the ground, the grid or the selection changes.
  */
 export class TerrainLayer {
   readonly container = new Container();
@@ -37,26 +63,27 @@ export class TerrainLayer {
   private labels = new Map<string, Text>();
   private key = '';
 
-  /** `selected` holds the ids of the areas to outline. Nothing is built while the layer is hidden. */
-  sync(t: Terrain, selected: Set<string>, textRes: number, show: boolean) {
+  /** `selected` holds the ids of the areas to outline; `labels` says whether each area is named. Nothing is built while the layer is hidden. */
+  sync(t: Terrain, selected: Set<string>, textRes: number, show: boolean, labels = true, warm = false) {
     this.container.visible = show;
-    if (!show) return;
-    const key = `${t.sig}#${[...selected].sort().join(',')}#${textRes}`;
+    if (!show && !warm) return;
+    const key = `${t.sig}#${[...selected].sort().join(',')}#${textRes}#${labels ? 1 : 0}`;
     if (key === this.key) return;
     this.key = key;
-    this.build(t, selected, textRes);
+    this.build(t, selected, textRes, labels);
   }
 
-  private build(t: Terrain, selected: Set<string>, textRes: number) {
+  private build(t: Terrain, selected: Set<string>, textRes: number, labels: boolean) {
     const areas = t.areas;
     if (!areas.length) { this.clear(); return; }
+    const grid = t.grid;
     const union = areas.reduce((u, a) => ({ x0: Math.min(u.x0, a.b.x), y0: Math.min(u.y0, a.b.y), x1: Math.max(u.x1, a.b.x + a.b.w), y1: Math.max(u.y1, a.b.y + a.b.h) }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
-    const pad = 3;
+    // room around the edge for the shadows that fall outside the high ground
+    const pad = Math.max(6, grid.cell * 0.7);
     const bx = union.x0 - pad, by = union.y0 - pad;
     const bw = Math.max(2, union.x1 - union.x0 + pad * 2), bh = Math.max(2, union.y1 - union.y0 + pad * 2);
     const s = Math.min(2, MAX_SIDE / Math.max(bw, bh));
     const W = Math.max(2, Math.ceil(bw * s)), H = Math.max(2, Math.ceil(bh * s));
-    const grid = t.grid;
 
     if (!this.canvas || this.canvas.width !== W || this.canvas.height !== H) {
       this.canvas = document.createElement('canvas');
@@ -105,29 +132,55 @@ export class TerrainLayer {
       }
     }
 
+    // soft shading: compare each pixel with the ground around it
+    const R = Math.max(2, Math.round(s * grid.cell * 0.16));
+    const around = blur(hgt, W, H, R);
+    // a faint contour wherever the height changes, softened by a small blur
+    const rad = Math.max(1, Math.round(s * Math.max(1, grid.cell * 0.018)));
+    const edge = new Float32Array(N);
+    for (let y = rad; y < H - rad; y++) {
+      for (let x = rad; x < W - rad; x++) {
+        const i = y * W + x;
+        if (!cov[i]) continue;
+        const l = i - rad, r = i + rad, u = i - rad * W, d = i + rad * W;
+        if (!cov[l] || !cov[r] || !cov[u] || !cov[d] || Math.abs(hgt[l] - hgt[i]) > 0.01 || Math.abs(hgt[r] - hgt[i]) > 0.01 || Math.abs(hgt[u] - hgt[i]) > 0.01 || Math.abs(hgt[d] - hgt[i]) > 0.01) edge[i] = 1;
+      }
+    }
+    const line = blur(edge, W, H, 1);
+    const ring = new Float32Array(N); // the outline of the selected areas
+    const rs = Math.max(2, Math.round(s * 2.2));
+    for (let y = rs; y < H - rs; y++) {
+      for (let x = rs; x < W - rs; x++) {
+        const i = y * W + x;
+        if (sel[i] && (!sel[i - rs] || !sel[i + rs] || !sel[i - rs * W] || !sel[i + rs * W])) ring[i] = 1;
+      }
+    }
+
     const out = new ImageData(W, H);
     const px = out.data;
     const lut = new Map<number, [number, number, number]>();
     const colour = (h: number) => { const k = Math.round(h); let c = lut.get(k); if (!c) { c = rgbOf(k); lut.set(k, c); } return c; };
-    const rad = Math.max(1, Math.round(s * 1.1));
-    const srad = Math.max(2, Math.round(s * 2));
-    // is something `r` pixels away (left, right, up or down) different? `diff` says what counts as different
-    const edgeNear = (x: number, y: number, r: number, diff: (j: number) => boolean) => {
-      if (x - r < 0 || y - r < 0 || x + r >= W || y + r >= H) return true;
-      const i = y * W + x;
-      return diff(i - r) || diff(i + r) || diff(i - r * W) || diff(i + r * W);
-    };
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        const i = y * W + x;
-        if (!cov[i]) continue;
-        const [r, g, b] = colour(hgt[i]);
-        let R = r, G = g, B = b, A = 125;
-        if (edgeNear(x, y, rad, (j) => !cov[j] || Math.abs(hgt[j] - hgt[i]) > 0.01)) { R = r * 0.55; G = g * 0.55; B = b * 0.55; A = 235; }
-        if (sel[i] && edgeNear(x, y, srad, (j) => !sel[j])) { [R, G, B] = SELECT_RGB; A = 255; }
-        const o = i * 4;
-        px[o] = R; px[o + 1] = G; px[o + 2] = B; px[o + 3] = A;
-      }
+    for (let i = 0; i < N; i++) {
+      // tint, only on the ground itself
+      let a = 0, R_ = 0, G_ = 0, B_ = 0;
+      if (cov[i]) { const c = colour(hgt[i]); R_ = c[0]; G_ = c[1]; B_ = c[2]; a = 0.3; }
+      // shadow on the low side of a drop, light on the high side
+      const d = around[i] - hgt[i];
+      const k = Math.min(1, Math.abs(d) / 6) ** 0.7;
+      const sh = d > 0.05 ? 0.4 * k : 0;
+      const hi = d < -0.05 ? 0.28 * k : 0;
+      const over = (cr: number, cg: number, cb: number, ca: number) => {
+        if (ca <= 0) return;
+        const oa = ca + a * (1 - ca);
+        R_ = (cr * ca + R_ * a * (1 - ca)) / oa; G_ = (cg * ca + G_ * a * (1 - ca)) / oa; B_ = (cb * ca + B_ * a * (1 - ca)) / oa;
+        a = oa;
+      };
+      over(10, 12, 20, sh);
+      over(255, 255, 255, hi);
+      if (cov[i] && line[i] > 0.02) { const c = colour(hgt[i]); over(c[0] * 0.4, c[1] * 0.4, c[2] * 0.4, Math.min(0.85, line[i] * 1.5)); }
+      if (ring[i]) over(SELECT_RGB[0], SELECT_RGB[1], SELECT_RGB[2], 1);
+      const o = i * 4;
+      px[o] = R_; px[o + 1] = G_; px[o + 2] = B_; px[o + 3] = Math.round(Math.min(1, a) * 255);
     }
     this.canvas.getContext('2d')!.putImageData(out, 0, 0);
     this.tex!.source.update();
@@ -135,13 +188,16 @@ export class TerrainLayer {
     this.sprite!.scale.set(1 / s);
     this.sprite!.visible = true;
 
-    this.paintLabels(t, textRes);
+    this.paintLabels(t, textRes, labels, (p) => {
+      const x = Math.round((p.x - bx) * s), y = Math.round((p.y - by) * s);
+      return x >= 0 && y >= 0 && x < W && y < H && cov[y * W + x] ? hgt[y * W + x] : null;
+    });
   }
 
-  private paintLabels(t: Terrain, textRes: number) {
+  private paintLabels(t: Terrain, textRes: number, show: boolean, totalAt: (p: Vec) => number | null) {
     const seen = new Set<string>();
     const fs = Math.max(9, t.grid.cell * 0.3);
-    for (const a of t.areas) {
+    for (const a of show ? t.areas : []) {
       seen.add(a.id);
       let tx = this.labels.get(a.id);
       if (!tx) {
@@ -151,7 +207,7 @@ export class TerrainLayer {
         this.labels.set(a.id, tx);
       }
       const spot = labelSpot(a);
-      tx.text = areaLabel(a.h, a.add);
+      tx.text = areaLabelAt(totalAt(spot) ?? a.h, a.h, a.add);
       tx.style.fontSize = fs;
       (tx.style.stroke as { width: number }).width = Math.max(2, fs * 0.2);
       tx.resolution = textRes;

@@ -5,7 +5,7 @@ import {
   normalizePlayer, normalizeSceneMeta, normalizeSettings, normalizeToken, stripUndefined, tokenToWire, DEFAULT_GRID, DM_COLOR,
 } from '../core/model';
 import {
-  applyDamage, cleanHp, EXPLORE_MIN_CELLS, EXPLORE_JUMP_CELLS, EXPLORE_TELEPORT_CELLS, EXPLORE_TELEPORT_MS, emptyInit, moveEntry, nextTurn, orderOf, pctOf, prevTurn, sightRadiusPx, sortByInit, toPub,
+  applyDamage, cleanHp, EXPLORE_MIN_CELLS, EXPLORE_JUMP_CELLS, EXPLORE_TELEPORT_CELLS, EXPLORE_TELEPORT_MS, emptyInit, moveEntry, nextTurn, orderOf, pctOf, prevTurn, publicHp, sightRadiusPx, sortByInit, toPub,
 } from '../core/combat';
 import { lineOp, polyOp } from '../core/fog';
 import { addFx, fxToWire, tickFx } from '../core/effects';
@@ -18,7 +18,8 @@ import type {
   Drawing, Effect, FogOp, InitEntry, InitPub, InitState, LivePlot, GridSettings, Permissions, PermPreset, Ping, Player, Role, SceneIndexEntry,
   SceneMeta, TableMeta, TableSettings, Token, Vec,
 } from '../types';
-import { carveWalls, normalizeWall, routeReveal, sightSegs, wallToWire, type Wall } from '../core/walls';
+import { altitudeOf, groundAt, zonesOf } from '../core/height';
+import { carveWalls, joinAt, normalizeWall, routeReveal, sightSegs, splitPieces, wallMid, wallToWire, type Wall } from '../core/walls';
 import { History } from './history';
 import { P } from './paths';
 
@@ -389,7 +390,7 @@ export class TableClient {
     const hidden = this.isDM && !!partial.hidden;
     const token = normalizeToken(id, { ...partial, z }, hidden);
     if (!this.isDM) { token.ownerUid = this.uid; token.hp = token.maxHp = null; token.tempHp = 0; } // players may only create tokens they own, and never set hit points
-    token.hpPct = token.hp != null && token.hpShow !== 'off' ? pctOf(token.hp, token.maxHp) : null;
+    Object.assign(token, publicHp(token.hpShow, token.hp, token.maxHp));
     const updates: Record<string, any> = { [this.tokenPath(token)]: tokenToWire(token) };
     if (token.hp != null && token.maxHp != null) updates[this.hpPath(id)] = hpWire(token.hp, token.maxHp, token.tempHp);
     await this.backend.update(updates);
@@ -438,7 +439,7 @@ export class TableClient {
     const base = this.tokenPath(cur);
     const updates: Record<string, any> = {};
     for (const [k, v] of Object.entries(patch)) {
-      if (k === 'id' || k === 'hidden' || k === 'hp' || k === 'maxHp' || k === 'tempHp' || k === 'hpPct') continue;
+      if (k === 'id' || k === 'hidden' || k === 'hp' || k === 'maxHp' || k === 'tempHp' || k === 'hpPct' || k === 'hpNow' || k === 'hpCap') continue;
       updates[`${base}/${k}`] = k === 'fx' ? fxToWire((v as Effect[] | undefined) ?? []) : k === 'initBonus' ? (v ? v : null) : v === undefined ? null : v;
     }
     // hit points live in the DM-only part of the database; players only ever see a percentage
@@ -446,9 +447,10 @@ export class TableClient {
       const c = cleanHp('hp' in patch ? patch.hp : cur.hp, 'maxHp' in patch ? patch.maxHp : cur.maxHp);
       const tmp = Math.max(0, Math.round('tempHp' in patch ? patch.tempHp ?? 0 : cur.tempHp));
       if ('hp' in patch || 'maxHp' in patch || 'tempHp' in patch) updates[this.hpPath(cur.id)] = c.hp == null || c.max == null ? null : hpWire(c.hp, c.max, tmp);
-      const show = patch.hpShow ?? cur.hpShow;
-      const pct = show === 'off' ? null : pctOf(c.hp, c.max);
-      updates[`${base}/hpPct`] = pct;
+      const pub = publicHp(patch.hpShow ?? cur.hpShow, c.hp, c.max);
+      updates[`${base}/hpPct`] = pub.hpPct;
+      updates[`${base}/hpNow`] = pub.hpNow;
+      updates[`${base}/hpCap`] = pub.hpCap;
     }
     if (Object.keys(updates).length) await this.backend.update(updates);
   }
@@ -654,7 +656,7 @@ export class TableClient {
     return made.map((w) => w.id);
   }
 
-  async updateWalls(ids: string[], patch: Partial<Pick<Wall, 'a' | 'b' | 'k' | 'open' | 'vis'>>, label = 'Change wall'): Promise<void> {
+  async updateWalls(ids: string[], patch: Partial<Pick<Wall, 'a' | 'b' | 'k' | 'open' | 'vis' | 'one' | 'h'>>, label = 'Change wall'): Promise<void> {
     if (!this.isDM || !this.viewSceneId) return;
     const before = ids.map((id) => this.scene?.walls.get(id)).filter((w): w is Wall => !!w).map((w) => ({ ...w }));
     if (!before.length) return;
@@ -664,7 +666,7 @@ export class TableClient {
       return n;
     });
     await this.putWalls(after);
-    this.history.push({ label, key: `wall:${patch.vis !== undefined ? 'vis' : patch.k !== undefined ? 'k' : 'move'}:${before.map((w) => w.id).join(',')}`, undo: () => this.putWalls(before), redo: () => this.putWalls(after) });
+    this.history.push({ label, key: `wall:${patch.vis !== undefined ? 'vis' : patch.k !== undefined ? 'k' : patch.one !== undefined ? 'one' : patch.h !== undefined ? 'h' : 'move'}:${before.map((w) => w.id).join(',')}`, undo: () => this.putWalls(before), redo: () => this.putWalls(after) });
   }
 
   /** Move wall ends: each entry says which end of which wall goes where (used to drag a corner that several walls share). */
@@ -691,6 +693,50 @@ export class TableClient {
     if (!snaps.length) return;
     await this.dropWalls(snaps.map((w) => w.id));
     this.history.push({ label: snaps.length > 1 ? 'Delete walls' : 'Delete wall', undo: () => this.putWalls(snaps), redo: () => this.dropWalls(snaps.map((w) => w.id)) });
+  }
+
+  /** Swap the blocked side of the one-way walls among these (two-way walls are left alone). */
+  async flipWalls(ids: string[]): Promise<void> {
+    if (!this.isDM || !this.viewSceneId) return;
+    const before = ids.map((id) => this.scene?.walls.get(id)).filter((w): w is Wall => !!w && w.one !== 0).map((w) => ({ ...w }));
+    if (!before.length) return;
+    const after = before.map((w) => ({ ...w, one: (w.one === 1 ? -1 : 1) as Wall['one'] }));
+    await this.putWalls(after);
+    this.history.push({ label: 'Flip the blocked side', undo: () => this.putWalls(before), redo: () => this.putWalls(after) });
+  }
+
+  /** Give a wall a corner at `at` (a point on it): it becomes two walls that can be bent apart. Returns the new walls' ids. */
+  async splitWall(id: string, at: Vec): Promise<string[]> {
+    if (!this.isDM || !this.viewSceneId) return [];
+    const w = this.scene?.walls.get(id);
+    if (!w) return [];
+    const pieces = splitPieces(w, at).map((p) => ({ ...p, id: this.backend.newKey() }));
+    const old = { ...w };
+    await this.putWalls(pieces);
+    await this.dropWalls([id]);
+    this.history.push({
+      label: 'Add a corner',
+      undo: async () => { await this.dropWalls(pieces.map((p) => p.id)); await this.putWalls([old]); },
+      redo: async () => { await this.putWalls(pieces); await this.dropWalls([id]); },
+    });
+    return pieces.map((p) => p.id);
+  }
+
+  /** Take out the corner at `at` where exactly two walls meet (they become one wall). False when that is not what is there. */
+  async joinWallsAt(at: Vec, tol: number): Promise<boolean> {
+    if (!this.isDM || !this.viewSceneId) return false;
+    const j = joinAt(this.scene?.walls.values() ?? [], at, tol);
+    if (!j) return false;
+    const gone = j.remove.map((id) => ({ ...this.scene!.walls.get(id)! }));
+    const made: Wall = { ...j.add, id: this.backend.newKey() };
+    await this.putWalls([made]);
+    await this.dropWalls(j.remove);
+    this.history.push({
+      label: 'Remove a corner',
+      undo: async () => { await this.dropWalls([made.id]); await this.putWalls(gone); },
+      redo: async () => { await this.putWalls([made]); await this.dropWalls(j.remove); },
+    });
+    return true;
   }
 
   /** Open or close a door. */
@@ -1120,7 +1166,9 @@ export class TableClient {
     const sid = s.id;
     const updates: Record<string, FogOp> = {};
     let count = 0;
-    const segs = sightSegs(s.walls.values());
+    // a wall's top depends on the ground it stands on, and what is higher than that sees over it (only worked out when some wall has a height)
+    const zones = [...s.walls.values()].some((w) => w.h > 0) ? zonesOf(s.draws.values(), g) : null;
+    const segs = sightSegs(s.walls.values(), (w) => (zones ? groundAt(zones, wallMid(w)) : 0) + w.h);
     for (const t of s.tokens.values()) {
       const r = sightRadiusPx(t, g);
       const tr = this.trails.get(t.id);
@@ -1130,7 +1178,7 @@ export class TableClient {
         // keep the shape of the route but not every little step of it
         const pts = line.filter((p, i) => i === 0 || i === line.length - 1 || Math.hypot(p.x - line[i - 1].x, p.y - line[i - 1].y) >= g.cell * 0.2);
         // with no wall in reach this is the one thick line; with walls it is what the token could see from a spot every square along the way
-        for (const shape of routeReveal(pts, r, segs, g.cell)) {
+        for (const shape of routeReveal(pts, r, segs, g.cell, zones ? altitudeOf(t, groundAt(zones, t)).alt : undefined)) {
           updates[`${P.sceneFog(this.tableId, sid)}/${this.backend.newKey()}`] = shape.t === 'line' ? lineOp('r', shape.pts, shape.w) : polyOp('r', shape.pts);
           count++;
         }

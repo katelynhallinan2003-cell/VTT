@@ -285,6 +285,22 @@ describe('TableClient over the mock backend', () => {
     await waitFor(() => pl.scene?.tokens.get(id)?.hpPct === 0, 'down for players');
   });
 
+  it('shows players the real numbers only when asked to, and keeps them current', async () => {
+    const { dm, pl } = await setup();
+    const id = await dm.addToken({ x: 35, y: 35, name: 'Orc', hp: 30, maxHp: 30, hpShow: 'bar' });
+    await waitFor(() => pl.scene?.tokens.has(id) === true, 'token');
+    expect(pl.scene!.tokens.get(id)!.hpNow).toBeNull();
+    await dm.updateToken(id, { hpShow: 'numbers' });
+    await waitFor(() => pl.scene?.tokens.get(id)?.hpNow === 30, 'numbers appear');
+    expect(pl.scene!.tokens.get(id)!.hpCap).toBe(30);
+    await dm.damage([id], 12);
+    await waitFor(() => pl.scene?.tokens.get(id)?.hpNow === 18, 'numbers follow damage');
+    expect(pl.scene!.tokens.get(id)!.hpPct).toBe(60);
+    await dm.updateToken(id, { hpShow: 'bar' });
+    await waitFor(() => pl.scene?.tokens.get(id)?.hpNow === null, 'numbers go away again');
+    expect(pl.scene!.tokens.get(id)!.hpCap).toBeNull();
+  });
+
   it('can hide health from players entirely, and undoes damage', async () => {
     const { dm, pl } = await setup();
     const id = await dm.addToken({ x: 35, y: 35, name: 'Boss', hp: 100, maxHp: 100, hpShow: 'off' });

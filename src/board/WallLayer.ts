@@ -1,5 +1,5 @@
 import { Container, Graphics } from 'pixi.js';
-import { wallLength, wallMid, type Wall, type WallKind } from '../core/walls';
+import { hatchTicks, wallLength, wallMid, type Wall, type WallKind } from '../core/walls';
 import type { Vec } from '../types';
 
 const COLOR: Record<WallKind, number> = { wall: 0xffd27a, door: 0xe8873a, window: 0x7fd8ff };
@@ -82,6 +82,13 @@ export class WallLayer {
       } else {
         g.moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ width: s.k === 'door' ? w * 1.4 : w, color: col, cap: 'round' });
       }
+    }
+
+    // one-way walls (a cliff edge): little ticks on the side that is stopped
+    for (const s of list) {
+      if (!s.one) continue;
+      for (const t of hatchTicks(s.a, s.b, s.one, o.cell * 0.32, o.cell * 0.17)) g.moveTo(t.a.x, t.a.y).lineTo(t.b.x, t.b.y);
+      g.stroke({ width: Math.max(1.6 * px, o.cell * 0.026), color: COLOR[s.k], alpha: s.vis ? 0.95 : 0.8, cap: 'round' });
     }
 
     // door handles: a diamond in the middle (hollow when the door stands open)

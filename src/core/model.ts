@@ -53,7 +53,9 @@ function normalizeMapGrid(raw: any): SceneMeta['mapGrid'] {
   if (!raw || typeof raw !== 'object') return null;
   const p = num(raw.p, 0);
   if (!(p >= 4)) return null;
-  return { on: bool(raw.on, true), p, x: num(raw.x, 0), y: num(raw.y, 0), t: Math.min(24, Math.max(0.5, num(raw.t, 2))) };
+  const cut: NonNullable<SceneMeta['mapGrid']> = { on: bool(raw.on, true), p, x: num(raw.x, 0), y: num(raw.y, 0), t: Math.min(24, Math.max(0.5, num(raw.t, 2))) };
+  if (raw.hex === 'pointy' || raw.hex === 'flat') cut.hex = raw.hex;
+  return cut;
 }
 
 export function normalizeSceneMeta(raw: any): SceneMeta {
@@ -102,6 +104,8 @@ export function normalizeToken(id: string, raw: any, hidden: boolean): Token {
     tempHp: 0,
     hpShow: hpShowOf(t.hpShow, typeof t.ownerUid === 'string'),
     hpPct: typeof t.hpPct === 'number' && Number.isFinite(t.hpPct) ? Math.min(100, Math.max(0, Math.round(t.hpPct))) : null,
+    hpNow: typeof t.hpNow === 'number' && Number.isFinite(t.hpNow) ? Math.min(99999, Math.max(-99999, Math.round(t.hpNow))) : null,
+    hpCap: typeof t.hpCap === 'number' && Number.isFinite(t.hpCap) ? Math.min(99999, Math.max(0, Math.round(t.hpCap))) : null,
     sight: Math.min(1000, Math.max(0, num(t.sight, 0))),
     fly: bool(t.fly, false),
     elev: Math.min(5000, Math.max(-1000, Math.round(num(t.elev, 0)))),
@@ -122,7 +126,7 @@ function cleanHpFields(t: any): { hp: number | null; maxHp: number | null } {
 
 /** Players see a bar for tokens that belong to someone (the party), only the coloured state for everything else. */
 function hpShowOf(v: unknown, owned: boolean): HpShow {
-  return v === 'off' || v === 'state' || v === 'bar' ? v : owned ? 'bar' : 'state';
+  return v === 'off' || v === 'state' || v === 'bar' || v === 'numbers' ? v : owned ? 'bar' : 'state';
 }
 
 export function normalizeAuras(raw: any): Aura[] {
@@ -208,6 +212,8 @@ export function tokenToWire(t: Token): Record<string, unknown> {
     ownerUid: t.ownerUid ?? undefined,
     auras: t.auras.length ? t.auras : undefined,
     hpPct: t.hpPct ?? undefined,
+    hpNow: t.hpNow ?? undefined,
+    hpCap: t.hpCap ?? undefined,
     sight: t.sight > 0 ? t.sight : undefined,
     fly: t.fly ? true : undefined,
     elev: t.fly && t.elev ? t.elev : undefined,

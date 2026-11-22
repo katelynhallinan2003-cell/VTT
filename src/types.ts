@@ -71,8 +71,8 @@ export interface SceneMeta {
 
 export type TokenShape = 'circle' | 'square' | 'none';
 export type LabelMode = 'all' | 'dm' | 'none';
-/** off = players see nothing, state = bloodied / near death colouring only, bar = that colouring plus a health bar (never the numbers) */
-export type HpShow = 'off' | 'state' | 'bar';
+/** off = players see nothing, state = bloodied / near death colouring only, bar = that colouring plus a health bar, numbers = the bar plus the real hit points */
+export type HpShow = 'off' | 'state' | 'bar' | 'numbers';
 export type HealthState = 'ok' | 'bloodied' | 'mortal' | 'down';
 
 export interface Token {
@@ -105,6 +105,9 @@ export interface Token {
   hpShow: HpShow;
   /** health as a whole percentage, for players. Written only when `hpShow` is not 'off'. */
   hpPct: number | null;
+  /** the real hit points and maximum, public. Written only when `hpShow` is 'numbers'. */
+  hpNow: number | null;
+  hpCap: number | null;
   /** how far this token can see, in feet (0 = it does not clear fog by itself) */
   sight: number;
   /** off the ground: it holds `elev` feet of altitude instead of standing on whatever height the ground has there */

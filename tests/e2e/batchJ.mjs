@@ -54,7 +54,7 @@ check('players do not', (await pl.locator('.toolbar button[aria-label^="Heights"
 await dm.keyboard.press('h');
 await dm.locator('.flyout-title', { hasText: /^Heights$/ }).waitFor();
 check('H opens the Heights panel', (await dm.evaluate(() => window.__vtt.ui.data.tool)) === 'height');
-await dm.locator('.flyout .chip', { hasText: /^\+10$/ }).click();
+await dm.locator('.flyout .chip', { hasText: /^10$/ }).click();
 check('a preset chip sets the height', (await dm.evaluate(() => window.__vtt.ui.data.heightFt)) === 10);
 
 // ---- paint a 10 ft ledge (cols 10..13, rows 3..6): a 4-square brush clicked on the corner in the middle of them
@@ -63,7 +63,7 @@ const a = await screen(dm, 12 * cell, 5 * cell);
 await dm.mouse.move(a.x, a.y);
 await dm.mouse.down();
 await sleep(120);
-check('while you paint it shows its height', (await dm.evaluate(() => window.__vtt.board.plotLabels.some((l) => l && l.visible && /\+10 ft/.test(l.text)))));
+check('while you paint it shows its height', (await dm.evaluate(() => window.__vtt.board.plotLabels.some((l) => l && l.visible && /^10 ft$/.test(l.text)))));
 await dm.mouse.up();
 await sleep(400);
 let zs = await zones(dm);
@@ -96,7 +96,7 @@ await gh.fill('30');
 await gh.blur();
 await sleep(400);
 check('changing it there changes the area', (await zones(dm)).some((z) => z.hz === 30) && !(await zones(dm)).some((z) => z.hz === 40));
-await dm.locator('.ht-card .chip', { hasText: /^\+40$/ }).click();
+await dm.locator('.ht-card .chip', { hasText: /^40$/ }).click();
 await sleep(300);
 check('and the chips work too', (await zones(dm)).some((z) => z.hz === 40));
 await dm.keyboard.press('Escape');
@@ -227,7 +227,7 @@ await front(pl);
 check('the player has the same height areas', (await zones(pl)).length === 2);
 const pAlt = await pl.evaluate((i) => { const b = window.__vtt.board; return b.heightOf(window.__vtt.client.scene.tokens.get(i)).alt; }, gob);
 check('and sees the goblin at the same height', pAlt === 0 || pAlt === 10, String(pAlt));
-check('the player sees the terrain by default', (await pl.evaluate(() => window.__vtt.ui.data.showHeights)) === true);
+check('the player sees terrain when moving by default', (await pl.evaluate(() => window.__vtt.ui.data.heightView)) === 'auto');
 await pl.evaluate((i) => window.__vtt.ui.select([i]), hero);
 await pl.keyboard.press(']');
 await sleep(500);
@@ -239,12 +239,12 @@ await sleep(300);
 await dm.bringToFront();
 
 // ---- Show heights is just a view setting
-await dm.evaluate(() => window.__vtt.ui.set({ showHeights: false }));
+await dm.evaluate(() => window.__vtt.ui.set({ heightView: 'tool' }));
 await sleep(300);
 const hiddenCount = await dm.evaluate(() => window.__vtt.board.drawLayer.container.children.length);
-await dm.evaluate(() => window.__vtt.ui.set({ showHeights: true }));
+await dm.evaluate(() => window.__vtt.ui.set({ heightView: 'auto' }));
 await sleep(300);
-check('turning "Show heights" off keeps the ground, only hiding it', (await zones(dm)).length === 2 && (await alt(dm, gob)).alt >= 0);
+check('turning the height view to "only in the tool" keeps the ground, only hiding it', (await zones(dm)).length === 2 && (await alt(dm, gob)).alt >= 0);
 void hiddenCount;
 
 // ---- the draw tool's Clear all leaves terrain alone

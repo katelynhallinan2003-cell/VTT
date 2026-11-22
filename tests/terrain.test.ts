@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_GRID, drawingToWire, normalizeDrawing } from '../src/core/model';
-import { areaAt, areasSelected, cellKey, cellsAlong, cellsAround, groundAtTerrain, newAreaId, paintedAreaAt, terrainOf } from '../src/core/terrain';
+import { areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, cellsAround, groundAtTerrain, newAreaId, paintedAreaAt, terrainOf, totalWith } from '../src/core/terrain';
 import { hexToPx } from '../src/core/hex';
 import type { Drawing } from '../src/types';
 
@@ -176,5 +176,19 @@ describe('the brush cells', () => {
   it('cell keys agree for any point inside the same cell', () => {
     expect(cellKey(grid, { x: 101, y: 1 })).toBe(cellKey(grid, { x: 199, y: 99 }));
     expect(cellKey(grid, { x: 101, y: 1 })).not.toBe(cellKey(grid, { x: 201, y: 1 }));
+  });
+});
+
+describe('what an area is called on the map', () => {
+  it('shows the real height of the ground, with what an adding area contributes', () => {
+    expect(areaLabelAt(20, 20, false)).toBe('20 ft');
+    expect(areaLabelAt(-10, -10, false)).toBe('-10 ft');
+    expect(areaLabelAt(25, 5, true)).toBe('25 ft (+5)');
+    expect(areaLabelAt(15, -5, true)).toBe('15 ft (-5)');
+    expect(areaLabelAt(20, 0, true)).toBe('20 ft'); // adding nothing changes nothing
+  });
+  it('adds or sets over the ground below', () => {
+    expect(totalWith(20, 5, true)).toBe(25);
+    expect(totalWith(20, 5, false)).toBe(5);
   });
 });

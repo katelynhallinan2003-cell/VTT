@@ -231,10 +231,15 @@ export const newAreaId = (): string => Math.random().toString(36).slice(2, 10) +
 /** The outline of one cell of the grid, for drawing the cells a stroke covers. */
 export const strokeCellPolys = (s: TStroke, grid: GridSettings): Vec[][] => s.pts.map((c) => cellPoly(grid, c));
 
-/** What a label on an area says: "+10 ft" for ground set to 10 ft, "10 ft more" or "5 ft lower" for one that adds. */
-export function areaLabel(h: number, add: boolean): string {
-  if (add) return h === 0 ? 'no change' : h > 0 ? `${h} ft more` : `${-h} ft lower`;
-  return `${h > 0 ? '+' : ''}${h} ft`;
+/** What a label on an area says: how high the ground really is there ("20 ft", "-10 ft"), with what the area itself adds when it stacks ("30 ft (+10)"). */
+export function areaLabelAt(total: number, h: number, add: boolean): string {
+  const t = `${Math.round(total)} ft`;
+  return add && h !== 0 ? `${t} (${h > 0 ? '+' : ''}${h})` : t;
+}
+
+/** The total at a spot when an area of height `h` is added or set there, `below` being the ground under it. */
+export function totalWith(below: number, h: number, add: boolean): number {
+  return add ? below + h : h;
 }
 
 /** The colour of ground `h` feet up: sand to brown as it gets higher, then pale rock; blue for pits. */

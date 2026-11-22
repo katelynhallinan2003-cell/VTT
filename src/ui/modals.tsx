@@ -536,8 +536,13 @@ function MouseSettings(props: { ui: UiState }) {
 function HeightsSetting(props: { ui: UiState }) {
   const d = useUi(props.ui);
   return (
-    <Toggle checked={d.showHeights} onChange={(v) => props.ui.set({ showHeights: v })} label="Show terrain heights"
-      hint="The coloured high and low ground the DM draws. Turning it off only hides it on your screen; tokens still stand on it." />
+    <Field label="Show the high and low ground" hint="The DM draws ground heights. Only changes what you see; tokens still stand on the ground either way. When moving fades the ground in while you drag a token or measure with the ruler.">
+      <div class="seg">
+        {([['auto', 'When moving'], ['always', 'Always'], ['tool', 'Only in the Heights tool']] as const).map(([k, label]) => (
+          <button key={k} class={d.heightView === k ? 'on' : ''} onClick={() => props.ui.set({ heightView: k })}>{label}</button>
+        ))}
+      </div>
+    </Field>
   );
 }
 

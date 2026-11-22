@@ -6,7 +6,7 @@
 // spacing and offset where those differences line up best. Hiding the lines means filling each one in from the
 // pixels right beside it, so the picture itself is never changed: only the copy on screen.
 //
-// Squares only. Everything here works on plain pixel arrays so it can be tested without a browser.
+// This file is for squares (see hexcut.ts for hexes). Everything here works on plain pixel arrays so it can be tested without a browser.
 
 export interface PixelImage {
   data: Uint8ClampedArray | Uint8Array;
@@ -14,18 +14,23 @@ export interface PixelImage {
   height: number;
 }
 
-/** Where the lines are, in pixels of the picture it was found in. */
+/**
+ * Where the lines are, in pixels of the picture it was found in.
+ * For squares: `p` is the distance between lines, a vertical line passes through `x` and a horizontal one through `y`.
+ * For hexes (`hex` is set): `p` is the distance between the centres of two neighbouring hexes, and (`x`, `y`) is the top-left corner
+ * of the box around the hex at the origin, the same way the app's own hex grid is described.
+ */
 export interface GridCut {
   /** hidden right now */
   on: boolean;
-  /** distance between lines */
+  /** distance between lines (squares) or between hex centres (hexes) */
   p: number;
-  /** a vertical line passes through x (and every p after it) */
   x: number;
-  /** a horizontal line passes through y */
   y: number;
   /** how thick the lines are */
   t: number;
+  /** the lines are the edges of hexes: with a point at the top ('pointy') or a flat top ('flat') */
+  hex?: 'pointy' | 'flat';
 }
 
 export interface Found {
@@ -34,7 +39,7 @@ export interface Found {
   strength: number;
 }
 
-const luma = (img: PixelImage): Uint8Array => {
+export const luma = (img: PixelImage): Uint8Array => {
   const n = img.width * img.height;
   const L = new Uint8Array(n);
   const d = img.data;
@@ -71,7 +76,7 @@ export function contrastProfiles(img: PixelImage, d: number): { col: Float32Arra
   return { col, row };
 }
 
-const medianAbs = (a: Float32Array): number => {
+export const medianAbs = (a: Float32Array): number => {
   const v = Float32Array.from(a, Math.abs).sort();
   return v[v.length >> 1] || 1e-3;
 };
@@ -149,7 +154,7 @@ export function findGrid(img: PixelImage, hint?: number): Found | null {
 }
 
 /** Brightness levels (0 to 255) a line has to differ from the ground by before we call it a grid. */
-const MIN_CONTRAST = 3;
+export const MIN_CONTRAST = 3;
 
 /**
  * Looking for lines near an expected spacing can land on half of the real one (or a third), where every other line is missing.
@@ -172,13 +177,13 @@ function wholeSpacing(pc: Float32Array, pr: Float32Array, f: { p: number; ox: nu
 }
 
 /** Strength of a profile at a point between two pixels. */
-const at = (prof: Float32Array, x: number): number => {
+export const at = (prof: Float32Array, x: number): number => {
   if (x < 0 || x > prof.length - 1) return 0;
   const i = Math.floor(x), f = x - i;
   return prof[i] * (1 - f) + prof[Math.min(prof.length - 1, i + 1)] * f;
 };
 
-function exact(prof: Float32Array, p: number, o: number): number {
+export function exact(prof: Float32Array, p: number, o: number): number {
   let sum = 0, cnt = 0;
   for (let c = o; c < prof.length - 1; c += p) { sum += at(prof, c); cnt++; }
   return cnt ? sum / cnt : -Infinity;
@@ -198,10 +203,10 @@ function refine(pc: Float32Array, pr: Float32Array, p0: number, ox0: number, oy0
   return best;
 }
 
-const round2 = (n: number) => Math.round(n * 100) / 100;
+export const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /** How many pixels wide the lines are (counting those that are at least 40% as strong as the peak). */
-function thickness(prof: Float32Array, p: number, o: number): number {
+export function thickness(prof: Float32Array, p: number, o: number): number {
   const widths: number[] = [];
   for (let c = o; c < prof.length; c += p) {
     const i = Math.round(c);
@@ -221,7 +226,7 @@ function thickness(prof: Float32Array, p: number, o: number): number {
 }
 
 /** The strength-weighted middle of the line near each comb position, averaged, so the offset sits on the line's centre. */
-function centre(prof: Float32Array, p: number, o: number): number {
+export function centre(prof: Float32Array, p: number, o: number): number {
   let sum = 0, cnt = 0;
   for (let c = o; c < prof.length; c += p) {
     const i = Math.round(c);

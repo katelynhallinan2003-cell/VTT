@@ -1,6 +1,7 @@
 import { CanvasSource, ImageSource, Texture } from 'pixi.js';
 import { loadImage } from '../core/images';
 import { hideGrid, scaleCut, type GridCut, type PixelImage } from '../core/gridcut';
+import { hideHexGrid } from '../core/hexcut';
 
 let gpuMax = 0;
 export function maxTextureSide(): number {
@@ -125,7 +126,8 @@ export async function gridlessTexture(tex: LoadedTexture, cut: GridCut): Promise
   await new Promise<void>((r) => setTimeout(r, 20));
   const px = readPixels(tex);
   if (!px) return null;
-  hideGrid(px.img, scaleCut(cut, 1 / tex.scale));
+  const c = scaleCut(cut, 1 / tex.scale);
+  if (c.hex) hideHexGrid(px.img, c); else hideGrid(px.img, c);
   px.ctx.putImageData(px.id, 0, 0);
   return new Texture({ source: new CanvasSource({ resource: px.canvas, scaleMode: 'linear', autoGenerateMipmaps: true }) });
 }

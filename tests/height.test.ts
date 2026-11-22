@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_GRID, drawingToWire, normalizeDrawing, normalizeToken, tokenToWire } from '../src/core/model';
-import { altLabel, altitudeOf, fallDice, groundAt, heightChangeNote, heightNote, setAltitude, zoneColor, zonesOf } from '../src/core/height';
+import { altLabel, altitudeOf, fallDice, groundAt, heightChangeNote, heightNote, setAltitude, setClearance, zoneColor, zonesOf } from '../src/core/height';
 import { distanceFt } from '../src/core/geometry';
 import type { Drawing } from '../src/types';
 
@@ -62,9 +62,27 @@ describe('token altitude', () => {
     expect(setAltitude(10, 10)).toEqual({ fly: false, elev: 0 });
   });
 
+  it('a flyer keeps its elevation, so its height above the ground follows the ground', () => {
+    const bird = { fly: true, elev: 20 };
+    expect(altitudeOf(bird, 0).clear).toBe(20);
+    expect(altitudeOf(bird, -10).clear).toBe(30); // over a drop, still the same elevation but 30 ft up
+    expect(altitudeOf(bird, 15).clear).toBe(5);
+    expect(altLabel(altitudeOf(bird, -10), true)).toBe('↑30');
+    expect(altLabel(altitudeOf(bird, 15), true)).toBe('↑5');
+    expect(altitudeOf(bird, 40)).toEqual({ alt: 40, clear: 0, ground: 40 }); // never sinks into higher ground
+  });
+
+  it('height above the ground is turned into an elevation for the ground under it', () => {
+    expect(setClearance(20, 10)).toEqual({ fly: true, elev: 30 });
+    expect(setClearance(20, -10)).toEqual({ fly: true, elev: 10 });
+    expect(setClearance(0, 10)).toEqual({ fly: false, elev: 0 });
+    expect(setClearance(-5, 0)).toEqual({ fly: false, elev: 0 });
+  });
+
   it('labels what is high or low', () => {
     expect(altLabel({ alt: 0, clear: 0, ground: 0 }, false)).toBe('');
     expect(altLabel({ alt: 30, clear: 30, ground: 0 }, true)).toBe('↑30');
+    expect(altLabel({ alt: 30, clear: 20, ground: 10 }, true)).toBe('↑20'); // feet above the ground, not the base level
     expect(altLabel({ alt: 10, clear: 0, ground: 10 }, false)).toBe('▲10');
     expect(altLabel({ alt: -5, clear: 0, ground: -5 }, false)).toBe('▼5');
     expect(altLabel({ alt: 0, clear: 0, ground: 0 }, true)).toBe(''); // hovering at ground level is just standing

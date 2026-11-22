@@ -149,10 +149,13 @@ await dm.getByRole('button', { name: 'Find and hide it' }).click();
 await dm.locator('.toast', { hasText: /could not find/i }).waitFor({ timeout: 30000 });
 check('a picture with no grid says so and changes nothing', (await meta()).cut === null && (await showing(dm)) === 'original');
 
-// ---- hex grids are not supported yet
+// ---- hex scenes get the same panel (batchT covers finding hexes)
 await dm.evaluate(() => window.__vtt.client.updateScene({ grid: { shape: 'pointy' } }));
 await sleep(400);
-check('with a hex grid the panel explains that it is not available', (await dm.locator('.hint', { hasText: "can't be hidden yet" }).count()) === 1 && (await dm.getByRole('button', { name: 'Find and hide it' }).count()) === 0);
+check('with a hex grid the panel still offers to find the printed grid', (await dm.locator('.hint', { hasText: "can't be hidden yet" }).count()) === 0 && (await dm.getByRole('button', { name: 'Find and hide it' }).count()) === 1);
+await dm.getByRole('button', { name: 'Find and hide it' }).click();
+await dm.locator('.toast', { hasText: /could not find/i }).last().waitFor({ timeout: 30000 });
+check('a plain picture on a hex scene says so too', (await meta()).cut === null);
 
 console.log(errors.length ? errors.join('\n') : 'no console problems');
 await browser.close();

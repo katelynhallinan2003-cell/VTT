@@ -2,12 +2,13 @@ import { useMemo, useRef, useState } from 'preact/hooks';
 import { healthState, HEALTH_LABEL, pctOf } from '../core/combat';
 import { TOKEN_SIZES } from '../core/model';
 import { gridPeriod, isHex } from '../core/hex';
-import { altitudeOf, altLabel, groundAt, setAltitude, zonesOf } from '../core/height';
+import { altitudeOf, altLabel, groundAt, setAltitude, setClearance, zonesOf } from '../core/height';
 import { throttle } from '../core/throttle';
 import type { Board } from '../board/Board';
 import type { TableClient } from '../state/client';
 import type { DockTab, UiState } from '../state/ui';
 import type { GridCut } from '../core/gridcut';
+import { hexGridFor } from '../core/hexcut';
 import type { Aura, GridSettings, LabelMode, SceneMeta, Token, TokenShape } from '../types';
 import { Field, Section, SliderField, Toggle, toast, useClient, useUi } from './common';
 import { uploadImage } from './uploads';
@@ -52,7 +53,8 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
   const allHidden = tokens.every((t) => t.hidden);
   const sizeLabel = TOKEN_SIZES.find((s) => s.size === t0.size)?.label ?? `${t0.size} squares`;
   const viewerSeesState = !client.isDM && !multi && t0.hpShow !== 'off' && t0.hpPct != null && healthState(t0.hpPct) !== 'ok';
-  const sub = multi ? '' : [sizeLabel, viewerSeesState ? HEALTH_LABEL[healthState(t0.hpPct)] : '', t0.hidden ? 'hidden' : '', t0.locked ? 'locked' : '', t0.fx.map((e) => e.n).join(', ')].filter(Boolean).join(' · ');
+  const viewerSeesNumbers = !client.isDM && !multi && t0.hpShow === 'numbers' && t0.hpNow != null && t0.hpCap != null;
+  const sub = multi ? '' : [sizeLabel, viewerSeesNumbers ? `${t0.hpNow}/${t0.hpCap} HP` : '', viewerSeesState ? HEALTH_LABEL[healthState(t0.hpPct)] : '', t0.hidden ? 'hidden' : '', t0.locked ? 'locked' : '', t0.fx.map((e) => e.n).join(', ')].filter(Boolean).join(' · ');
   const tracked = client.isDM ? tokens.filter((t) => t.hp != null && t.maxHp != null) : [];
   const canAura = !multi && editable;
   const zones = zonesOf(client.scene?.draws.values() ?? [], client.grid);
@@ -99,36 +101,39 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
   );
 }
 
-/** How high the selected token(s) are: take off, land, go up or down 5 ft, or type a height. Walkers stand on whatever ground is under them. */
+/** How high the selected token(s) are above the ground under them: take off, land, go up or down 5 ft, or type a height. Walkers stand on whatever ground is under them. */
 function HeightPop(props: { client: TableClient; tokens: Token[]; zones: ReturnType<typeof zonesOf> }) {
   const { client, tokens, zones } = props;
   const alts = tokens.map((t) => altitudeOf(t, groundAt(zones, t)));
   const ids = tokens.map((t) => t.id);
   const flying = tokens.every((t) => t.fly);
-  const same = alts.every((a) => a.alt === alts[0].alt);
-  const move = (f: (a: ReturnType<typeof altitudeOf>) => number) => {
+  const same = alts.every((a) => a.clear === alts[0].clear);
+  // each token is put the same number of feet above ITS OWN ground (so a group over a slope keeps its spacing from the ground, and each one keeps its own elevation if it is only nudged)
+  const apply = (f: (a: ReturnType<typeof altitudeOf>) => number) => {
     tokens.forEach((t, i) => { void client.updateTokens([t.id], setAltitude(f(alts[i]), alts[i].ground)); });
   };
-  const groundTxt = alts.every((a) => a.ground === alts[0].ground) ? (alts[0].ground ? `The ground here is ${alts[0].ground} ft.` : 'The ground here is at the base level.') : 'The ground differs under each token.';
+  const aboveGround = (n: number) => apply((a) => a.ground + n);
+  const groundTxt = alts.every((a) => a.ground === alts[0].ground) ? (alts[0].ground ? `The ground here is ${alts[0].ground} ft above the base level.` : 'The ground here is at the base level.') : 'The ground differs under each token.';
+  const abs = alts.length === 1 && alts[0].clear > 0 && alts[0].ground !== 0 ? ` That is ${alts[0].alt} ft above the base level.` : '';
   return (
     <div class="tt-pop height-pop" onKeyDown={(e) => e.stopPropagation()}>
       <div class="row wrap">
         <button class={`btn small ${flying ? 'primary' : ''}`} title="Take off, or land"
-          onClick={() => { if (flying) void client.updateTokens(ids, { fly: false, elev: 0 }); else move((a) => Math.max(a.ground, 0) + 10); }}>{flying ? 'Flying: land' : 'Take off'}</button>
-        <button class="btn small" title="Down 5 feet" onClick={() => move((a) => a.alt - 5)}>−5</button>
-        <label class="numf" title="Feet above the map's base level">
-          <span>Altitude</span>
-          <input key={same ? alts[0].alt : 'x'} type="number" step={5} defaultValue={same ? alts[0].alt : ''} placeholder="Mixed" aria-label="Altitude in feet"
+          onClick={() => { if (flying) void client.updateTokens(ids, { fly: false, elev: 0 }); else aboveGround(10); }}>{flying ? 'Flying: land' : 'Take off'}</button>
+        <button class="btn small" title="Down 5 feet" onClick={() => apply((a) => a.alt - 5)}>−5</button>
+        <label class="numf" title="Feet above the ground right under it">
+          <span>Above ground</span>
+          <input key={same ? alts[0].clear : 'x'} type="number" step={5} min={0} defaultValue={same ? alts[0].clear : ''} placeholder="Mixed" aria-label="Feet above the ground"
             onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-            onChange={(e) => { const v = (e.target as HTMLInputElement).value; if (v === '') return; const n = Number(v); if (Number.isFinite(n)) move(() => Math.max(-1000, Math.min(5000, n))); }} />
+            onChange={(e) => { const v = (e.target as HTMLInputElement).value; if (v === '') return; const n = Number(v); if (Number.isFinite(n)) aboveGround(Math.max(0, Math.min(5000, n))); }} />
           <span class="unit">ft</span>
         </label>
-        <button class="btn small" title="Up 5 feet" onClick={() => move((a) => a.alt + 5)}>+5</button>
+        <button class="btn small" title="Up 5 feet" onClick={() => apply((a) => a.alt + 5)}>+5</button>
       </div>
       <div class="chips">
-        {[10, 20, 30, 40, 60].map((h) => <button key={h} class="chip" onClick={() => move(() => h)}>{h} ft</button>)}
+        {[10, 20, 30, 40, 60].map((h) => <button key={h} class="chip" onClick={() => aboveGround(h)}>{h} ft</button>)}
       </div>
-      <p class="hint">{groundTxt} A flying token never sinks below it, and a walking one stands on it. Drag a flyer over a cliff and it keeps its altitude.</p>
+      <p class="hint">{groundTxt}{abs} A flyer keeps its elevation when the ground changes under it: 20 ft up over flat ground is 30 ft up once it crosses ground that is 10 ft lower.</p>
     </div>
   );
 }
@@ -199,13 +204,23 @@ function MapGridCut(props: { client: TableClient; board: Board | null; meta: Sce
   const cut = meta.mapGrid;
   const g = meta.grid;
   const adjT = useThrottled((c: GridCut) => { void client.updateScene({ mapGrid: c }); });
-  if (isHex(g)) return <p class="hint">A hex grid printed on a map can't be hidden yet. Switch the grid type to squares to use this.</p>;
   if (!meta.mapUrl) return <p class="hint">Add a map picture first.</p>;
   const k = meta.mapScale;
+  const cutPer = cut ? gridPeriod({ cell: cut.p, shape: cut.hex ?? 'square' }) : { x: 1, y: 1 };
   const mod = (v: number, m: number) => ((v % m) + m) % m;
   /** where the app's grid would sit to land exactly on the printed lines */
-  const implied = cut ? { cell: round2(cut.p * k), ox: round2(mod(meta.mapX + (cut.x + 0.5) * k, cut.p * k)), oy: round2(mod(meta.mapY + (cut.y + 0.5) * k, cut.p * k)) } : null;
-  const aligned = !implied || (Math.abs(g.cell - implied.cell) < 0.5 && [g.ox - implied.ox, g.oy - implied.oy].every((d) => Math.min(Math.abs(d), Math.abs(Math.abs(d) - implied.cell)) < 1.5));
+  const implied: { shape: GridSettings['shape']; cell: number; ox: number; oy: number } | null = !cut ? null
+    : cut.hex ? hexGridFor(cut, k, meta.mapX, meta.mapY)
+    : { shape: 'square', cell: round2(cut.p * k), ox: round2(mod(meta.mapX + (cut.x + 0.5) * k, cut.p * k)), oy: round2(mod(meta.mapY + (cut.y + 0.5) * k, cut.p * k)) };
+  const aligned = (() => {
+    if (!implied) return true;
+    if (implied.shape !== g.shape || Math.abs(g.cell - implied.cell) >= 0.5) return false;
+    const per = gridPeriod(implied);
+    const near = (d: number, m: number) => Math.min(Math.abs(mod(d, m)), Math.abs(m - mod(d, m))) < 1.5;
+    const dx = g.ox - implied.ox, dy = g.oy - implied.oy;
+    // a hex grid looks the same shifted half a box across and half a box down
+    return (near(dx, per.x) && near(dy, per.y)) || (implied.shape !== 'square' && near(dx - per.x / 2, per.x) && near(dy - per.y / 2, per.y));
+  })();
 
   async function find() {
     if (!board || busy) return;
@@ -215,7 +230,7 @@ function MapGridCut(props: { client: TableClient; board: Board | null; meta: Sce
       const r = await board.findMapGrid();
       if ('error' in r) { toast(r.error, 'error', 7000); return; }
       await client.updateScene({ mapGrid: r.cut });
-      toast(`Found lines every ${round2(r.cut.p)} px (about ${round2(r.cut.t)} px thick) and hid them.`, 'ok', 5000);
+      toast(r.cut.hex ? `Found a hex grid (${round2(r.cut.p)} px between hex centres, lines about ${round2(r.cut.t)} px thick) and hid it.` : `Found lines every ${round2(r.cut.p)} px (about ${round2(r.cut.t)} px thick) and hid them.`, 'ok', 5000);
     } finally { setBusy(false); }
   }
 
@@ -229,17 +244,18 @@ function MapGridCut(props: { client: TableClient; board: Board | null; meta: Sce
       {cut && (
         <>
           <Toggle checked={cut.on} onChange={(v) => { void client.updateScene({ mapGrid: { ...cut, on: v } }); }} label="Hide the map's grid lines"
-            hint={`Lines every ${round2(cut.p)} px in the picture, about ${round2(cut.t)} px thick. Everyone sees the same thing.`} />
+            hint={cut.hex ? `A ${cut.hex === 'pointy' ? 'point-up' : 'flat-top'} hex grid, ${round2(cut.p)} px between hex centres in the picture, lines about ${round2(cut.t)} px thick. Everyone sees the same thing.` : `Lines every ${round2(cut.p)} px in the picture, about ${round2(cut.t)} px thick. Everyone sees the same thing.`} />
           {!aligned && implied && (
             <div class="row wrap">
-              <button class="btn small" title="Moves and resizes the app's grid so it sits exactly on the lines printed on the map"
+              <button class="btn small" title="Moves and resizes the app's grid (and switches it to hexes or squares if needed) so it sits exactly on the lines printed on the map"
                 onClick={() => { void client.updateScene({ grid: implied }); toast('Your grid now sits on the printed one', 'ok', 2500); }}>Line my grid up with it</button>
             </div>
           )}
           <Section id="mapgrid-adjust" title="Adjust the hiding" defaultOpen={false}>
             <SliderField label="Line width" value={cut.t} min={1} max={12} step={0.5} unit="px" onInput={(v) => adjT({ ...cut, t: v })} hint="Make this a little wider if a faint edge of a line is still showing." />
-            <SliderField label="Lines shift left / right" value={round2(cut.x)} min={0} max={Math.max(1, Math.round(cut.p))} step={0.1} unit="px" onInput={(v) => adjT({ ...cut, x: v })} />
-            <SliderField label="Lines shift up / down" value={round2(cut.y)} min={0} max={Math.max(1, Math.round(cut.p))} step={0.1} unit="px" onInput={(v) => adjT({ ...cut, y: v })} />
+            <SliderField label="Lines shift left / right" value={round2(cut.x)} min={0} max={Math.max(1, Math.round(cutPer.x))} step={0.1} unit="px" onInput={(v) => adjT({ ...cut, x: v })} />
+            <SliderField label="Lines shift up / down" value={round2(cut.y)} min={0} max={Math.max(1, Math.round(cutPer.y))} step={0.1} unit="px" onInput={(v) => adjT({ ...cut, y: v })} />
+            {cut.hex && <SliderField label="Hex size" value={round2(cut.p)} min={Math.max(8, Math.round(cut.p * 0.85))} max={Math.round(cut.p * 1.15)} step={0.05} unit="px" onInput={(v) => adjT({ ...cut, p: v })} hint="Distance between hex centres. Only needed if the lines drift away from the hexes towards the edges." />}
           </Section>
         </>
       )}

@@ -1,11 +1,18 @@
 // Combat bookkeeping: health states, the initiative order and what tokens can see.
 // Pure functions only, so they are easy to test and the client and the board share one set of rules.
-import type { GridSettings, HealthState, InitEntry, InitPub, InitState, Token, Vec } from '../types';
+import type { GridSettings, HealthState, HpShow, InitEntry, InitPub, InitState, Token, Vec } from '../types';
 
 // ---------------------------------------------------------------- health
 /** Bloodied at half health or less, "mortal" (near death) at a tenth or less. */
 export const BLOODIED_AT = 50;
 export const MORTAL_AT = 10;
+
+/** What a token's health looks like in the part of the database players can read, given what the DM lets them see. */
+export function publicHp(show: HpShow, hp: number | null, max: number | null): { hpPct: number | null; hpNow: number | null; hpCap: number | null } {
+  const pct = show === 'off' ? null : pctOf(hp, max);
+  const nums = show === 'numbers' && hp != null && max != null && max > 0;
+  return { hpPct: pct, hpNow: nums ? hp : null, hpCap: nums ? max : null };
+}
 
 export function pctOf(hp: number | null, max: number | null): number | null {
   if (hp == null || max == null || max <= 0) return null;

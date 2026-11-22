@@ -380,7 +380,7 @@ export function InitStrip(props: { client: TableClient; ui: UiState; board: Boar
           const state = t && !client.isDM && t.hpShow !== 'off' && t.hpPct != null ? healthState(t.hpPct) : 'ok';
           return (
             <li key={it.id} class={`ibox ${turn === it.id ? 'turn' : ''} ${it.secret ? 'secret' : ''} ${mine ? 'mine' : ''} ${t && d.selection.has(t.id) ? 'on' : ''} ${dragId === it.id ? 'dragging' : ''} ${overId === it.id && dragId !== it.id ? 'over' : ''}`}
-              title={`${it.name}${it.secret ? ' (only you see this)' : ''}${state !== 'ok' ? ` · ${HEALTH_LABEL[state]}` : ''}`}
+              title={`${it.name}${it.secret ? ' (only you see this)' : ''}${t && !client.isDM && t.hpShow === 'numbers' && t.hpNow != null ? ` · ${t.hpNow}/${t.hpCap} HP` : ''}${state !== 'ok' ? ` · ${HEALTH_LABEL[state]}` : ''}`}
               draggable={client.isDM}
               onDragStart={(ev) => { if (!client.isDM) return; ev.dataTransfer?.setData('text/plain', it.id); setDragId(it.id); }}
               onDragEnd={() => { setDragId(null); setOverId(null); }}

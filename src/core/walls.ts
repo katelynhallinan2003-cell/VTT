@@ -1,14 +1,17 @@
 // Walls: lines you draw on the map that block what a token can see, where it can walk, and where a spell can spread.
 //
 // A wall is a straight segment. Doors are walls that can be opened, windows are walls you can see through but not walk through.
-// Every wall can also be left undrawn for the players ("invisible"); it still does its job. All geometry here is plain numbers,
-// so it can be tested without a browser.
+// Every wall can also be left undrawn for the players ("invisible"); it still does its job. A wall can be ONE-WAY (a cliff edge: it
+// stops what is on one side of it and lets what is on the other side through) and can have a HEIGHT (what is higher than the top of it
+// sees and moves over it). All geometry here is plain numbers, so it can be tested without a browser.
 
 import type { GridSettings, Vec } from '../types';
 import { hexEdgeMid, isHex } from './hex';
 import { snapToCorner } from './geometry';
 
 export type WallKind = 'wall' | 'door' | 'window';
+/** 0 is a wall that stops both sides. 1 or -1 stops only what stands on that side of the line (see `sideOf`). */
+export type Side = 0 | 1 | -1;
 
 export interface Wall {
   id: string;
@@ -19,9 +22,20 @@ export interface Wall {
   open: boolean;
   /** drawn for the players too (the DM always sees every wall) */
   vis: boolean;
+  /** one-way: stops only what is on this side of it (0: both sides) */
+  one: Side;
+  /** how tall it is in feet, measured from the ground it stands on (0: too tall for anything to pass over) */
+  h: number;
 }
 
-export interface Seg { a: Vec; b: Vec }
+export interface Seg {
+  a: Vec;
+  b: Vec;
+  /** one-way: stops only what is on this side */
+  one?: Side;
+  /** how high its top is above the map's base level; whatever is higher than this sees and moves over it (undefined: no limit) */
+  top?: number;
+}
 
 export const WALL_KINDS: WallKind[] = ['wall', 'door', 'window'];
 export const WALL_NAME: Record<WallKind, string> = { wall: 'Wall', door: 'Door', window: 'Window' };
@@ -40,12 +54,14 @@ const CODE_KIND: Record<string, WallKind> = { w: 'wall', d: 'door', n: 'window' 
 
 const r1 = (n: number) => Math.round(n * 10) / 10;
 
-export function wallToWire(w: Pick<Wall, 'a' | 'b' | 'k' | 'open' | 'vis'>): Record<string, unknown> {
+export function wallToWire(w: Pick<Wall, 'a' | 'b' | 'k' | 'open' | 'vis'> & Partial<Pick<Wall, 'one' | 'h'>>): Record<string, unknown> {
   return {
     p: `${r1(w.a.x)},${r1(w.a.y)},${r1(w.b.x)},${r1(w.b.y)}`,
     k: KIND_CODE[w.k],
     ...(w.k === 'door' && w.open ? { o: 1 } : {}),
     ...(w.vis ? { v: 1 } : {}),
+    ...(w.one ? { s: w.one } : {}),
+    ...(w.h && w.h > 0 ? { h: Math.round(w.h) } : {}),
   };
 }
 
@@ -54,22 +70,49 @@ export function normalizeWall(id: string, raw: any): Wall | null {
   const n = raw.p.split(',').map(Number);
   if (n.length < 4 || n.slice(0, 4).some((v: number) => !Number.isFinite(v))) return null;
   const k = CODE_KIND[raw.k as string] ?? 'wall';
-  return { id, a: { x: n[0], y: n[1] }, b: { x: n[2], y: n[3] }, k, open: k === 'door' && !!raw.o, vis: !!raw.v };
+  const one: Side = raw.s === 1 ? 1 : raw.s === -1 ? -1 : 0;
+  const h = Number(raw.h);
+  return { id, a: { x: n[0], y: n[1] }, b: { x: n[2], y: n[3] }, k, open: k === 'door' && !!raw.o, vis: !!raw.v, one, h: Number.isFinite(h) && h > 0 ? Math.min(1000, Math.round(h)) : 0 };
 }
 
-export const segsOf = (walls: Iterable<Wall>, blocks: (w: Wall) => boolean): Seg[] => {
+/** The pieces of wall that block something, with what it takes to get past each. `topOf` says how high a wall's top is (feet above the map's base). */
+export const segsOf = (walls: Iterable<Wall>, blocks: (w: Wall) => boolean, topOf?: (w: Wall) => number): Seg[] => {
   const out: Seg[] = [];
-  for (const w of walls) if (blocks(w)) out.push({ a: w.a, b: w.b });
+  for (const w of walls) {
+    if (!blocks(w)) continue;
+    const s: Seg = { a: w.a, b: w.b };
+    if (w.one) s.one = w.one;
+    if (w.h > 0 && topOf) s.top = topOf(w);
+    out.push(s);
+  }
   return out;
 };
-export const sightSegs = (walls: Iterable<Wall>): Seg[] => segsOf(walls, blocksSight);
-export const moveSegs = (walls: Iterable<Wall>): Seg[] => segsOf(walls, blocksMove);
+export const sightSegs = (walls: Iterable<Wall>, topOf?: (w: Wall) => number): Seg[] => segsOf(walls, blocksSight, topOf);
+export const moveSegs = (walls: Iterable<Wall>, topOf?: (w: Wall) => number): Seg[] => segsOf(walls, blocksMove, topOf);
+
+/** Which side of a wall's line a point is on: 1 where the wall's "right" is (turning clockwise on the screen from a toward b), -1 the other side, 0 right on it. */
+export function sideOf(s: Pick<Seg, 'a' | 'b'>, p: Vec): Side {
+  const c = cross(s.b.x - s.a.x, s.b.y - s.a.y, p.x - s.a.x, p.y - s.a.y);
+  return c > 1e-9 ? 1 : c < -1e-9 ? -1 : 0;
+}
+
+/** The pieces that really stop something standing at `o`, `alt` feet up: a one-way wall only stops it from its blocking side, and a wall lower than `alt` does not stop it at all. */
+export function segsFrom(segs: Seg[], o: Vec, alt?: number): Seg[] {
+  let special = false;
+  for (const s of segs) if (s.one || s.top !== undefined) { special = true; break; }
+  if (!special) return segs;
+  return segs.filter((s) => {
+    if (s.top !== undefined && alt !== undefined && alt > s.top) return false;
+    if (s.one) { const side = sideOf(s, o); if (side !== 0 && side !== s.one) return false; }
+    return true;
+  });
+}
 
 export const wallMid = (w: Pick<Wall, 'a' | 'b'>): Vec => ({ x: (w.a.x + w.b.x) / 2, y: (w.a.y + w.b.y) / 2 });
 export const wallLength = (w: Pick<Wall, 'a' | 'b'>): number => Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y);
 
 // ------------------------------------------------------------------ geometry
-const cross = (ax: number, ay: number, bx: number, by: number) => ax * by - ay * bx;
+function cross(ax: number, ay: number, bx: number, by: number): number { return ax * by - ay * bx; }
 
 /** How far along a ray (in steps of its direction) it meets a segment, or Infinity. Hits right at the start are ignored. */
 export function rayHit(o: Vec, dx: number, dy: number, s: Seg): number {
@@ -101,24 +144,24 @@ export function nearestOnSeg(p: Vec, s: Seg): Vec {
  * How far along from→to (0 to 1) the first of the segments is crossed, or null if none is.
  * Touching a wall's end counts, so nobody squeezes through where two walls meet.
  */
-export function firstCrossing(from: Vec, to: Vec, segs: Seg[]): number | null {
+export function firstCrossing(from: Vec, to: Vec, segs: Seg[], alt?: number): number | null {
   const dx = to.x - from.x, dy = to.y - from.y;
   let best = Infinity;
-  for (const s of segs) {
+  for (const s of segsFrom(segs, from, alt)) {
     const t = rayHit(from, dx, dy, s);
     if (t <= 1 && t < best) best = t;
   }
   return best === Infinity ? null : best;
 }
 
-export const pathBlocked = (from: Vec, to: Vec, segs: Seg[]): boolean => firstCrossing(from, to, segs) !== null;
+export const pathBlocked = (from: Vec, to: Vec, segs: Seg[], alt?: number): boolean => firstCrossing(from, to, segs, alt) !== null;
 
-/** Can something at `a` see (or, for a spell, reach) `b` in a straight line? */
-export const lineOfSight = (a: Vec, b: Vec, segs: Seg[]): boolean => !pathBlocked(a, b, segs);
+/** Can something at `a` (`alt` feet up) see (or, for a spell, reach) `b` in a straight line? */
+export const lineOfSight = (a: Vec, b: Vec, segs: Seg[], alt?: number): boolean => !pathBlocked(a, b, segs, alt);
 
 /** The end of a move from→to that stops short of the first wall in the way, `gap` pixels before it. */
-export function clampMove(from: Vec, to: Vec, segs: Seg[], gap: number): Vec {
-  const t = firstCrossing(from, to, segs);
+export function clampMove(from: Vec, to: Vec, segs: Seg[], gap: number, alt?: number): Vec {
+  const t = firstCrossing(from, to, segs, alt);
   if (t === null) return to;
   const len = Math.hypot(to.x - from.x, to.y - from.y);
   const f = len > 0 ? Math.max(0, t - gap / len) : 0;
@@ -136,8 +179,8 @@ export interface Visibility {
  * What a viewer at `o` can see out to distance `r`: a ring around them, cut back wherever a wall gets in the way.
  * Rays are cast at both sides of every wall end in range (so the outline hugs corners exactly) and at regular steps (so open ground stays round).
  */
-export function visibilityPolygon(o: Vec, r: number, segs: Seg[], steps = 64): Visibility {
-  const near = segs.filter((s) => distToSeg(o, s) < r);
+export function visibilityPolygon(o: Vec, r: number, segs: Seg[], steps = 64, alt?: number): Visibility {
+  const near = segsFrom(segs, o, alt).filter((s) => distToSeg(o, s) < r);
   const ring = (n: number): Vec[] => Array.from({ length: n }, (_, i) => ({ x: o.x + Math.cos((i / n) * Math.PI * 2) * r, y: o.y + Math.sin((i / n) * Math.PI * 2) * r }));
   if (!near.length) return { poly: ring(steps), free: true };
   const angles: number[] = [];
@@ -202,7 +245,7 @@ export type RevealShape = { t: 'line'; pts: Vec[]; w: number } | { t: 'poly'; pt
  * What a token reveals as it walks a route: with no wall anywhere near, one thick line (as before); otherwise
  * what it could see from a spot every `step` pixels along the way, so it does not reveal rooms it only walked past.
  */
-export function routeReveal(route: Vec[], r: number, segs: Seg[], step: number): RevealShape[] {
+export function routeReveal(route: Vec[], r: number, segs: Seg[], step: number, alt?: number): RevealShape[] {
   if (!route.length) return [];
   const samples: Vec[] = [route[0]];
   for (let i = 1; i < route.length; i++) {
@@ -211,7 +254,7 @@ export function routeReveal(route: Vec[], r: number, segs: Seg[], step: number):
     const n = Math.max(1, Math.ceil(len / step));
     for (let k = 1; k <= n; k++) samples.push({ x: a.x + ((b.x - a.x) * k) / n, y: a.y + ((b.y - a.y) * k) / n });
   }
-  const vis = samples.map((s) => visibilityPolygon(s, r, segs));
+  const vis = samples.map((s) => visibilityPolygon(s, r, segs, 64, alt));
   if (vis.every((v) => v.free)) return [{ t: 'line', pts: route, w: r * 2 }];
   return vis.map((v) => ({ t: 'poly', pts: simplifyPoly(v.poly, 0.75) }));
 }
@@ -292,8 +335,8 @@ export function carveWalls(walls: Iterable<Wall>, cut: Seg, tol: number): { remo
     if (c1 - c0 < tol) continue;
     remove.push(w.id);
     const at = (s: number): Vec => ({ x: w.a.x + ux * s, y: w.a.y + uy * s });
-    if (c0 > tol) add.push({ a: { ...w.a }, b: at(c0), k: w.k, open: false, vis: w.vis });
-    if (len - c1 > tol) add.push({ a: at(c1), b: { ...w.b }, k: w.k, open: false, vis: w.vis });
+    if (c0 > tol) add.push({ a: { ...w.a }, b: at(c0), k: w.k, open: false, vis: w.vis, one: w.one, h: w.h });
+    if (len - c1 > tol) add.push({ a: at(c1), b: { ...w.b }, k: w.k, open: false, vis: w.vis, one: w.one, h: w.h });
   }
   return { remove, add };
 }
@@ -301,8 +344,111 @@ export function carveWalls(walls: Iterable<Wall>, cut: Seg, tol: number): { remo
 /** The squares a template really reaches: the ones the point it starts from can see in a straight line (walls and closed doors stop it). */
 export function reachableCells(cells: Vec[], from: Vec, sight: Seg[] | undefined): Vec[] {
   if (!sight?.length) return cells;
-  // a template that starts on a wall is not held back by that wall
-  const segs = sight.filter((sg) => distToSeg(from, sg) > 0.75);
+  // a template that starts on a wall is not held back by that wall; a one-way wall only holds it back from its blocking side
+  const segs = segsFrom(sight, from).filter((sg) => distToSeg(from, sg) > 0.75);
   if (!segs.length) return cells;
   return cells.filter((c) => Math.hypot(c.x - from.x, c.y - from.y) < 1 || lineOfSight(from, c, segs));
+}
+
+// ------------------------------------------------------------------ freeform shapes
+/** Douglas-Peucker for an open line: drops the points that do not bend it by more than `tol` pixels. The ends always stay. */
+export function simplifyPath(pts: Vec[], tol: number): Vec[] {
+  if (pts.length < 3) return pts.slice();
+  const keep = new Array<boolean>(pts.length).fill(false);
+  keep[0] = keep[pts.length - 1] = true;
+  const stack: [number, number][] = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [i0, i1] = stack.pop()!;
+    let worst = -1, wd = tol;
+    for (let i = i0 + 1; i < i1; i++) { const d = distToSeg(pts[i], { a: pts[i0], b: pts[i1] }); if (d > wd) { wd = d; worst = i; } }
+    if (worst >= 0) { keep[worst] = true; stack.push([i0, worst], [worst, i1]); }
+  }
+  return pts.filter((_, i) => keep[i]);
+}
+
+/** The corners of a round room: `n` points around a circle, going clockwise on the screen and starting at angle `start`. */
+export function circlePoints(c: Vec, r: number, n: number, start = 0): Vec[] {
+  return Array.from({ length: n }, (_, i) => ({ x: c.x + Math.cos(start + (i / n) * Math.PI * 2) * r, y: c.y + Math.sin(start + (i / n) * Math.PI * 2) * r }));
+}
+
+/** The walls that join a list of points one after another (`closed` also joins the last to the first). Points closer than `min` pixels to the one before are skipped. */
+export function chainSegments(pts: Vec[], closed: boolean, min = 0): { a: Vec; b: Vec }[] {
+  const keep: Vec[] = [];
+  for (const p of pts) if (!keep.length || Math.hypot(p.x - keep[keep.length - 1].x, p.y - keep[keep.length - 1].y) > min) keep.push(p);
+  const out: { a: Vec; b: Vec }[] = [];
+  for (let i = 1; i < keep.length; i++) out.push({ a: keep[i - 1], b: keep[i] });
+  if (closed && keep.length > 2) out.push({ a: keep[keep.length - 1], b: keep[0] });
+  return out;
+}
+
+/**
+ * Turn a hand-drawn stroke into corners: the stroke is simplified (more or less, by `tol`), its ends snap onto a nearby wall end or onto each other
+ * (a stroke that comes back to where it started closes into a loop). Returns the corners and whether they close.
+ */
+export function freehandCorners(raw: Vec[], tol: number, magnet: number, ends: Vec[]): { pts: Vec[]; closed: boolean } {
+  if (raw.length < 2) return { pts: raw.slice(), closed: false };
+  let pts = simplifyPath(raw, tol);
+  const near = (p: Vec): Vec | null => { let best: Vec | null = null, bd = magnet; for (const e of ends) { const d = Math.hypot(e.x - p.x, e.y - p.y); if (d <= bd) { bd = d; best = e; } } return best; };
+  const first = pts[0], last = pts[pts.length - 1];
+  const closed = pts.length >= 4 && Math.hypot(last.x - first.x, last.y - first.y) <= magnet * 1.5;
+  if (closed) {
+    pts = pts.slice(0, -1);
+    const s = near(pts[0]);
+    if (s) pts[0] = s;
+  } else {
+    const a = near(first), b = near(last);
+    if (a) pts[0] = a;
+    if (b) pts[pts.length - 1] = b;
+  }
+  return { pts, closed };
+}
+
+// ------------------------------------------------------------------ one-way marks
+/**
+ * The little ticks drawn along the blocking side of a one-way wall (like the hatching on a cliff edge): each is a segment
+ * starting on the wall and running `len` pixels out to the side that is stopped.
+ */
+export function hatchTicks(a: Vec, b: Vec, side: Side, spacing: number, len: number): Seg[] {
+  const L = Math.hypot(b.x - a.x, b.y - a.y);
+  if (!side || L < 1) return [];
+  const ux = (b.x - a.x) / L, uy = (b.y - a.y) / L;
+  const nx = -uy * side, ny = ux * side; // the blocked side
+  const n = Math.max(1, Math.round(L / spacing));
+  const out: Seg[] = [];
+  for (let i = 0; i < n; i++) {
+    const t = ((i + 0.5) / n) * L;
+    const p = { x: a.x + ux * t, y: a.y + uy * t };
+    out.push({ a: p, b: { x: p.x + nx * len, y: p.y + ny * len } });
+  }
+  return out;
+}
+
+/** Is `p` on the blocked side of a one-way wall (or is the wall two-way, which has no free side)? */
+export const onBlockedSide = (w: Pick<Wall, 'a' | 'b' | 'one'>, p: Vec): boolean => !w.one || sideOf(w, p) === w.one || sideOf(w, p) === 0;
+
+// ------------------------------------------------------------------ splitting and joining
+/** The two walls a wall becomes when it gets a corner at `at` (a point on it). */
+export function splitPieces(w: Wall, at: Vec): [Omit<Wall, 'id'>, Omit<Wall, 'id'>] {
+  const base = { k: w.k, open: w.open, vis: w.vis, one: w.one, h: w.h };
+  return [{ ...base, a: { ...w.a }, b: { ...at } }, { ...base, a: { ...at }, b: { ...w.b } }];
+}
+
+/**
+ * Take the corner out where exactly two walls meet at `at`: they become one wall between their far ends.
+ * Returns null when it is not exactly two walls of the same kind (and, for one-way walls, the same blocked side).
+ */
+export function joinAt(walls: Iterable<Wall>, at: Vec, tol: number): { remove: [string, string]; add: Omit<Wall, 'id'> } | null {
+  const here: { w: Wall; end: 'a' | 'b' }[] = [];
+  for (const w of walls) {
+    for (const end of ['a', 'b'] as const) if (Math.hypot(w[end].x - at.x, w[end].y - at.y) <= tol) here.push({ w, end });
+  }
+  if (here.length !== 2 || here[0].w.id === here[1].w.id) return null;
+  const [p, q] = here;
+  if (p.w.k !== q.w.k || p.w.vis !== q.w.vis || p.w.h !== q.w.h || p.w.open !== q.w.open) return null;
+  const far = (x: { w: Wall; end: 'a' | 'b' }) => (x.end === 'a' ? x.w.b : x.w.a);
+  // the new wall runs from p's far end to q's far end; each old wall's blocked side is turned to match that direction
+  const sideP: Side = p.w.one ? ((p.end === 'b' ? p.w.one : -p.w.one) as Side) : 0;
+  const sideQ: Side = q.w.one ? ((q.end === 'a' ? q.w.one : -q.w.one) as Side) : 0;
+  if (sideP !== sideQ) return null;
+  return { remove: [p.w.id, q.w.id], add: { a: { ...far(p) }, b: { ...far(q) }, k: p.w.k, open: p.w.open, vis: p.w.vis, one: sideP, h: p.w.h } };
 }

@@ -1,7 +1,7 @@
 import type { Unsub } from '../backend/types';
 import { FONT_KEYS, type FillMode, type SphereSnap } from '../core/draw';
 import type { Effect } from '../types';
-import type { WallKind, WallSnap } from '../core/walls';
+import type { Side, WallKind, WallSnap } from '../core/walls';
 
 export type Tool = 'select' | 'grid' | 'fog' | 'draw' | 'template' | 'ruler' | 'height' | 'wall';
 export type DrawTool = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'erase';
@@ -69,16 +69,22 @@ export interface UiData {
   heightBrush: number;
   /** new areas add to the ground below them instead of setting its height */
   heightAdds: boolean;
-  /** show the height zones on the map (the Heights tool shows them anyway) */
-  showHeights: boolean;
+  /** when the height of the ground shows: only while something is being moved or measured over it (auto), always, or only in the Heights tool */
+  heightView: 'auto' | 'always' | 'tool';
   /** the Walls tool: draw new walls, or select and edit the ones that are there */
   wallMode: 'draw' | 'edit';
   /** what the next wall drawn is: a wall, a door or a window */
   wallKind: WallKind;
   /** whether a new wall is drawn for the players (null = the default for its kind) */
   wallVis: boolean | null;
-  /** draw walls one segment at a time, or as a box */
-  wallShape: 'line' | 'box';
+  /** draw walls one segment at a time, as a box, freehand, or as a round room */
+  wallShape: 'line' | 'box' | 'free' | 'circle';
+  /** how many corners a freehand or round wall gets */
+  wallDetail: 'low' | 'mid' | 'high';
+  /** the next wall is one-way: it stops only what is on this side of it as it is drawn (1 right, -1 left, 0 both sides) */
+  wallOne: Side;
+  /** how tall the next wall is in feet (0: nothing passes over it) */
+  wallH: number;
   /** where wall ends land: grid corners, corners and half squares, or anywhere */
   wallSnap: WallSnap;
   /** the walls selected in the Walls tool */
@@ -141,11 +147,18 @@ export class UiState {
     heightSnap: readFlag('vtt-height-snap', true),
     heightBrush: (() => { try { const n = Number(localStorage.getItem('vtt-height-brush')); return Number.isFinite(n) && n >= 1 && n <= 8 ? n : 1; } catch { return 1; } })(),
     heightAdds: readFlag('vtt-height-adds', false),
-    showHeights: readFlag('vtt-show-heights', true),
+    heightView: (() => {
+      const v = readStr('vtt-height-view', '', ['auto', 'always', 'tool', ''] as const);
+      if (v) return v;
+      try { return localStorage.getItem('vtt-show-heights') === '0' ? 'tool' : 'auto'; } catch { return 'auto'; } // from the old on/off setting
+    })(),
     wallMode: readStr('vtt-wall-mode', 'draw', ['draw', 'edit'] as const),
     wallKind: readStr('vtt-wall-kind', 'wall', ['wall', 'door', 'window'] as const),
     wallVis: (() => { try { const v = localStorage.getItem('vtt-wall-vis'); return v === '1' ? true : v === '0' ? false : null; } catch { return null; } })(),
-    wallShape: readStr('vtt-wall-shape', 'line', ['line', 'box'] as const),
+    wallShape: readStr('vtt-wall-shape', 'line', ['line', 'box', 'free', 'circle'] as const),
+    wallDetail: readStr('vtt-wall-detail', 'mid', ['low', 'mid', 'high'] as const),
+    wallOne: (() => { try { const v = localStorage.getItem('vtt-wall-one'); return v === '1' ? 1 : v === '-1' ? -1 : 0; } catch { return 0; } })() as Side,
+    wallH: (() => { try { const n = Number(localStorage.getItem('vtt-wall-h')); return Number.isFinite(n) && n > 0 ? Math.min(1000, Math.round(n)) : 0; } catch { return 0; } })(),
     wallSnap: readStr('vtt-wall-snap', 'half', ['corner', 'half', 'off'] as const),
     wallSel: new Set(),
     showWalls: readFlag('vtt-show-walls', true),
@@ -187,11 +200,14 @@ export class UiState {
       if (patch.heightSnap !== undefined) localStorage.setItem('vtt-height-snap', patch.heightSnap ? '1' : '0');
       if (patch.heightBrush !== undefined) localStorage.setItem('vtt-height-brush', String(patch.heightBrush));
       if (patch.heightAdds !== undefined) localStorage.setItem('vtt-height-adds', patch.heightAdds ? '1' : '0');
-      if (patch.showHeights !== undefined) localStorage.setItem('vtt-show-heights', patch.showHeights ? '1' : '0');
+      if (patch.heightView !== undefined) localStorage.setItem('vtt-height-view', patch.heightView);
       if (patch.wallMode !== undefined) localStorage.setItem('vtt-wall-mode', patch.wallMode);
       if (patch.wallKind !== undefined) localStorage.setItem('vtt-wall-kind', patch.wallKind);
       if (patch.wallVis !== undefined) localStorage.setItem('vtt-wall-vis', patch.wallVis === null ? '' : patch.wallVis ? '1' : '0');
       if (patch.wallShape !== undefined) localStorage.setItem('vtt-wall-shape', patch.wallShape);
+      if (patch.wallDetail !== undefined) localStorage.setItem('vtt-wall-detail', patch.wallDetail);
+      if (patch.wallOne !== undefined) localStorage.setItem('vtt-wall-one', String(patch.wallOne));
+      if (patch.wallH !== undefined) localStorage.setItem('vtt-wall-h', String(patch.wallH));
       if (patch.wallSnap !== undefined) localStorage.setItem('vtt-wall-snap', patch.wallSnap);
       if (patch.showWalls !== undefined) localStorage.setItem('vtt-show-walls', patch.showWalls ? '1' : '0');
       if (patch.initPos !== undefined) localStorage.setItem('vtt-init-pos', patch.initPos);

@@ -64,12 +64,12 @@ check('H opens the Heights panel', (await dm.evaluate(() => window.__vtt.ui.data
 check('it paints by default', (await dm.evaluate(() => window.__vtt.ui.data.heightMode)) === 'paint');
 check('there are no Box / Circle buttons any more', (await dm.locator('.flyout .seg button', { hasText: /^(Box|Circle)$/ }).count()) === 0);
 check('the panel has Paint, Rub out and Move', (await dm.locator('.flyout .seg button', { hasText: /^(Paint|Rub out|Move)$/ }).count()) === 3);
-await dm.locator('.flyout .chip', { hasText: /^\+10$/ }).click();
+await dm.locator('.flyout .chip', { hasText: /^10$/ }).click();
 check('the next ground defaults to 10 ft and the card says it is for the next stroke', (await dm.evaluate(() => window.__vtt.ui.data.heightFt)) === 10 && (await dm.locator('.ht-card', { hasText: 'Next ground you paint' }).count()) === 1);
 
 // ---- paint a stroke of whole squares: it shows a height label and a brush while you drag
 await drag([cx(10), cy(11)], [cx(13), cy(11)], { peek: async () => {
-  check('while dragging, the label shows the height', await dm.evaluate(() => window.__vtt.board.plotLabels.some((l) => l && l.visible && /\+10 ft/.test(l.text))));
+  check('while dragging, the label shows the height', await dm.evaluate(() => window.__vtt.board.plotLabels.some((l) => l && l.visible && /^10 ft$/.test(l.text))));
 } });
 let ts = await terrain();
 check('one stroke of whole squares is saved', ts.length === 1 && ts[0].hc && ts[0].hz === 10 && !ts[0].he && !!ts[0].hg, JSON.stringify(ts));
@@ -94,7 +94,7 @@ check('both rows are now 10 ft', (await ground(cx(12), cy(11))) === 10 && (await
 // ---- Esc lets go, and the next stroke starts a new area
 await dm.keyboard.press('Escape');
 check('Esc deselects but keeps the Heights tool', (await sel()).length === 0 && (await dm.evaluate(() => window.__vtt.ui.data.tool)) === 'height');
-await dm.locator('.flyout .chip', { hasText: /^\+20$/ }).count();
+await dm.locator('.flyout .chip', { hasText: /^20$/ }).count();
 await dm.locator('.ht-card .numf input').fill('20');
 await dm.locator('.ht-card .numf input').blur();
 check('with nothing selected the number sets the next ground', (await dm.evaluate(() => window.__vtt.ui.data.heightFt)) === 20);
@@ -116,7 +116,7 @@ check('changing the height changes every stroke of the area', ts.filter((t) => t
 check('the other area is untouched', (await ground(cx(13), cy(13))) === 20);
 
 // ---- an area can add to the ground under it
-await dm.locator('.ht-card .seg button', { hasText: 'Adds to ground' }).click();
+await dm.locator('.ht-card .seg button', { hasText: 'Added on top' }).click();
 await sleep(300);
 ar = await areas();
 check('Adds to ground flips the area to additive', ar[0].add === true);
@@ -126,7 +126,7 @@ await drag([cx(12), cy(13)], [cx(13), cy(13)]);
 check('an older adding area painted over a newer 20 ft area is hidden by it (newer sits on top)', (await ground(cx(12), cy(13))) === 20, String(await ground(cx(12), cy(13))));
 // a new area made after both, set to add 5, stacks on whatever is under it
 await dm.keyboard.press('Escape');
-await dm.locator('.ht-card .seg button', { hasText: 'Adds to ground' }).click();
+await dm.locator('.ht-card .seg button', { hasText: 'Added on top' }).click();
 await dm.locator('.ht-card .numf input').fill('5');
 await dm.locator('.ht-card .numf input').blur();
 await sleep(200);
@@ -136,7 +136,7 @@ check('and 30 ft over the 25 ft area', (await ground(cx(12), cy(12))) === 30, St
 await dm.screenshot({ path: '/tmp/shots/n2-stacked.png' });
 
 // ---- Sets height puts it back to an exact height
-await dm.locator('.ht-card .seg button', { hasText: 'Sets height' }).click();
+await dm.locator('.ht-card .seg button', { hasText: 'Exact height' }).click();
 await sleep(300);
 check('Sets height: that ground is exactly 5 ft, whatever is under it', (await ground(cx(12), cy(13))) === 5 && (await ground(cx(12), cy(12))) === 5);
 await dm.locator('.ht-card .btn', { hasText: /^Delete area/ }).click();
@@ -225,7 +225,7 @@ check('ground is selected in the Heights tool', (await sel()).length > 0);
 await dm.keyboard.press('v');
 await sleep(200);
 check('switching tools lets go of it', (await sel()).length === 0);
-await dm.evaluate(() => window.__vtt.ui.set({ showHeights: true }));
+await dm.evaluate(() => window.__vtt.ui.set({ heightView: 'always' }));
 await click([cx(11), cy(11)]);
 check('the select tool does not grab painted ground', (await sel()).length === 0);
 check('the select tool has no inspector for it', (await dm.locator('.drawtag').count()) === 0);
@@ -248,7 +248,7 @@ await dm.locator('.ht-card .numf input').fill('30');
 await dm.locator('.ht-card .numf input').blur();
 await sleep(350);
 check('its height can be changed', (await ground(cx(11), cy(4))) === 30);
-check('the Adds button is off for it (an old box cannot add)', await dm.locator('.ht-card .seg button', { hasText: 'Adds to ground' }).isDisabled());
+check('the Adds button is off for it (an old box cannot add)', await dm.locator('.ht-card .seg button', { hasText: 'Added on top' }).isDisabled());
 await dm.screenshot({ path: '/tmp/shots/n3-final.png' });
 
 // ---- clear all

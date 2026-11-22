@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { groundAt, zonesOf } from '../core/height';
 import { TOKEN_SIZES } from '../core/model';
 import type { TableClient } from '../state/client';
 import type { Aura, HpShow, LabelMode, Token, TokenShape } from '../types';
@@ -47,6 +48,13 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
   const same = <K extends keyof Token>(k: K): Token[K] | null => (tokens.every((t) => t[k] === t0[k]) ? t0[k] : null);
   const val = <K extends keyof Token>(k: K): Token[K] | null => (k in draft ? (draft[k] as Token[K]) : same(k));
   const set = (p: Partial<Token>) => setDraft((d) => ({ ...d, ...p }));
+  // how high the ground is under the token(s): a flyer's height is shown above it, though what is stored is its elevation
+  const zones = zonesOf(client.scene?.draws.values() ?? [], client.grid);
+  const grounds = tokens.map((t) => groundAt(zones, t));
+  const g0 = grounds[0] ?? 0;
+  const sameGround = grounds.every((g) => g === g0);
+  const elevNow = draft.elev ?? same('elev');
+  const elevShown: number | '' = elevNow == null ? '' : sameGround ? Math.max(0, elevNow - g0) : elevNow;
 
   const img = file ? preview : (('img' in draft ? draft.img : t0.img) ?? null);
   const framing = {
@@ -104,12 +112,17 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
             <TokenCropper src={img} shape={shape} ring={ring} ringW={ringW} name={name} framing={framing} disabled={!editable} tools={tools}
               onChange={(f) => set(f)} bg={imgBg} onBg={(c) => set({ imgBg: c })} paintApi={paintApi} onPaint={() => setPaintTouched(true)} />
             <div class="row wrap" style={{ marginTop: '10px', justifyContent: 'center' }}>
-              <PickImage label={img ? 'Replace picture…' : 'Add picture…'} disabled={!editable} onFile={(f) => { setFile(f); set({ ...NO_FRAMING }); }} />
-              {img && <button class="btn small" disabled={!editable} onClick={() => { setFile(null); set({ img: null, ...NO_FRAMING }); }}>Remove picture</button>}
-              <button class={`btn small ${tools ? 'primary' : ''}`} title="Show or hide the painting, erasing, shape and ring thickness tools" onClick={() => setTools((v) => !v)}>
+              {!img && <PickImage label="Add picture…" disabled={!editable} onFile={(f) => { setFile(f); set({ ...NO_FRAMING }); }} />}
+              <button class={`btn small ${tools ? 'primary' : ''}`} title="Replace or remove the picture, paint on it, erase, cut out with auto select, and more" onClick={() => setTools((v) => !v)}>
                 {tools ? 'Hide picture tools' : 'Picture tools…'}
               </button>
             </div>
+            {tools && img && (
+              <div class="row wrap" style={{ marginTop: '6px', justifyContent: 'center' }}>
+                <PickImage label="Replace picture…" disabled={!editable} onFile={(f) => { setFile(f); set({ ...NO_FRAMING }); }} />
+                <button class="btn small" disabled={!editable} onClick={() => { setFile(null); set({ img: null, ...NO_FRAMING }); }}>Remove picture</button>
+              </div>
+            )}
           </div>
         )}
 
@@ -152,13 +165,14 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
           </Field>
 
           <h4>Height</h4>
-          <Toggle checked={val('fly') === true} onChange={(v) => set({ fly: v, ...(v && !((val('elev') ?? 0) > 0) ? { elev: 10 } : {}) })} label="Flying" disabled={!editable}
-            hint="Off the ground. It keeps its altitude, and shows a shadow and a ↑ tag. Walking tokens stand on whatever height the ground has (see the Heights tool)." />
+          <Toggle checked={val('fly') === true} onChange={(v) => set({ fly: v, ...(v && !(((val('elev') ?? 0) as number) > g0) ? { elev: g0 + 10 } : {}) })} label="Flying" disabled={!editable}
+            hint="Off the ground. It keeps its elevation, and shows a shadow and a ↑ tag with how far above the ground it is. Walking tokens stand on whatever height the ground has (see the Heights tool)." />
           {val('fly') !== false && (
-            <Field label="Altitude (feet)" hint="Feet above the map's base level. It never sinks below the ground: over a 10 ft cliff, 5 means it is on the cliff top.">
-              <input type="number" class="num" step={5} min={-1000} max={5000} disabled={!editable || val('fly') !== true} value={(draft.elev ?? same('elev') ?? '') as number | ''}
+            <Field label={sameGround ? 'Height above the ground (feet)' : 'Elevation (feet above the map base)'}
+              hint={sameGround ? 'Measured from the ground right under it. If the ground rises or falls under a flyer, it keeps its elevation, so this number changes: 20 ft up becomes 30 ft up over ground that is 10 ft lower.' : 'These tokens stand over different ground, so this is measured from the map base level.'}>
+              <input type="number" class="num" step={5} min={sameGround ? 0 : -1000} max={5000} disabled={!editable || val('fly') !== true} value={elevShown}
                 placeholder={val('elev') === null ? 'Mixed' : '0'}
-                onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ elev: v === '' ? 0 : Math.round(Number(v)) }); }} />
+                onInput={(e) => { const v = (e.target as HTMLInputElement).value; const n = v === '' ? 0 : Math.round(Number(v)); set({ elev: sameGround ? g0 + Math.max(0, n) : n }); }} />
             </Field>
           )}
 
@@ -194,12 +208,13 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
                   </Field>
                 </div>
               )}
-              <Field label="What players see of its health" hint="Players never see the numbers, only what this setting shows.">
+              <Field label="What players see of its health" hint="Players only ever see what this setting shows. The hit points themselves stay hidden unless you pick the last option.">
                 <select disabled={!editable} value={val('hpShow') ?? ''} onChange={(e) => set({ hpShow: (e.target as HTMLSelectElement).value as HpShow })}>
                   {val('hpShow') === null && <option value="">Mixed</option>}
                   <option value="off">Nothing at all</option>
                   <option value="state">Colour only: orange when bloodied, red when near death (no bar)</option>
                   <option value="bar">Colour and a health bar (no numbers)</option>
+                  <option value="numbers">Colour, a bar and the real numbers (12/30)</option>
                 </select>
               </Field>
               <h4>Initiative</h4>

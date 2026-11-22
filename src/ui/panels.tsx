@@ -365,7 +365,7 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
         {meta.fog.vision && (
           <>
             <Toggle checked={meta.fog.explore} onChange={(v) => { void client.updateScene({ fog: { explore: v } }); }} label="Keep what they have explored"
-              hint="While your browser is open, the ground a token walks over stays revealed, following the route it really took. Hold W (for warp) while dragging a token to teleport it without clearing the way." />
+              hint="While your browser is open, the ground a token walks over stays revealed, following the route it really took. Hold Q while dragging a token to teleport it without clearing the way." />
             <SightAll client={client} />
           </>
         )}

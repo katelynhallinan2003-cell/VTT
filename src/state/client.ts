@@ -53,7 +53,7 @@ export interface SceneState {
 }
 
 /** A drawing as the caller describes it; the text styling and the fill colour are optional. */
-export type NewDrawing = Omit<Drawing, 'id' | 'uid' | 't' | 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc'> & Partial<Pick<Drawing, 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc'>>;
+export type NewDrawing = Omit<Drawing, 'id' | 'uid' | 't' | 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc' | 'dt'> & Partial<Pick<Drawing, 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc' | 'dt'>>;
 export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'hg' | 'ha' | 'he' | 'hc'>>;
 
 export type ScenePatch = Partial<Omit<SceneMeta, 'grid' | 'fog' | 'light'>> & {
@@ -63,7 +63,7 @@ export type ScenePatch = Partial<Omit<SceneMeta, 'grid' | 'fog' | 'light'>> & {
 };
 
 let tokenClipboard: Token[] = [];
-const UNDOABLE_SCENE_KEYS = new Set(['mapX', 'mapY', 'mapScale', 'mapLocked', 'mapGrid', 'wallStop', 'bg', 'grid', 'fog', 'light']);
+const UNDOABLE_SCENE_KEYS = new Set(['mapX', 'mapY', 'mapScale', 'mapLocked', 'mapGrid', 'wallStop', 'cliff', 'bg', 'grid', 'fog', 'light']);
 
 /**
  * Everything the app knows about one table, kept in sync with the backend.
@@ -693,6 +693,18 @@ export class TableClient {
     await wrote;
     if (opts.record !== false) this.recordDrawn([full], opts.label ?? (isTemplate(d.k) ? 'Place template' : 'Draw'));
     return id;
+  }
+
+  /** Add several drawings in one go (one step of undo). Returns their ids. */
+  async addDrawings(list: NewDrawing[], label = 'Draw'): Promise<string[]> {
+    if (!this.viewSceneId) throw new Error('No scene is open');
+    if (!list.length) return [];
+    if (list.some((d) => !this.canDo(isTemplate(d.k) ? 'template' : 'draw'))) throw new Error('The DM has turned off drawing for players.');
+    const t = this.backend.now();
+    const full: Drawing[] = list.map((d) => ({ fc: '', font: '', b: false, i: false, u: false, ho: false, hz: null, ...d, id: this.backend.newKey(), uid: this.uid, t }));
+    await this.restoreDrawings(full);
+    this.recordDrawn(full, label);
+    return full.map((d) => d.id);
   }
 
   private async restoreDrawings(list: Drawing[]) {

@@ -68,8 +68,10 @@ export interface SceneMeta {
   mapLocked: boolean;
   /** a grid printed on the map picture, and whether it is hidden on screen (the picture itself is never changed) */
   mapGrid: GridCut | null;
-  /** walls stop tokens being dragged through them (for players; the DM can hold W to pass) */
+  /** walls stop tokens being dragged through them (for players; the DM can hold Q to pass) */
   wallStop: boolean;
+  /** drops of more than this many feet between neighbouring squares are cliffs (0: none) */
+  cliff: number;
   bg: string;
   grid: GridSettings;
   fog: FogSettings;
@@ -232,6 +234,8 @@ export interface Drawing {
   he?: boolean;
   /** terrain: the stroke is a list of whole cells (their centres), not a free brush */
   hc?: boolean;
+  /** a stroke of difficult ground (costs extra to walk through), not of height */
+  dt?: boolean;
   /** private: only the person who made it (and the DM) can see it */
   pv?: boolean;
   t: number;

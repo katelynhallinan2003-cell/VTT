@@ -8,6 +8,10 @@ export const ZONE_PRESETS = [-10, 5, 10, 15, 20, 30, 40, 60];
 /** Everything that makes ground higher or lower on a map: brush-painted areas, and old-style boxes and circles. */
 export type Zone = Terrain;
 export const zonesOf = (draws: Iterable<Drawing>, grid: GridSettings): Terrain => terrainOf(draws, grid);
+/** Difficult ground (a layer of its own, painted with the Heights brush): where it costs extra to walk. */
+export const roughOf = (draws: Iterable<Drawing>, grid: GridSettings): Terrain => terrainOf(draws, grid, 'rough');
+/** Is the ground at this point difficult? */
+export const isRough = (rough: Terrain, p: Vec): boolean => rough.areas.length > 0 && groundAtTerrain(rough, p) > 0;
 
 /** How high the ground is at a point, in feet. Painted areas are stacked bottom to top (each one sets the height or adds to it); no area means 0. */
 export const groundAt = (zones: Terrain, p: Vec): number => groundAtTerrain(zones, p);

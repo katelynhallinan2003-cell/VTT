@@ -18,16 +18,12 @@ nothing gets forgotten between sessions. **Read this first at the start of every
 
 ## In progress
 
-- [ ] Round 7d: heights (gradient/ramp paint, auto wall over 10 ft, 5 ft stair, difficult terrain) (next).
+- [ ] Round 7e: three-zone fog; lights visible to players; darkvision toggles + distances; custom lights; Lights section in the token editor (next).
 
 ## To do (asked for, not done)
 
 Asked 2026-11-21 18:34 PT:
 
-- [ ] Heights: gradient paint between two heights (ramps).
-- [ ] Heights: auto-define a wall between two areas that differ by more than 10 ft.
-- [ ] Heights: a 5 ft difference is a **stair**; moving over it costs diagonal movement per the table's distance-rule setting.
-- [ ] Difficult terrain can be defined on the ground (and costs extra movement).
 - [ ] Fog of war has three zones: black (never seen), gray (seen before, not visible now), clear (visible now). Update how sight works to match.
 - [ ] Light sources must not be invisible to players (today light-only tokens show a DM-only marker).
 - [ ] Tokens get darkvision toggles and distances; custom lights can be defined; lights are their own section inside the token editor.
@@ -61,6 +57,11 @@ Earlier requests that were reported again or only partly met:
 
 ## Done
 
+2026-11-21 (round 7d): Heights **Ramp** mode (start and end height, drag from one end to the other, 5 ft steps, one undo); drops of more than 10 ft between
+neighbouring squares are **cliffs** (derived wall pieces: stop sight, spells and walking from the low side, nothing from the top; scene setting "Cliffs", 0 = off);
+steps of 5 ft or less are **stairs** and cost like diagonals by the distance rule (readouts for drags, test moves; flyers exempt); **difficult ground** painted with the
+Heights brush in its own layer (hatched, +1 square per square entered, "Clear difficult ground"). Also fixed: the docs and a test still said "hold W to pass walls" (it is Q since 7a).
+Tests: `tests/walk.test.ts`, `tests/e2e/batchZ3.mjs`.
 2026-11-21 (round 7c): test move "Multi-step" switch (each drag adds a leg; dashed path with corners; the whole distance; right-click or the Back button goes back one step,
 arrow keys count as steps); ruler "Measure in several steps" switch (each drag adds a leg, distance so far at each corner, right-click takes back the last leg, Shift+drag
 starts a new one); the 5-10-5 rule counts along the whole path (`pathFt`); corners are shared with others when "Show others" is on.

@@ -149,13 +149,15 @@ const unionRect = (rs: Rect[]): Rect => {
 };
 
 /** Everything about the ground in one place. Old-style boxes and circles come first (smallest on top), then painted areas in the order they were started. */
-export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings): Terrain {
+export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings, layer: 'ground' | 'rough' = 'ground'): Terrain {
   const legacy: Area[] = [];
   const groups = new Map<string, { paint: Drawing[]; hz: number; add: boolean }>();
   const erasers: Drawing[] = [];
   const sigParts: string[] = [];
   for (const d of draws) {
     if (d.hz == null && d.k !== 'terrain') continue;
+    // difficult ground is painted with the same brush but is a layer of its own: it never changes how high anything is
+    if (!!d.dt !== (layer === 'rough')) continue;
     sigParts.push(`${d.id}|${d.k}|${d.p}|${d.w}|${d.hz}|${d.hg ?? ''}|${d.ha ? 1 : 0}|${d.he ? 1 : 0}|${d.hc ? 1 : 0}|${d.t}`);
     if (d.k === 'terrain') {
       if (d.he) { erasers.push(d); continue; }
@@ -185,7 +187,13 @@ export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings): Terrain
   painted.sort((a, b) => Math.min(...a.paint.map((s) => s.t)) - Math.min(...b.paint.map((s) => s.t)) || (a.id < b.id ? -1 : 1));
   const areas = [...legacy, ...painted];
   areas.forEach((a, i) => { a.order = i; });
-  return { areas, grid, sig: `${grid.shape}|${grid.cell}|${grid.ox}|${grid.oy}#${sigParts.join(';')}` };
+  return { areas, grid, sig: `${layer}|${grid.shape}|${grid.cell}|${grid.ox}|${grid.oy}#${sigParts.join(';')}` };
+}
+
+/** The box around everything painted (null when nothing is). */
+export function terrainBounds(t: Terrain): Rect | null {
+  if (!t.areas.length) return null;
+  return unionRect(t.areas.map((a) => a.b));
 }
 
 /** Is this point part of the area? (erase strokes taking away what earlier strokes painted) */

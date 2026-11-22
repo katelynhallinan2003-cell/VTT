@@ -68,7 +68,12 @@ export interface UiData {
   /** the Heights tool: how high the ground it draws is (feet), and whether it draws boxes or circles */
   heightFt: number;
   /** what the Heights brush does: paint ground, rub ground out, or select and move an area */
-  heightMode: 'paint' | 'erase' | 'move';
+  heightMode: 'paint' | 'ramp' | 'erase' | 'move';
+  /** what the Heights brush lays down: height, or difficult ground */
+  groundKind: 'height' | 'rough';
+  /** a ramp climbs (or falls) from this many feet at the end you press on to that many at the other end */
+  rampFrom: number;
+  rampTo: number;
   /** paint whole squares (or hexes) rather than freehand */
   heightSnap: boolean;
   /** how wide the brush is, in grid squares */
@@ -152,7 +157,10 @@ export class UiState {
     textEdit: null, camRev: 0, initOpen: false,
     fxJump: readFlag('vtt-fx-jump', true), fxDraft: null,
     heightFt: (() => { try { const n = Number(localStorage.getItem('vtt-height-ft')); return Number.isFinite(n) && localStorage.getItem('vtt-height-ft') !== null ? n : 10; } catch { return 10; } })(),
-    heightMode: readStr('vtt-height-mode', 'paint', ['paint', 'erase', 'move'] as const),
+    heightMode: readStr('vtt-height-mode', 'paint', ['paint', 'ramp', 'erase', 'move'] as const),
+    groundKind: readStr('vtt-ground-kind', 'height', ['height', 'rough'] as const),
+    rampFrom: (() => { try { const n = Number(localStorage.getItem('vtt-ramp-from')); return Number.isFinite(n) && localStorage.getItem('vtt-ramp-from') !== null ? n : 0; } catch { return 0; } })(),
+    rampTo: (() => { try { const n = Number(localStorage.getItem('vtt-ramp-to')); return Number.isFinite(n) && localStorage.getItem('vtt-ramp-to') !== null ? n : 20; } catch { return 20; } })(),
     heightSnap: readFlag('vtt-height-snap', true),
     heightBrush: (() => { try { const n = Number(localStorage.getItem('vtt-height-brush')); return Number.isFinite(n) && n >= 1 && n <= 8 ? n : 1; } catch { return 1; } })(),
     heightAdds: readFlag('vtt-height-adds', false),
@@ -208,6 +216,9 @@ export class UiState {
       if (patch.pingMode !== undefined) localStorage.setItem('vtt-ping-mode', patch.pingMode);
       if (patch.heightFt !== undefined) localStorage.setItem('vtt-height-ft', String(patch.heightFt));
       if (patch.heightMode !== undefined) localStorage.setItem('vtt-height-mode', patch.heightMode);
+      if (patch.groundKind !== undefined) localStorage.setItem('vtt-ground-kind', patch.groundKind);
+      if (patch.rampFrom !== undefined) localStorage.setItem('vtt-ramp-from', String(patch.rampFrom));
+      if (patch.rampTo !== undefined) localStorage.setItem('vtt-ramp-to', String(patch.rampTo));
       if (patch.heightSnap !== undefined) localStorage.setItem('vtt-height-snap', patch.heightSnap ? '1' : '0');
       if (patch.heightBrush !== undefined) localStorage.setItem('vtt-height-brush', String(patch.heightBrush));
       if (patch.heightAdds !== undefined) localStorage.setItem('vtt-height-adds', patch.heightAdds ? '1' : '0');

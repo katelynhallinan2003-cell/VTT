@@ -17,8 +17,6 @@ An issue the user says is still broken moves back up to *Open* with a note on wh
 
 ## Open
 
-- [ ] **#13 Explain a forbidden picture upload and let the DM recover** (in progress) (added 2026-11-22): uploading also showed “You have been forbidden to use this website.”
-
 Carried over from the old `TASKS.md` on 2026-11-22 (asked 2026-11-21, before this file existed):
 
 - [ ] **#3 Republish `database.rules.json` in the Firebase console** (waiting on user) (added 2026-11-21): the live
@@ -119,3 +117,7 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
   New and replacement maps fit the view, and only the current load can install the picture or finish its grid scan.
   Large-map scans use a smaller canvas and report when no clear printed grid was found. Checked the supplied
   10,240 × 12,800 WebP and its gridded counterpart. `tests/e2e/largeMap.mjs` covers both rendering failures.
+- [x] **#13 Explain a forbidden picture upload and let the DM recover** (added 2026-11-22, completed 2026-11-22):
+  the upload error now identifies ImgBB, shows the returned HTTP status, and points to Test upload and direct picture links.
+  Verified that a simulated refusal preserves the existing map and that adding a link through Library → Maps works
+  without another upload. Covered by `tests/imgbb.test.ts` and `tests/e2e/uploadRefusal.mjs`.

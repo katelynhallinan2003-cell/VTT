@@ -16,13 +16,20 @@ export async function uploadToImgbb(blob: Blob, key: string, name?: string): Pro
   let json: any = null;
   try { json = await res.json(); } catch { /* handled below */ }
   if (!res.ok || !json?.success) {
-    const msg = json?.error?.message || `imgbb returned ${res.status}`;
-    throw new Error(`Upload failed: ${msg}`);
+    const detail = typeof json?.error?.message === 'string' ? json.error.message.trim() : '';
+    if (res.status === 403 || /\bforbidden\b/i.test(detail)) {
+      throw new Error(`ImgBB refused this upload (HTTP ${res.status}). The DM can check uploads in Settings → Pictures and files → Test upload, or use a direct picture link.`);
+    }
+    throw new Error(`ImgBB upload failed (HTTP ${res.status}). ${detail}`.trim());
   }
   const d = json.data;
+  const url = d?.image?.url || d?.url;
+  if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
+    throw new Error('ImgBB did not return a picture link. Try the upload again.');
+  }
   return {
-    url: d.image?.url || d.url,
-    thumb: d.thumb?.url || d.medium?.url || d.image?.url || d.url,
+    url,
+    thumb: d.thumb?.url || d.medium?.url || url,
     w: Number(d.width) || 0,
     h: Number(d.height) || 0,
   };

@@ -79,7 +79,7 @@ export function loadTexture(url: string, kind: 'map' | 'token'): Promise<LoadedT
         return { texture: new Texture({ source }), w: nw, h: nh, scale: nw / bitmap.width };
       } catch (e) {
         console.warn('texture load failed', url, e);
-        cache.delete(key);
+        if (cache.get(key) === p) cache.delete(key);
         onFail?.(kind, url);
         return null;
       }
@@ -101,19 +101,23 @@ export function canvasTexture(canvas: HTMLCanvasElement): Texture {
   return new Texture({ source: new CanvasSource({ resource: canvas, scaleMode: 'linear' }) });
 }
 
-/** The pixels of a loaded map, as the screen shows them (a very large map is already scaled down, see `scale`). */
-export function readPixels(tex: LoadedTexture): { img: PixelImage; id: ImageData; ctx: CanvasRenderingContext2D; canvas: HTMLCanvasElement } | null {
+/** The finder can sample a smaller canvas. Hiding lines needs every displayed pixel. */
+export function readPixels(tex: LoadedTexture, maxSide = Infinity) {
   try {
     const src = tex.texture.source as unknown as { resource: CanvasImageSource; pixelWidth: number; pixelHeight: number };
-    const w = src.pixelWidth, h = src.pixelHeight;
+    const sampleScale = Math.max(1, Math.ceil(Math.max(src.pixelWidth, src.pixelHeight) / maxSide));
+    const w = Math.max(1, Math.floor(src.pixelWidth / sampleScale));
+    const h = Math.max(1, Math.floor(src.pixelHeight / sampleScale));
     const canvas = document.createElement('canvas');
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return null;
-    ctx.drawImage(src.resource, 0, 0, w, h);
+    ctx.imageSmoothingQuality = 'high';
+    // Use one scale on both axes. The canvas clips any partial pixel on the far edge.
+    ctx.drawImage(src.resource, 0, 0, src.pixelWidth / sampleScale, src.pixelHeight / sampleScale);
     const id = ctx.getImageData(0, 0, w, h);
-    return { img: { data: id.data, width: w, height: h }, id, ctx, canvas };
+    return { img: { data: id.data, width: w, height: h } satisfies PixelImage, id, ctx, canvas, sampleScale };
   } catch (e) {
     console.warn('could not read the map pixels', e);
     return null;

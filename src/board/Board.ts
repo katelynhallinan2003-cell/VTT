@@ -9,7 +9,7 @@ import { altitudeOf, groundAt, heightChangeNote, heightNote, isRough, roughOf, s
 import { DEFAULT_CLIFF_FT, cliffSegs, rampCells, walkExtra, walkNote, type WalkExtra } from '../core/walk';
 import { EMPTY_TERRAIN, MAX_STROKE_CELLS, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, heightColor, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
-import { scaleCut, type GridCut } from '../core/gridcut';
+import { scaleCut, WORK_SIDE, type GridCut } from '../core/gridcut';
 import { AUTO_GRID_STRENGTH, detectPrintedGrid, impliedGrid } from '../core/mapgrid';
 import { lightOf, viewerOf, type LightSrc, type Viewer } from '../core/light';
 import { LightLayer } from './LightLayer';
@@ -134,7 +134,7 @@ export class Board {
   private distText!: Text;
 
   private cam = { zoom: 1, tx: 0, ty: 0 };
-  private cams = new Map<string, { zoom: number; tx: number; ty: number }>();
+  private cams = new Map<string, { camera: ReturnType<typeof fitCamera>; mapUrl: string | null }>();
   private fitPending = true;
 
   private sceneRef: TableClient['scene'] = null;
@@ -147,7 +147,9 @@ export class Board {
   private seenGridKey = '';
 
   private mapSprite: Sprite | null = null;
-  private mapUrl: string | null = null;
+  /** Undefined until the scene's first metadata arrives. Null is a scene with no map. */
+  private mapUrl: string | null | undefined;
+  private mapLoadSeq = 0;
   private mapTex: LoadedTexture | null = null;
   private mapScaleToWorld = 1;
   /** the map with its printed grid filled in (shown instead of the original while that is switched on) */
@@ -318,7 +320,10 @@ export class Board {
   private glideSeq = 0;
 
   fit() {
-    const rect = this.client.sceneRect();
+    const meta = this.client.scene?.meta;
+    const rect = meta && this.mapTex && (!meta.mapW || !meta.mapH)
+      ? sceneRect({ ...meta, mapW: this.mapTex.w, mapH: this.mapTex.h })
+      : this.client.sceneRect();
     if (!rect) return;
     this.glideSeq++;
     this.cam = fitCamera(this.host.clientWidth, this.host.clientHeight, rect, 48);
@@ -413,7 +418,9 @@ export class Board {
   private applyCamera() {
     this.world.scale.set(this.cam.zoom);
     this.world.position.set(this.cam.tx, this.cam.ty);
-    if (this.client.viewSceneId) this.cams.set(this.client.viewSceneId, { ...this.cam });
+    if (this.sceneRef && this.mapUrl !== undefined) {
+      this.cams.set(this.sceneRef.id, { camera: { ...this.cam }, mapUrl: this.mapUrl });
+    }
     this.gridDirty = true;
     this.invalidate();
     if (Math.abs(this.ui.data.zoom - this.cam.zoom) / this.cam.zoom > 0.005) this.ui.set({ zoom: this.cam.zoom });
@@ -527,7 +534,7 @@ export class Board {
   }
 
   private onSceneChanged(scene: TableClient['scene']) {
-    // remember the camera of the scene we are leaving
+    this.glideSeq++;
     this.sceneRef = scene;
     for (const v of this.views.values()) v.destroy();
     this.views.clear();
@@ -549,7 +556,8 @@ export class Board {
     if (this.mapSprite) { this.mapSprite.destroy(); this.mapSprite = null; }
     this.clearExtras();
     this.resetCut();
-    if (this.mapUrl) { releaseTexture(this.mapUrl, 'map'); this.mapUrl = null; }
+    if (this.mapUrl) releaseTexture(this.mapUrl, 'map');
+    this.mapUrl = undefined;
     this.mapTex = null;
     this.cb.onMapError(null);
     this.seenMetaRev = this.seenTokensRev = this.seenFogRev = this.seenDrawRev = this.seenLiveRev = this.seenInitRev = this.seenZoneRev = -1;
@@ -558,8 +566,7 @@ export class Board {
     this.roughG.clear();
     this.seenGridKey = '';
     if (this.fogSprite) this.fogSprite.visible = false;
-    const saved = scene ? this.cams.get(scene.id) : undefined;
-    if (saved) { this.cam = { ...saved }; this.fitPending = false; this.applyCamera(); } else this.fitPending = true;
+    this.fitPending = true;
     this.dirty = true;
   }
 
@@ -572,19 +579,29 @@ export class Board {
     if (!meta) return;
 
     if (meta.mapUrl !== this.mapUrl) {
+      const saved = this.mapUrl === undefined ? this.cams.get(scene.id) : undefined;
       if (this.mapUrl) releaseTexture(this.mapUrl, 'map');
       this.mapUrl = meta.mapUrl;
       this.mapTex = null;
       if (this.mapSprite) { this.mapSprite.destroy(); this.mapSprite = null; }
       this.resetCut();
-      if (meta.mapUrl) void this.loadMap(meta.mapUrl, scene.id);
+      this.fitPending = true;
+      if (saved && saved.mapUrl === meta.mapUrl) {
+        this.cam = { ...saved.camera };
+        this.fitPending = false;
+        this.applyCamera();
+      }
+      if (meta.mapUrl) void this.loadMap(meta.mapUrl);
     }
     if (this.mapSprite && this.mapTex) {
       this.mapSprite.position.set(meta.mapX, meta.mapY);
       this.mapSprite.scale.set(meta.mapScale * this.mapScaleToWorld);
       this.applyMapCut();
     }
-    if (this.fitPending && !meta.mapUrl) { this.fit(); this.fitPending = false; }
+    if (this.fitPending && (!meta.mapUrl || (meta.mapW > 0 && meta.mapH > 0))) {
+      this.fit();
+      this.fitPending = false;
+    }
     this.updateFog();
   }
 
@@ -683,20 +700,23 @@ export class Board {
    * Look for a grid printed on the map picture (the DM's "Find and hide" button).
    * The answer is in pixels of the original picture, so it stays right however big the map is shown.
    */
-  async findMapGrid(opts: { any?: boolean } = {}): Promise<{ cut: GridCut; strength: number } | { error: string }> {
+  async findMapGrid(opts: { any?: boolean } = {}): Promise<{ cut: GridCut; strength: number } | { error: string; noGrid?: boolean }> {
     const tex = this.mapTex;
     const meta = this.client.scene?.meta;
     if (!tex || !meta) return { error: 'Add a map picture first.' };
     await new Promise<void>((r) => setTimeout(r, 20));
-    const px = readPixels(tex);
+    if (tex !== this.mapTex || this.destroyed) return { error: 'The map changed during the grid search.' };
+    // The finder starts on a reduced image anyway. Keep a second level of detail for measuring the lines.
+    const px = readPixels(tex, 2 * WORK_SIDE);
     if (!px) return { error: "This browser would not let me read the map picture, so I can't look for lines in it." };
     // the grid you already set is a good guess at the spacing; if nothing is there, look at every spacing
-    const hint = meta.grid.cell / (meta.mapScale * tex.scale);
+    const pixelScale = tex.scale * px.sampleScale;
+    const hint = meta.grid.cell / (meta.mapScale * pixelScale);
     // a hex scene looks for hexes first, a square one for squares; either one still tries the other if nothing fits
     // (`any`: no grid has been set up for this picture yet, so squares and hexes both get a look and the clearer one wins)
     const f = detectPrintedGrid(px.img, { hint, shape: meta.grid.shape, any: opts.any });
-    if (!f) return { error: 'I could not find evenly spaced grid lines in this picture. Some maps have none, or only faint ones.' };
-    return { cut: { ...scaleCut(f.cut, tex.scale), on: true }, strength: f.strength };
+    if (!f) return { error: 'I could not find evenly spaced grid lines in this picture. Some maps have none, or only faint ones.', noGrid: true };
+    return { cut: { ...scaleCut(f.cut, pixelScale), on: true }, strength: f.strength };
   }
 
   /** Try loading the map picture again (the banner's "Try again" button). */
@@ -705,19 +725,22 @@ export class Board {
     const sid = this.client.scene?.id;
     if (!url || !sid) return;
     this.cb.onMapError(null);
-    void this.loadMap(url, sid);
+    void this.loadMap(url);
   }
 
-  private async loadMap(url: string, sceneId: string) {
+  private async loadMap(url: string) {
+    const seq = ++this.mapLoadSeq;
+    const scene = this.client.scene;
+    const current = () => !this.destroyed && this.client.scene === scene && scene?.meta?.mapUrl === url && this.mapLoadSeq === seq;
     this.ui.set({ status: 'Loading map…' });
     const tex = await loadTexture(url, 'map');
-    if (this.destroyed || this.client.scene?.id !== sceneId || this.mapUrl !== url) return;
+    if (!current()) return;
     this.ui.set({ status: null });
     if (!tex) {
       // keep the camera on the (empty) board so tokens stay visible even without the picture
       if (this.fitPending) { this.fit(); this.fitPending = false; }
       const why = await diagnoseImage(url);
-      if (this.destroyed || this.mapUrl !== url) return;
+      if (!current()) return;
       // a picture added in demo mode only lives in the browser tab it was added in: say that, not "check your connection"
       this.cb.onMapError(url.startsWith('blob:')
         ? `This map picture was only kept in one browser tab (demo mode), so it is gone after a reload. ${this.client.isDM ? 'Add the map again in the Scene tab.' : 'The DM has to add it again.'}`
@@ -742,7 +765,7 @@ export class Board {
     this.invalidate();
     if (this.client.isDM && meta.mapUrl && !meta.gridTried) {
       // with the setting off the map is still marked as looked at, so switching it on later does not surprise anyone
-      if (this.ui.data.autoGrid) void this.autoMapGrid(sceneId, url);
+      if (this.ui.data.autoGrid) void this.autoMapGrid(current);
       else void this.client.updateScene({ gridTried: true }, { record: false });
     }
   }
@@ -751,13 +774,17 @@ export class Board {
    * A map that has just been added is looked at once for a printed grid. If one is clearly there it is hidden and the app's own grid is set on it,
    * so the DM never has to draw it. (One Ctrl+Z puts both back.) Maps with no grid, or only a faint one, are left alone.
    */
-  private async autoMapGrid(sceneId: string, url: string) {
-    const here = () => !this.destroyed && this.client.scene?.id === sceneId && this.mapUrl === url;
-    // mark it as looked at first, so another tab, or this one loading again while it works, does not do it twice
+  private async autoMapGrid(here: () => boolean) {
+    const r = await this.findMapGrid({ any: true });
+    if (!here() || this.client.scene?.meta?.gridTried) return;
+    if ('error' in r && !r.noGrid) { this.cb.onNotice(r.error, 'error'); return; }
+    // An interrupted load must leave the next opening free to finish the scan.
     await this.client.updateScene({ gridTried: true }, { record: false });
     if (!here()) return;
-    const r = await this.findMapGrid({ any: true });
-    if (!here() || 'error' in r || r.strength < AUTO_GRID_STRENGTH) return;
+    if ('error' in r || r.strength < AUTO_GRID_STRENGTH) {
+      this.cb.onNotice('No clear printed grid found.', 'info');
+      return;
+    }
     const m = this.client.scene?.meta;
     if (!m || m.mapGrid) return;
     await this.client.updateScene({ mapGrid: r.cut, grid: impliedGrid(r.cut, m.mapScale, m.mapX, m.mapY) });

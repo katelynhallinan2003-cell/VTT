@@ -17,6 +17,8 @@ An issue the user says is still broken moves back up to *Open* with a note on wh
 
 ## Open
 
+- [ ] **#13 Explain a forbidden picture upload and let the DM recover** (in progress) (added 2026-11-22): uploading also showed “You have been forbidden to use this website.”
+
 Carried over from the old `TASKS.md` on 2026-11-22 (asked 2026-11-21, before this file existed):
 
 - [ ] **#3 Republish `database.rules.json` in the Firebase console** (waiting on user) (added 2026-11-21): the live
@@ -112,3 +114,8 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
   still gliding; a demo map lost on reload blamed the internet connection; letting go of Alt handed the keyboard to
   the browser's menu on Windows (not checked in a real browser window). New browser test: `tests/e2e/batchZ11.mjs`;
   `node tests/e2e/all.mjs` runs them all. Things noticed and left alone are under *Ideas*.
+- [x] **#12 Blank board after uploading the gridless asteroid base** (added 2026-11-22, completed 2026-11-22):
+  reproduced an off-map camera and an older decode installing a destroyed texture when the same scene opened twice.
+  New and replacement maps fit the view, and only the current load can install the picture or finish its grid scan.
+  Large-map scans use a smaller canvas and report when no clear printed grid was found. Checked the supplied
+  10,240 × 12,800 WebP and its gridded counterpart. `tests/e2e/largeMap.mjs` covers both rendering failures.

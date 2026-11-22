@@ -50,6 +50,8 @@ Read `CLAUDE.md` (this file) and `WIP.md` before doing anything else in a sessio
 
 - **Printed square grids.** Learn the ink's RGB shift from repeated strokes and nearby terrain. On dotted JPEGs, account for the recurring light and dark fringes around the dots. Check the rendered result at native-pixel zoom on both smooth ground and painted edges.
 
+- **Map scans and display resolution.** Detect printed grids on a bounded sample of the original picture. A device can shrink the displayed texture independently. Store the detected spacing in original picture pixels.
+
 - **Library picture deletion.** Keep ImgBB's private deletion link with the owning DM's library item. Campaign exports and shared scene and token data carry only picture URLs. The DM confirms hosted deletion on ImgBB before finishing removal in the VTT.
 
 - **Maps without a clear printed grid.** Start gridless with free movement and straight-line measurement. The DM can calibrate ten feet with two points, then choose squares, hex rows, hex columns or no overlay. Changing the overlay preserves the map scale.

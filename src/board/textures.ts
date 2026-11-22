@@ -1,6 +1,6 @@
 import { CanvasSource, ImageSource, Texture } from 'pixi.js';
 import { loadImage } from '../core/images';
-import { hideGrid, scaleCut, type GridCut, type PixelImage } from '../core/gridcut';
+import { hideGrid, scaleCut, WORK_SIDE, type GridCut, type PixelImage } from '../core/gridcut';
 import { hideHexGrid } from '../core/hexcut';
 
 let gpuMax = 0;
@@ -101,13 +101,11 @@ export function canvasTexture(canvas: HTMLCanvasElement): Texture {
   return new Texture({ source: new CanvasSource({ resource: canvas, scaleMode: 'linear' }) });
 }
 
-/** The finder can sample a smaller canvas. Hiding lines needs every displayed pixel. */
-export function readPixels(tex: LoadedTexture, maxSide = Infinity) {
+function readPixels(source: CanvasImageSource, width: number, height: number, maxSide = Infinity) {
   try {
-    const src = tex.texture.source as unknown as { resource: CanvasImageSource; pixelWidth: number; pixelHeight: number };
-    const sampleScale = Math.max(1, Math.ceil(Math.max(src.pixelWidth, src.pixelHeight) / maxSide));
-    const w = Math.max(1, Math.floor(src.pixelWidth / sampleScale));
-    const h = Math.max(1, Math.floor(src.pixelHeight / sampleScale));
+    const sampleScale = Math.max(1, Math.ceil(Math.max(width, height) / maxSide));
+    const w = Math.max(1, Math.floor(width / sampleScale));
+    const h = Math.max(1, Math.floor(height / sampleScale));
     const canvas = document.createElement('canvas');
     canvas.width = w;
     canvas.height = h;
@@ -115,7 +113,7 @@ export function readPixels(tex: LoadedTexture, maxSide = Infinity) {
     if (!ctx) return null;
     ctx.imageSmoothingQuality = 'high';
     // Use one scale on both axes. The canvas clips any partial pixel on the far edge.
-    ctx.drawImage(src.resource, 0, 0, src.pixelWidth / sampleScale, src.pixelHeight / sampleScale);
+    ctx.drawImage(source, 0, 0, width / sampleScale, height / sampleScale);
     const id = ctx.getImageData(0, 0, w, h);
     return { img: { data: id.data, width: w, height: h } satisfies PixelImage, id, ctx, canvas, sampleScale };
   } catch (e) {
@@ -124,11 +122,26 @@ export function readPixels(tex: LoadedTexture, maxSide = Infinity) {
   }
 }
 
+/** A renderer may discard fine lines to fit its GPU. Sample the original at the finder's resolution. */
+export async function readGridSample(tex: LoadedTexture, url: string) {
+  const src = tex.texture.source;
+  if (src.pixelWidth === tex.w && src.pixelHeight === tex.h) {
+    return readPixels(src.resource, tex.w, tex.h, 2 * WORK_SIDE);
+  }
+  try {
+    const original = await loadImageWithRetry(url);
+    return readPixels(original, original.naturalWidth, original.naturalHeight, 2 * WORK_SIDE);
+  } catch {
+    return null;
+  }
+}
+
 /** A copy of the map with its printed grid filled in. `cut` is in pixels of the original picture. */
 export async function gridlessTexture(tex: LoadedTexture, cut: GridCut): Promise<Texture | null> {
   // let the screen paint ("working…") before the heavy part
   await new Promise<void>((r) => setTimeout(r, 20));
-  const px = readPixels(tex);
+  const src = tex.texture.source;
+  const px = readPixels(src.resource, src.pixelWidth, src.pixelHeight);
   if (!px) return null;
   const c = scaleCut(cut, 1 / tex.scale);
   if (c.hex) hideHexGrid(px.img, c); else hideGrid(px.img, c);

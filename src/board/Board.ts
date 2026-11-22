@@ -9,7 +9,7 @@ import { altitudeOf, groundAt, heightChangeNote, heightNote, isRough, roughOf, s
 import { DEFAULT_CLIFF_FT, cliffSegs, rampCells, walkExtra, walkNote, type WalkExtra } from '../core/walk';
 import { EMPTY_TERRAIN, MAX_STROKE_CELLS, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, heightColor, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
-import { scaleCut, WORK_SIDE, type GridCut } from '../core/gridcut';
+import { scaleCut, type GridCut } from '../core/gridcut';
 import { AUTO_GRID_STRENGTH, detectPrintedGrid, impliedGrid } from '../core/mapgrid';
 import { lightOf, viewerOf, type LightSrc, type Viewer } from '../core/light';
 import { LightLayer } from './LightLayer';
@@ -24,7 +24,7 @@ import { DrawLayer, paintShape } from './DrawLayer';
 import { TerrainLayer } from './TerrainLayer';
 import { WallLayer } from './WallLayer';
 import { WALL_NAME, boxSegments, chainSegments, circlePoints, distToSeg, endNear, freehandCorners, hatchTicks, moveSegs, pathBlocked, sightSegs, snapWallPoint, visibilityPolygon, wallMid, wallNear, wallVisDefault, type Seg, type Wall } from '../core/walls';
-import { canvasTexture, loadTexture, releaseTexture, setTextureFailHandler, type LoadedTexture, gridlessTexture, readPixels } from './textures';
+import { canvasTexture, loadTexture, releaseTexture, setTextureFailHandler, type LoadedTexture, gridlessTexture, readGridSample } from './textures';
 import { diagnoseImage } from '../core/images';
 import { currentOverlay, overlaySettings, type GridOverlay } from '../core/gridOverlay';
 
@@ -706,14 +706,16 @@ export class Board {
   async findMapGrid(opts: { any?: boolean } = {}): Promise<{ cut: GridCut; strength: number } | { error: string; noGrid?: boolean }> {
     const tex = this.mapTex;
     const meta = this.client.scene?.meta;
-    if (!tex || !meta) return { error: 'Add a map picture first.' };
+    if (!tex || !meta?.mapUrl) return { error: 'Add a map picture first.' };
+    const seq = this.mapLoadSeq;
+    const changed = () => seq !== this.mapLoadSeq || tex !== this.mapTex || this.destroyed;
     await new Promise<void>((r) => setTimeout(r, 20));
-    if (tex !== this.mapTex || this.destroyed) return { error: 'The map changed during the grid search.' };
-    // The finder starts on a reduced image anyway. Keep a second level of detail for measuring the lines.
-    const px = readPixels(tex, 2 * WORK_SIDE);
+    if (changed()) return { error: 'The map changed during the grid search.' };
+    const px = await readGridSample(tex, meta.mapUrl);
+    if (changed()) return { error: 'The map changed during the grid search.' };
     if (!px) return { error: "This browser would not let me read the map picture, so I can't look for lines in it." };
     // the grid you already set is a good guess at the spacing; if nothing is there, look at every spacing
-    const pixelScale = tex.scale * px.sampleScale;
+    const pixelScale = px.sampleScale;
     const hint = meta.grid.cell / (meta.mapScale * pixelScale);
     // a hex scene looks for hexes first, a square one for squares; either one still tries the other if nothing fits
     // (`any`: no grid has been set up for this picture yet, so squares and hexes both get a look and the clearer one wins)

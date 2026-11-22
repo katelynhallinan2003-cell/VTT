@@ -271,7 +271,8 @@ function MapGridCut(props: { client: TableClient; board: Board | null; meta: Sce
       if ('error' in r) { toast(r.error, 'error', 7000); return; }
       // hide the printed lines and set the app's own grid on them, in one step (one Ctrl+Z puts both back)
       const m = meta;
-      await client.updateScene({ mapGrid: r.cut, grid: { ...impliedGrid(r.cut, m.mapScale, m.mapX, m.mapY), visible: true } });
+      await client.updateScene({ mapGrid: r.cut, grid: { ...impliedGrid(r.cut, m.mapScale, m.mapX, m.mapY), visible: true, ...(currentOverlay(m.grid) === 'none' ? { snap: true } : {}) } });
+      if (client.scene?.meta?.mapUrl === m.mapUrl && ui.data.tool === 'scale') ui.set({ tool: 'select' });
       toast(r.cut.hex ? `Found a hex grid (${round2(r.cut.p)} px between hex centres, lines about ${round2(r.cut.t)} px thick), hid it and set your grid on it.` : `Found lines every ${round2(r.cut.p)} px (about ${round2(r.cut.t)} px thick), hid them and set your grid on them.`, 'ok', 5000);
     } finally { setBusy(false); }
   }

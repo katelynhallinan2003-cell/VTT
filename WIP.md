@@ -121,3 +121,8 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
   the upload error now identifies ImgBB, shows the returned HTTP status, and points to Test upload and direct picture links.
   Verified that a simulated refusal preserves the existing map and that adding a link through Library → Maps works
   without another upload. Covered by `tests/imgbb.test.ts` and `tests/e2e/uploadRefusal.mjs`.
+- [x] **#14 Align the scene grid with the dotted map grid** (added 2026-11-22, completed 2026-11-22):
+  the reduced preview of the cavern JPEG emphasized alternate dots. The old finder picked a 114 px grid and hid every
+  other line. The full-resolution check now compares the smaller spacings that could produce that repeat. Verified
+  57 px squares on the original JPEG both on upload and through “Look again” in a scene with the old grid.
+  Added two dotted maps to the corpus and checked for extra lines as well as missing lines.

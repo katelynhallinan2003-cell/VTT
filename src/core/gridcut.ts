@@ -398,13 +398,17 @@ function joinBands(b: Bands, k: number): Bands {
 interface Seen { sign: number; m: Match; X: Line[]; Y: Line[]; px: Peak[]; py: Peak[] }
 
 /** The best spacing for what the bands see, looking for dark lines and for light lines apart. */
-function look(B: { x: Bands; y: Bands }, W: number, H: number, d: number, lo: number, hi: number, step: number, only?: number): Seen | null {
+function look(B: { x: Bands; y: Bands }, W: number, H: number, d: number, lo: number, hi: number, step: number, only?: number, reduction = 1): Seen | null {
   let top: Seen | null = null;
   for (const sign of only ? [only] : [1, -1]) {
     const px = findPeaks(sign === 1 ? B.x.dark : B.x.light, W, d), py = findPeaks(sign === 1 ? B.y.dark : B.y.light, H, d);
     const X = gather(px), Y = gather(py);
-    const m = search(X, Y, W, H, lo, hi, step, TOL);
-    if (m && (!top || m.score > top.m.score)) top = { sign, m, X, Y, px, py };
+    // Downsampling can weaken alternating thin lines where their centres straddle sample boundaries.
+    // At native resolution, let all the recovered lines vote on the spacing within that repeat.
+    for (let divisor = 1; divisor <= reduction && hi / divisor >= 8; divisor++) {
+      const m = search(X, Y, W, H, Math.max(8, lo / divisor), hi / divisor, step, TOL);
+      if (m && (!top || m.score > top.m.score)) top = { sign, m, X, Y, px, py };
+    }
   }
   return top;
 }
@@ -437,7 +441,7 @@ export function findGrid(img: PixelImage): Found | null {
       // the search was on a small copy: measure the lines again on the picture itself, near where the small copy says they are
       full ??= bandProfiles(L0, W0, H0, REACH * f);
       at0 = join === 1 ? full : { x: joinBands(full.x, join), y: joinBands(full.y, join) };
-      const again = look(at0, W0, H0, REACH * f, r.p * f * 0.985, r.p * f * 1.015, 1.0002, seen.sign);
+      const again = look(at0, W0, H0, REACH * f, r.p * f * 0.985, r.p * f * 1.015, 1.0002, seen.sign, f);
       if (!again) continue;
       ({ m, X, Y, px, py } = again);
       r = fit(px, py, m.p, m.x.o, m.y.o);

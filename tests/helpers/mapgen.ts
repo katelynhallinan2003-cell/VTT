@@ -22,7 +22,7 @@ export interface GridSpec {
   /** how many brightness levels the line differs from the ground (or, with `mul`, what part of 255 it is see-through by) */
   contrast: number;
   light?: boolean;
-  style?: 'solid' | 'dashed' | 'corners';
+  style?: 'solid' | 'dashed' | 'dotted' | 'corners';
   /** a see-through line: its strength follows the brightness of the ground under it */
   mul?: boolean;
   /** squares only: every so-many-th line is drawn heavier, like graph paper */
@@ -128,6 +128,7 @@ function gridCover(W: number, H: number, g: GridSpec): Float32Array {
     // along a line: all of it, dashes, or only a little way out from each crossing
     const along = (v: number, o: number) => {
       if (style === 'solid') return 1;
+      if (style === 'dotted') return v % 4 < 2 ? 1 : 0;
       const d = Math.abs(v - (o + Math.round((v - o) / g.p) * g.p));
       if (style === 'corners') return d < g.p * 0.14 ? 1 : 0;
       const dash = g.p / 6;
@@ -287,8 +288,14 @@ export function gridError(found: GridCut, truth: GridSpec, W: number, H: number)
   if (shape !== truth.shape) return Infinity;
   if (shape === 'square') {
     let worst = 0;
-    for (let c = truth.ox - Math.ceil(truth.ox / truth.p) * truth.p; c < W; c += truth.p) if (c >= 0) worst = Math.max(worst, near(c - found.x, found.p));
-    for (let c = truth.oy - Math.ceil(truth.oy / truth.p) * truth.p; c < H; c += truth.p) if (c >= 0) worst = Math.max(worst, near(c - found.y, found.p));
+    // Compare in both directions so that extra lines between every pair of true lines also fail.
+    const checkLines = (from: number, step: number, to: number, period: number, limit: number) => {
+      for (let c = ((from % step) + step) % step; c < limit; c += step) worst = Math.max(worst, near(c - to, period));
+    };
+    for (const [actual, expected, limit] of [[found.x, truth.ox, W], [found.y, truth.oy, H]]) {
+      checkLines(expected, truth.p, actual, found.p, limit);
+      checkLines(actual, found.p, expected, truth.p, limit);
+    }
     return worst;
   }
   const mk = (c: { p: number; x: number; y: number }) => ({ shape, cell: c.p, ox: c.x, oy: c.y, visible: true, color: '#000', opacity: 1, ft: 5, rule: 'chebyshev' as const, snap: true });

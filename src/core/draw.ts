@@ -236,15 +236,24 @@ export function snapToEdgeMid(grid: GridSettings, p: Vec): Vec {
   return { x: c.u * grid.cell + grid.ox, y: c.v * grid.cell + grid.oy };
 }
 
+/** The nearer of the middle of a square's side and a corner of the square (a line can start from either). */
+export function snapToEdgeOrCorner(grid: GridSettings, p: Vec): Vec {
+  const m = snapToEdgeMid(grid, p);
+  const c = snapToCorner(grid, p);
+  return Math.hypot(m.x - p.x, m.y - p.y) <= Math.hypot(c.x - p.x, c.y - p.y) ? m : c;
+}
+
 /**
  * Where a template starts on the grid, by the 2024 rules and what players expect at the table:
- * - cone, cube, line: the middle of a square's edge (a cone comes out of the side of the caster's square)
+ * - cone, cube: the middle of a square's edge (a cone comes out of the side of the caster's square)
+ * - line: the middle of a square's edge or a corner, whichever is nearer
  * - emanation: the middle of a square (it comes out of the creature standing there, and is measured from its edge)
  * - sphere: the middle of a square by default (the point it bursts from), or a corner, as chosen
  */
 export function snapTemplateOrigin(grid: GridSettings, kind: DrawKind | undefined, p: Vec, sphereAt: SphereSnap = 'center'): Vec {
   if (!kind || kind === 'sphere') return sphereAt === 'corner' ? snapToCorner(grid, p) : snapToCellCenter(grid, p);
   if (kind === 'emanation') return snapToCellCenter(grid, p);
+  if (kind === 'beam') return snapToEdgeOrCorner(grid, p);
   return snapToEdgeMid(grid, p);
 }
 

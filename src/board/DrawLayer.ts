@@ -44,7 +44,7 @@ function ellipsePts(cx: number, cy: number, rx: number, ry: number): Vec[] {
 }
 
 /** Paint a shape onto a Graphics object. Text is handled separately by DrawLayer. `sight` holds the walls that stop a spell. */
-export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1, cover = false, sight?: Seg[]) {
+export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1, cover = false, sight?: Seg[], groundAt?: (p: Vec) => number) {
   const pts = s.pts;
   if (!pts.length) return;
   const col = hex(s.color);
@@ -59,7 +59,7 @@ export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1,
     const fillA = (s.fill > 0 ? s.fill : TEMPLATE_FILL) * alpha;
     if (cover) {
       // light up the squares the area covers (the area itself is left unfilled so the squares read clearly)
-      for (const c of reachableCells(coveredCells(grid, s.k, pts[0], pts[1], widthPx), pts[0], sight)) g.poly(cellPoly(grid, c).flatMap((p) => [p.x, p.y])).fill({ color: fcol, alpha: Math.max(0.5, fillA) * alpha });
+      for (const c of reachableCells(coveredCells(grid, s.k, pts[0], pts[1], widthPx), pts[0], sight, groundAt?.(pts[0]))) g.poly(cellPoly(grid, c).flatMap((p) => [p.x, p.y])).fill({ color: fcol, alpha: Math.max(0.5, fillA) * alpha });
     } else {
       if (geom.type === 'circle') g.circle(geom.c.x, geom.c.y, Math.max(0.5, geom.r)).fill({ color: fcol, alpha: fillA });
       else g.poly(geom.pts.flatMap((p) => [p.x, p.y])).fill({ color: fcol, alpha: fillA });
@@ -138,7 +138,7 @@ export class DrawLayer {
   private items = new Map<string, Item>();
   private grid = '';
 
-  sync(list: Drawing[], grid: GridSettings, textRes: number, cover = false, walls?: { segs: Seg[]; rev: number }) {
+  sync(list: Drawing[], grid: GridSettings, textRes: number, cover = false, walls?: { segs: Seg[]; rev: string; ground?: (p: Vec) => number }) {
     const gridSig = `${grid.shape}|${grid.cell}|${grid.ft}|${grid.ox}|${grid.oy}|${cover}|${cover ? walls?.rev ?? 0 : 0}`;
     const gridChanged = gridSig !== this.grid;
     this.grid = gridSig;
@@ -158,7 +158,7 @@ export class DrawLayer {
         it.sig = sig;
         it.g.clear();
         if (d.k === 'text') this.paintText(it, d, textRes);
-        else { paintShape(it.g, shapeOf(d), grid, 1, cover, walls?.segs); this.paintZoneLabel(it, d, grid, textRes); }
+        else { paintShape(it.g, shapeOf(d), grid, 1, cover, walls?.segs, walls?.ground); this.paintZoneLabel(it, d, grid, textRes); }
       }
       if (it.text && it.text.resolution !== textRes) it.text.resolution = textRes;
     });

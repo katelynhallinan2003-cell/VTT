@@ -341,11 +341,12 @@ export function carveWalls(walls: Iterable<Wall>, cut: Seg, tol: number): { remo
   return { remove, add };
 }
 
-/** The squares a template really reaches: the ones the point it starts from can see in a straight line (walls and closed doors stop it). */
-export function reachableCells(cells: Vec[], from: Vec, sight: Seg[] | undefined): Vec[] {
+/** The squares a template really reaches: the ones the point it starts from can see in a straight line (walls and closed doors stop it, unless they are lower than where it starts). */
+export function reachableCells(cells: Vec[], from: Vec, sight: Seg[] | undefined, alt?: number): Vec[] {
   if (!sight?.length) return cells;
-  // a template that starts on a wall is not held back by that wall; a one-way wall only holds it back from its blocking side
-  const segs = segsFrom(sight, from).filter((sg) => distToSeg(from, sg) > 0.75);
+  // a template that starts on a wall is not held back by that wall; a one-way wall only holds it back from its blocking side,
+  // and (given `alt`, how high up it starts) a wall lower than the start does not hold it back at all: it spreads over and down the far side
+  const segs = segsFrom(sight, from, alt).filter((sg) => distToSeg(from, sg) > 0.75);
   if (!segs.length) return cells;
   return cells.filter((c) => Math.hypot(c.x - from.x, c.y - from.y) < 1 || lineOfSight(from, c, segs));
 }

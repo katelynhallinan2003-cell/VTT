@@ -7,7 +7,7 @@ import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
 import { altitudeOf, groundAt, heightChangeNote, heightNote, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
 import { EMPTY_TERRAIN, MAX_STROKE_CELLS, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, heightColor, newAreaId, type Area, type Terrain } from '../core/terrain';
-import { cellPoly } from '../core/cells';
+import { MAX_COVERED, auraCells, cellPoly, outlineEdges } from '../core/cells';
 import { findGrid, scaleCut, type GridCut } from '../core/gridcut';
 import { findHexGrid } from '../core/hexcut';
 import { lightOf, viewerOf, type LightSrc, type Viewer } from '../core/light';
@@ -16,7 +16,7 @@ import { DEFAULT_GRID } from '../core/model';
 import { pctOf, toPub, visionCircles } from '../core/combat';
 import type { DrawingPatch, TableClient } from '../state/client';
 import type { StrokeSize, UiState } from '../state/ui';
-import type { Ambient, DrawKind, Drawing, Ping, Rect, Token, Vec } from '../types';
+import type { Ambient, Aura, DrawKind, Drawing, GridSettings, Ping, Rect, Token, Vec } from '../types';
 import { throttle } from '../core/throttle';
 import { TokenView, type TokenCtx } from './TokenView';
 import { DrawLayer, paintShape } from './DrawLayer';
@@ -778,8 +778,9 @@ export class Board {
   }
 
   /** What stops a spell, for the template painter. */
-  private wallsForSpells(): { segs: Seg[]; rev: number } {
-    return { segs: this.wallSegs().sight, rev: this.client.scene?.wallRev ?? 0 };
+  private wallsForSpells(): { segs: Seg[]; rev: string; ground: (p: Vec) => number } {
+    // a spell also depends on how high the ground is where it starts (a wall lower than that does not stop it)
+    return { segs: this.wallSegs().sight, rev: `${this.client.scene?.wallRev ?? 0}:${this.zones.sig}`, ground: (p) => groundAt(this.zones, p) };
   }
 
   private onWallsChanged() {
@@ -1246,6 +1247,19 @@ export class Board {
   }
 
   // ------------------------------------------------------------------ auras
+  private auraCache = new Map<string, Vec[] | null>();
+  /** the squares an aura covers, worked out once per square the token stands on (null: too big to draw square by square) */
+  private auraCellsFor(grid: GridSettings, size: number, at: Vec, a: Aura): Vec[] | null {
+    const centre = snapTokenCenter(grid, size, at);
+    const key = `${grid.shape}|${grid.cell}|${grid.ft}|${grid.ox}|${grid.oy}|${size}|${Math.round(centre.x)},${Math.round(centre.y)}|${a.r}|${a.shape}|${a.edge}`;
+    if (this.auraCache.has(key)) return this.auraCache.get(key)!;
+    if (this.auraCache.size > 400) this.auraCache.clear();
+    const cells = auraCells(grid, centre, size * grid.cell, a);
+    const res = cells.length > MAX_COVERED ? null : cells;
+    this.auraCache.set(key, res);
+    return res;
+  }
+
   private drawAuras() {
     const g = this.auraG;
     g.clear();
@@ -1258,6 +1272,15 @@ export class Board {
         if ((a.dm && !dmView) || a.r <= 0) continue;
         const r = (a.r / grid.ft) * grid.cell + (a.edge ? (t.size * grid.cell) / 2 : 0);
         const col = num(a.color);
+        // following the grid lines: whole squares (or hexes), outlined along their sides, like a spell template
+        const cells = a.g ? this.auraCellsFor(grid, t.size, v.display, a) : null;
+        if (cells) {
+          for (const c of cells) g.poly(cellPoly(grid, c).flatMap((p) => [p.x, p.y]));
+          g.fill({ color: col, alpha: a.a });
+          for (const [p, q] of outlineEdges(grid, cells)) g.moveTo(p.x, p.y).lineTo(q.x, q.y);
+          g.stroke({ width: 2 / z, color: col, alpha: Math.min(1, a.a + 0.45), cap: 'round', join: 'round' });
+          continue;
+        }
         if (a.shape === 'square') g.rect(v.display.x - r, v.display.y - r, r * 2, r * 2);
         else g.circle(v.display.x, v.display.y, r);
         g.fill({ color: col, alpha: a.a }).stroke({ width: 2 / z, color: col, alpha: Math.min(1, a.a + 0.45) });
@@ -1573,7 +1596,7 @@ export class Board {
       } else paintShape(g, {
         k: d.dk, pts: d.pts, color: u.drawColor, w: isT ? Math.max(2, this.strokePx()) : this.strokePx(),
         fill: !isT && (d.dk === 'rect' || d.dk === 'ellipse') ? FILL_LEVEL[u.drawFillMode] : 0, fc: u.drawFillColor, dash: !isT && u.drawDash, bw: u.tplWidth, of: d.of,
-      }, grid, 0.85, u.tplCover, this.wallSegs().sight);
+      }, grid, 0.85, u.tplCover, this.wallSegs().sight, (p) => groundAt(this.zones, p));
       if (isT && d.pts.length >= 2) this.plotLabel(li++, templateLabel(d.dk, grid, d.pts[0], d.pts[1], u.tplWidth, footprintPx(grid, d.of ?? 0)), d.pts[1].x, d.pts[1].y - 12 / z, num(u.drawColor));
     }
 

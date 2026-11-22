@@ -6,7 +6,7 @@ const OPACITIES: { v: number; label: string }[] = [
   { v: 0.45, label: 'Strong' },
 ];
 
-export const NEW_AURA: Aura = { r: 10, color: '#ff6b6b', a: 0.25, shape: 'circle', edge: true, dm: false };
+export const NEW_AURA: Aura = { r: 10, color: '#ff6b6b', a: 0.25, shape: 'circle', edge: true, dm: false, g: true };
 
 /** Coloured areas that follow a token, measured in feet (auras, emanations, spell effects). */
 export function AuraEditor(props: { auras: Aura[]; ft: number; isDM: boolean; disabled?: boolean; /** colour for a new aura (the token's ring colour) */ defaultColor?: string; compact?: boolean; onChange: (a: Aura[]) => void }) {
@@ -32,6 +32,9 @@ export function AuraEditor(props: { auras: Aura[]; ft: number; isDM: boolean; di
           </select>
           <label class="inline-check" title="Measure from the edge of the token, as 5e emanations do. Off measures from its centre.">
             <input type="checkbox" checked={a.edge} disabled={props.disabled} onChange={(e) => upd(i, { edge: (e.target as HTMLInputElement).checked })} /> edge
+          </label>
+          <label class="inline-check" title="Follow the grid lines like a spell template: the aura covers whole squares (or hexes). Off draws a smooth shape.">
+            <input type="checkbox" checked={a.g} disabled={props.disabled} onChange={(e) => upd(i, { g: (e.target as HTMLInputElement).checked })} /> on grid
           </label>
           {props.isDM && (
             <label class="inline-check" title="Only you see this aura">

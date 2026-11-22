@@ -152,6 +152,7 @@ export function normalizeAuras(raw: any): Aura[] {
     shape: a.shape === 'square' ? 'square' : 'circle',
     edge: bool(a.edge, true),
     dm: bool(a.dm, false),
+    g: bool(a.g, true),
   }));
 }
 

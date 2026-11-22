@@ -184,6 +184,8 @@ export interface Aura {
   edge: boolean;
   /** only the DM sees it */
   dm: boolean;
+  /** follows the grid lines, like a spell template: it covers whole squares (or hexes) instead of a smooth shape */
+  g: boolean;
 }
 
 export type DrawKind = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'cone' | 'cube' | 'sphere' | 'emanation' | 'beam' | 'terrain';

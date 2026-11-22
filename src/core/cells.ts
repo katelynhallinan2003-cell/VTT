@@ -37,9 +37,12 @@ export const MAX_COVERED = 2500;
 export function coveredCells(grid: GridSettings, kind: DrawKind, a: Vec, b: Vec, widthPx: number): Vec[] {
   const hexShape = isHex(grid) ? (grid.shape as 'pointy' | 'flat') : undefined;
   const g = templateGeom(kind, a, b, widthPx, hexShape);
-  const bounds = g.type === 'circle' ? { x: g.c.x - g.r, y: g.c.y - g.r, w: g.r * 2, h: g.r * 2 } : boundsOf(g.pts);
   // a cell whose middle sits right on the edge counts, and stays counted however the pointer wobbles
   const eps = Math.max(0.5, grid.cell * 0.02);
+  // the box that is searched is padded by the same amount: without it a cell exactly on the edge (a 20 ft sphere's four end squares) is
+  // dropped or kept by a rounding error that depends on which way the pointer points, which showed up as squares flickering
+  const raw = g.type === 'circle' ? { x: g.c.x - g.r, y: g.c.y - g.r, w: g.r * 2, h: g.r * 2 } : boundsOf(g.pts);
+  const bounds = { x: raw.x - eps, y: raw.y - eps, w: raw.w + eps * 2, h: raw.h + eps * 2 };
   const own = kind === 'emanation' ? footprintPoly(a, Math.max(widthPx, grid.cell), hexShape) : null;
   const out: Vec[] = [];
   for (const p of cellCentersIn(grid, bounds)) {
@@ -52,5 +55,51 @@ export function coveredCells(grid: GridSettings, kind: DrawKind, a: Vec, b: Vec,
     out.push(p);
     if (out.length >= MAX_COVERED) break;
   }
+  return out;
+}
+
+/**
+ * The cells an aura on a token covers, centred on `centre` (where the token stands, `footprintPx` across).
+ * Round auras are measured like a spell: a sphere from the middle, or an emanation from the edge of the token's space; square ones as a box.
+ * The token's own space is always part of it.
+ */
+export function auraCells(grid: GridSettings, centre: Vec, footprintPx: number, a: { r: number; shape: 'circle' | 'square'; edge: boolean }): Vec[] {
+  const hexShape = isHex(grid) ? (grid.shape as 'pointy' | 'flat') : undefined;
+  const rpx = (a.r / grid.ft) * grid.cell;
+  const fp = Math.max(grid.cell * 0.5, footprintPx);
+  const eps = Math.max(0.5, grid.cell * 0.02);
+  const own = footprintPoly(centre, Math.max(fp, grid.cell), hexShape);
+  const ownBounds = boundsOf(own);
+  const ownCells = cellCentersIn(grid, ownBounds).filter((p) => pointInPoly(p, own));
+  let out: Vec[];
+  if (a.shape === 'square') {
+    const half = rpx + (a.edge ? fp / 2 : 0) + eps;
+    out = cellCentersIn(grid, { x: centre.x - half, y: centre.y - half, w: half * 2, h: half * 2 });
+  } else if (a.edge) {
+    out = coveredCells(grid, 'emanation', centre, { x: centre.x + fp / 2 + rpx, y: centre.y }, Math.max(fp, grid.cell));
+  } else {
+    out = coveredCells(grid, 'sphere', centre, { x: centre.x + rpx, y: centre.y }, 0);
+  }
+  const seen = new Set(out.map((p) => `${Math.round(p.x)},${Math.round(p.y)}`));
+  for (const p of ownCells) if (!seen.has(`${Math.round(p.x)},${Math.round(p.y)}`)) out.push(p);
+  return out;
+}
+
+/** The sides of these cells that face outside (the outline of the whole group). */
+export function outlineEdges(grid: GridSettings, cells: Vec[]): [Vec, Vec][] {
+  const seen = new Map<string, { a: Vec; b: Vec; n: number }>();
+  const key = (p: Vec) => `${Math.round(p.x * 10)},${Math.round(p.y * 10)}`;
+  for (const c of cells) {
+    const poly = cellPoly(grid, c);
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      const ka = key(a), kb = key(b);
+      const k = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+      const e = seen.get(k);
+      if (e) e.n++; else seen.set(k, { a, b, n: 1 });
+    }
+  }
+  const out: [Vec, Vec][] = [];
+  for (const e of seen.values()) if (e.n === 1) out.push([e.a, e.b]);
   return out;
 }

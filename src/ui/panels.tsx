@@ -15,6 +15,7 @@ import type { Aura, GridSettings, LabelMode, SceneMeta, Token, TokenShape } from
 import { Field, Section, SliderField, Toggle, toast, useClient, useRerender, useUi } from './common';
 import { uploadImage } from './uploads';
 import { HpBar, parseDamage, tellTemp, tempPct } from './initiative';
+import { saveTokensToLibrary } from './tokenLib';
 import { FxIcons } from './effects';
 import { AuraEditor } from './auraEditor';
 import { PlayersPanel } from './modals';
@@ -77,6 +78,12 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
       <button class="btn small primary" disabled={!editable} title="Edit token (E)" onClick={() => props.onEdit(ids)}>Edit</button>
       {!client.isDM && !multi && client.canDo('claim', t0) && (
         <button class="btn small" onClick={() => void client.updateToken(t0.id, { ownerUid: client.uid })}>Take control</button>
+      )}
+      {editable && (client.isDM || tokens.every((t) => t.ownerUid === client.uid)) && (
+        <button class="btn small" title={client.isDM ? 'Keep this token, with all its settings, in your library to drop into any scene later' : 'Keep this character: its look and conditions follow you to every scene'}
+          onClick={() => void saveTokensToLibrary(client, ids)}>
+          {client.isDM ? 'Save to library' : !multi && t0.cid && client.tokenLib.some((e) => e.id === t0.cid) ? 'Update saved' : 'Save character'}
+        </button>
       )}
       {editable && (
         <button class="btn small" title="Poisoned, blessed, or anything you make up: with or without a timer" onClick={() => props.onEffects(ids)}>

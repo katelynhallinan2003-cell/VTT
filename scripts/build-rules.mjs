@@ -39,6 +39,13 @@ const rules = {
       $uid: {
         '.read': 'auth != null && auth.uid === $uid',
         '.write': `auth != null && auth.uid === $uid && ${ALLOWED_DM}`,
+        // saved tokens: anyone signed in keeps their own (a player's characters, the DM's templates). Private to their owner.
+        tokenLib: {
+          $id: {
+            '.write': 'auth != null && auth.uid === $uid',
+            '.validate': "newData.hasChildren(['name', 't']) && newData.child('name').isString() && newData.child('name').val().length <= 60",
+          },
+        },
       },
     },
     tables: {

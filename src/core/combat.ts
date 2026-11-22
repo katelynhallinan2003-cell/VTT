@@ -1,5 +1,6 @@
 // Combat bookkeeping: health states, the initiative order and what tokens can see.
 // Pure functions only, so they are easy to test and the client and the board share one set of rules.
+import { isLightMark } from './light';
 import type { GridSettings, HealthState, HpShow, InitEntry, InitPub, InitState, Token, Vec } from '../types';
 
 // ---------------------------------------------------------------- health
@@ -86,6 +87,14 @@ export function moveEntry(entries: InitEntry[], id: string, beforeId: string | n
 export function emptyInit(): InitState { return { round: 0, turn: null, shown: false, entries: [] }; }
 
 /** Move to the next entry; going past the last one starts a new round. */
+/** The order without any torch, lantern or other light-only mark (those are never combatants). The turn moves on if it was one. */
+export function withoutLights(init: InitState, tokens: ReadonlyMap<string, Token>): InitState {
+  const entries = init.entries.filter((e) => { const t = e.tk ? tokens.get(e.tk) : undefined; return !(t && isLightMark(t)); });
+  if (entries.length === init.entries.length) return init;
+  const turn = init.turn && entries.some((e) => e.id === init.turn) ? init.turn : orderOf(entries)[0]?.id ?? null;
+  return { ...init, entries, turn, round: entries.length ? init.round : 0 };
+}
+
 export function nextTurn(s: InitState): { turn: string | null; round: number } {
   const list = orderOf(s.entries);
   if (!list.length) return { turn: null, round: s.round };

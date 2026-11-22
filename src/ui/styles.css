@@ -565,3 +565,10 @@ input[type=text], input[type=number], input[type=password], select { border-radi
 /* extra maps in the Scene panel */
 .extra-map { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
 .extra-map.on { border-color: var(--accent); }
+
+/* scene folders */
+.folder-select { max-width: 130px; }
+.mini-select { max-width: 120px; padding: 3px 6px; font-size: 12px; }
+.scene-group { margin-bottom: 12px; }
+.scene-group-head { display: flex; align-items: center; gap: 6px; margin: 4px 0 4px; }
+.scene-group-head input { flex: 1; }

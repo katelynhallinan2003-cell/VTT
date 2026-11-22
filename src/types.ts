@@ -156,6 +156,8 @@ export interface Token {
   /** conditions and other effects on it: poisoned, blessed, a custom one... Everyone who can see the token sees them. */
   fx: Effect[];
   ownerUid: string | null;
+  /** which saved character this is (a player's token library entry), so it is known to be the same character in every scene; null for ordinary tokens */
+  cid: string | null;
   /** DM-only token (stored in the DM-only subtree, invisible to players) */
   hidden: boolean;
   locked: boolean;
@@ -368,7 +370,11 @@ export interface Player {
   dm: boolean;
 }
 
-export interface SceneIndexEntry { id: string; name: string; order: number }
+/** `folder` is the id of the folder it sits in, or null when it is not in one. */
+export interface SceneIndexEntry { id: string; name: string; order: number; folder: string | null }
+
+/** A named group of scenes, for preparing many of them over a campaign (DM only). */
+export interface SceneFolder { id: string; name: string; order: number }
 
 export interface Ping { id: string; x: number; y: number; uid: string; color: string; name: string; t: number }
 

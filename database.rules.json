@@ -10,7 +10,13 @@
     "users": {
       "$uid": {
         ".read": "auth != null && auth.uid === $uid",
-        ".write": "auth != null && auth.uid === $uid && auth.token.email_verified === true && root.child('config').child('allowedEmails').child(auth.token.email.toLowerCase().replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',')).val() === true"
+        ".write": "auth != null && auth.uid === $uid && auth.token.email_verified === true && root.child('config').child('allowedEmails').child(auth.token.email.toLowerCase().replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',')).val() === true",
+        "tokenLib": {
+          "$id": {
+            ".write": "auth != null && auth.uid === $uid",
+            ".validate": "newData.hasChildren(['name', 't']) && newData.child('name').isString() && newData.child('name').val().length <= 60"
+          }
+        }
       }
     },
     "tables": {

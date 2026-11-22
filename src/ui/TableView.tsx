@@ -5,10 +5,13 @@ import { snapTokenCenter } from '../core/geometry';
 import { loadImage } from '../core/images';
 import type { TableClient } from '../state/client';
 import { UiState } from '../state/ui';
+import type { SavedToken } from '../core/tokenlib';
 import type { AuthUser, LibraryItem, Rect, Token, Vec } from '../types';
 import { HandoutsModal } from './handouts';
 import { Toasts, copyText, toast, useClient, useTheme, useUi } from './common';
-import { AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewSceneModal, ScenesModal, SettingsModal } from './modals';
+import { AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewFolderModal, NewSceneModal, ScenesModal, SettingsModal } from './modals';
+import { SceneBar } from './sceneBar';
+import { saveTokensToLibrary } from './tokenLib';
 import { DrawFlyout, DrawInspector, HeightFlyout, RulerFlyout, TemplateFlyout, TestMoveBar, TextEditor, WallFlyout } from './drawTools';
 import { Dock, Rail, TokenTag } from './panels';
 import { InitPopup, InitStrip } from './initiative';
@@ -20,6 +23,7 @@ type ModalState =
   | { kind: 'addToken'; at: Vec; file?: File | null; art?: LibraryItem }
   | { kind: 'newScene' }
   | { kind: 'scenes' }
+  | { kind: 'newFolder' }
   | { kind: 'library' }
   | { kind: 'settings' }
   | { kind: 'claim' }
@@ -189,6 +193,17 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
     } catch { toast('Could not load that map.', 'error'); }
   }
 
+  /** Drop a saved token onto the board where the view is centred. */
+  async function addSavedToken(entry: SavedToken) {
+    const at = viewCenter();
+    const grid = client.grid;
+    const p = grid.snap ? snapTokenCenter(grid, 1, at) : at;
+    try {
+      const id = await client.addSavedToken(entry.id, p);
+      if (id) { ui.select([id]); toast(client.isDM ? `${entry.name} added` : `${entry.name} is here`, 'ok', 1800); }
+    } catch (e) { toast((e as Error).message || 'Could not add it', 'error'); }
+  }
+
   async function addLibraryToken(item: LibraryItem) {
     const at = viewCenter();
     const grid = client.grid;
@@ -208,6 +223,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       const toks = ids.map((i) => scene?.tokens.get(i)).filter((t): t is Token => !!t);
       if (toks.every((t) => client.canDo('edit', t))) menuItems.push({ label: 'Edit token…', onClick: () => setModal({ kind: 'editToken', ids }) });
       if (toks.every((t) => client.canDo('edit', t))) menuItems.push({ label: 'Effects…', onClick: () => setFxWin(ids) });
+      if (client.isDM || toks.every((t) => t.ownerUid === client.uid)) menuItems.push({ label: client.isDM ? 'Save to library' : 'Save as my character', onClick: () => void saveTokensToLibrary(client, ids) });
       if (client.canDo('create')) menuItems.push({ label: 'Duplicate', onClick: () => void client.duplicateTokens(ids, client.grid.cell).then((n) => ui.select(n)) });
       if (toks.every((t) => client.canDo('edit', t))) {
         menuItems.push({ label: 'Bring to front', onClick: () => void client.bringToFront(ids) });
@@ -310,20 +326,8 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
         {props.demo && <span class="badge warn" title="Data lives in this browser only">demo</span>}
         {client.isDM ? (
           <>
-            <select class="scene-select" aria-label="Scene" value={client.viewSceneId ?? ''}
-              onChange={(e) => {
-                const el = e.target as HTMLSelectElement;
-                const v = el.value;
-                if (v === '__new') { el.value = client.viewSceneId ?? ''; setModal({ kind: 'newScene' }); }
-                else if (v === '__manage') { el.value = client.viewSceneId ?? ''; setModal({ kind: 'scenes' }); }
-                else client.openScene(v || null);
-              }}>
-              {client.sceneIndex.length === 0 && <option value="">No scenes yet</option>}
-              {client.sceneIndex.map((sc) => <option key={sc.id} value={sc.id}>{sc.name}</option>)}
-              <option value="__new">+ New scene…</option>
-              {client.sceneIndex.length > 0 && <option value="__manage">Manage scenes…</option>}
-            </select>
-            {client.viewSceneId && !live && <button class="btn small primary" title="Players are on another scene. This moves everyone at the table to this one." onClick={() => void client.setActiveScene(client.viewSceneId!)}>Summon players</button>}
+            <SceneBar client={client} ui={ui} onNew={() => setModal({ kind: 'newScene' })} onManage={() => setModal({ kind: 'scenes' })} onNewFolder={() => setModal({ kind: 'newFolder' })} />
+            {client.viewSceneId && !live && <button class="btn small primary" title="Players are on another scene. This moves everyone at the table to this one." onClick={() => void client.setActiveScene(client.viewSceneId!).then((n) => { if (n) toast(`${n} player token${n === 1 ? '' : 's'} came along`, 'ok', 2600); })}>Summon players</button>}
           </>
         ) : (
           scene?.meta && <span class="scene-name">{scene.meta.name}</span>
@@ -389,14 +393,15 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
 
       {/* ---------------- modals */}
       {modal?.kind === 'addToken' && <AddTokenModal client={client} at={modal.at} initialFile={modal.file} onClose={() => setModal(null)} onCreated={(id) => ui.select([id])} />}
-      {modal?.kind === 'newScene' && <NewSceneModal client={client} onClose={() => setModal(null)} onCreated={() => ui.set({ dockTab: 'scene' })} />}
-      {modal?.kind === 'scenes' && <ScenesModal client={client} onClose={() => setModal(null)} onNew={() => setModal({ kind: 'newScene' })} />}
-      {modal?.kind === 'library' && <LibraryModal client={client} onClose={() => setModal(null)} onUseMap={useLibraryMap} onAddToken={addLibraryToken} />}
+      {modal?.kind === 'newScene' && <NewSceneModal client={client} folder={['all', 'none'].includes(d.sceneFolder) ? null : d.sceneFolder} onClose={() => setModal(null)} onCreated={() => ui.set({ dockTab: 'scene' })} />}
+      {modal?.kind === 'newFolder' && <NewFolderModal client={client} onClose={() => setModal(null)} onCreated={(id) => ui.set({ sceneFolder: id })} />}
+      {modal?.kind === 'scenes' && <ScenesModal client={client} onClose={() => setModal(null)} onNew={() => setModal({ kind: 'newScene' })} onNewFolder={() => setModal({ kind: 'newFolder' })} />}
+      {modal?.kind === 'library' && <LibraryModal client={client} onClose={() => setModal(null)} onUseMap={useLibraryMap} onAddToken={addLibraryToken} onAddSaved={(e) => { void addSavedToken(e); setModal(null); }} />}
       {modal?.kind === 'settings' && <SettingsModal client={client} ui={ui} onClose={() => setModal(null)} onSignOut={client.isDM ? props.onSignOut : undefined} />}
       {modal?.kind === 'editToken' && <TokenEditorModal client={client} ids={modal.ids} onClose={() => setModal(null)} />}
       {modal?.kind === 'handouts' && <HandoutsModal key={modal.openId ?? 'list'} client={client} openId={modal.openId ?? null} onClose={() => setModal(null)} />}
       {popup && <HandoutsModal key={'popup-' + popup} client={client} openId={popup} onClose={() => setPopup(null)} />}
-      {modal?.kind === 'claim' && <ClaimModal client={client} onClose={() => setModal(null)} onNewToken={() => openAddToken()} />}
+      {modal?.kind === 'claim' && <ClaimModal client={client} onClose={() => setModal(null)} onNewToken={() => openAddToken()} onBring={(e) => void addSavedToken(e)} />}
       {modal?.kind === 'grid' && (
         <GridDialog shape={client.grid.shape} onCancel={() => { setModal(null); ui.set({ tool: 'select' }); }}
           onApply={(cols, rows) => {

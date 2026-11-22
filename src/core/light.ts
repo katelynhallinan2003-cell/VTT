@@ -2,6 +2,9 @@ import type { Ambient, GridSettings, Token, TokenLight, Vec } from '../types';
 import { visibilityPolygon, type Seg } from './walls';
 
 /** How dark each kind of scene is where nothing lights it (0 = daylight, 1 = pitch black). */
+/** A token that is only a light (a torch, a lantern, a campfire): no picture and no frame. It is never a combatant. */
+export const isLightMark = (t: Pick<Token, 'shape' | 'img' | 'light'>): boolean => t.shape === 'none' && !t.img && !!t.light;
+
 export const SHADE: Record<Ambient, number> = { bright: 0, dim: 0.45, dark: 0.88 };
 /** The colour of the dark, a little blue so it reads as night and not as a stain. */
 export const NIGHT = '5,8,22';

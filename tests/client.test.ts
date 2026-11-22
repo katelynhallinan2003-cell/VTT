@@ -467,3 +467,25 @@ describe('TableClient over the mock backend', () => {
     expect([...dm.scene!.fogOps.values()][0]).toMatchObject({ m: 'r', t: 'line' });
   });
 });
+
+describe('initiative and light sources', () => {
+  it('never puts a torch in the order, and drops one that is already there', async () => {
+    const { dm } = await setup();
+    const hero = await dm.addToken({ x: 35, y: 35, name: 'Aria' }, { record: false });
+    const torch = await dm.addToken({ x: 105, y: 35, name: 'Torch', shape: 'none', light: { b: 20, d: 20, c: '#ffc27a' } } as any, { record: false });
+    await waitFor(() => dm.scene!.tokens.size === 2, 'tokens');
+    await dm.initApply([{ tk: hero, n: 'Aria', i: 12 }, { tk: torch, n: 'Torch', i: 30 }]);
+    await waitFor(() => dm.scene!.init.entries.length >= 1, 'entries');
+    await sleep(30);
+    expect(dm.scene!.init.entries.map((x) => x.n)).toEqual(['Aria']);
+
+    // a creature that turns into a light-only mark later is taken out on the next change
+    await dm.initApply([{ tk: null, n: 'Goblin', i: 8 }]);
+    await waitFor(() => dm.scene!.init.entries.length === 2, 'goblin');
+    await dm.updateToken(hero, { shape: 'none', light: { b: 5, d: 5, c: '#ffffff' } } as any);
+    await sleep(30);
+    await dm.initStep(1);
+    await waitFor(() => dm.scene!.init.entries.length === 1, 'the light is dropped when the turn moves');
+    expect(dm.scene!.init.entries[0].n).toBe('Goblin');
+  });
+});

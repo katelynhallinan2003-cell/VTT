@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { entryName, healthState, HEALTH_COLOR, HEALTH_LABEL, orderOf, pctOf, rollD20 } from '../core/combat';
+import { entryName, healthState, HEALTH_COLOR, HEALTH_LABEL, orderOf, pctOf, rollD20, withoutLights } from '../core/combat';
+import { isLightMark } from '../core/light';
 import type { Board } from '../board/Board';
 import type { TableClient } from '../state/client';
 import type { UiState } from '../state/ui';
@@ -79,14 +80,14 @@ export function InitPopup(props: { client: TableClient; ui: UiState; board: Boar
   }, [d.initOpen]);
   if (!client.isDM || !d.initOpen || !scene) return null;
 
-  const init = scene.init;
+  const init = withoutLights(scene.init, scene.tokens);
   const entries = orderOf(init.entries);
   const inOrder = new Map(entries.filter((e) => e.tk).map((e) => [e.tk!, e]));
   const fail = (e: unknown) => toast((e as Error).message, 'error');
   const close = () => ui.set({ initOpen: false });
 
   // ---- roll tab
-  const tokens = [...scene.tokens.values()].sort((a, b) =>
+  const tokens = [...scene.tokens.values()].filter((t) => !isLightMark(t)).sort((a, b) =>
     Number(inOrder.has(a.id)) - Number(inOrder.has(b.id)) || Number(!!b.ownerUid) - Number(!!a.ownerUid) || (a.name || '~').localeCompare(b.name || '~'));
   const row = (t: Token) => {
     const o = ov[t.id] ?? {};
@@ -337,9 +338,10 @@ export function InitStrip(props: { client: TableClient; ui: UiState; board: Boar
   if (scene) {
     const tokens = scene.tokens;
     if (client.isDM) {
-      items = orderOf(scene.init.entries).map((e) => ({ id: e.id, tk: e.tk, name: entryName(e, tokens), i: e.i, secret: e.h || !!(e.tk && tokens.get(e.tk)?.hidden) }));
-      turn = scene.init.turn;
-      round = scene.init.round;
+      const clean = withoutLights(scene.init, tokens);
+      items = orderOf(clean.entries).map((e) => ({ id: e.id, tk: e.tk, name: entryName(e, tokens), i: e.i, secret: e.h || !!(e.tk && tokens.get(e.tk)?.hidden) }));
+      turn = clean.turn;
+      round = clean.round;
     } else if (scene.initPub) {
       items = scene.initPub.entries.map((e) => ({ id: e.id, tk: e.tk, name: entryName(e, tokens), i: e.i, secret: false }));
       turn = scene.initPub.turn;

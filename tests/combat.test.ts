@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  cleanHp, emptyInit, entryIsPublic, healthState, moveEntry, nextTurn, orderOf, pctOf, prevTurn, sightRadiusPx, sortByInit, toPub, visionCircles,
+  cleanHp, emptyInit, entryIsPublic, healthState, moveEntry, nextTurn, orderOf, pctOf, prevTurn, sightRadiusPx, sortByInit, toPub, visionCircles, withoutLights,
 } from '../src/core/combat';
+import { isLightMark } from '../src/core/light';
 import { initPubToWire, initToWire, normalizeInit, normalizeInitPub, normalizeToken, tokenToWire } from '../src/core/model';
 import type { InitEntry, InitState } from '../src/types';
 
@@ -133,5 +134,33 @@ describe('tokens: hit points and sight', () => {
     const list = [{ id: 'a', x: 0, y: 0, size: 1, sight: 10 }, { id: 'b', x: 5, y: 5, size: 1, sight: 0 }];
     expect(visionCircles(list, grid)).toEqual([{ id: 'a', x: 0, y: 0, r: 250 }]);
     expect(visionCircles(list, grid, () => ({ x: 9, y: 9 }))[0]).toMatchObject({ x: 9, y: 9 });
+  });
+});
+
+describe('light sources are not combatants', () => {
+  const torch = { shape: 'none', img: null, light: { b: 20, d: 20, c: '#ffc27a' } } as any;
+  it('knows a torch from a creature', () => {
+    expect(isLightMark(torch)).toBe(true);
+    expect(isLightMark({ ...torch, shape: 'circle' })).toBe(false); // a creature carrying a light
+    expect(isLightMark({ ...torch, img: 'goblin.png' })).toBe(false); // borderless art
+    expect(isLightMark({ shape: 'none', img: null, light: null } as any)).toBe(false); // an empty mark
+  });
+  it('takes them out of the order and moves the turn on', () => {
+    const tokens = new Map<string, any>([['t', torch], ['g', { shape: 'circle', img: null, light: null }]]);
+    const init = state([e('a', 20, 1, { tk: 't' }), e('b', 10, 2, { tk: 'g' }), e('c', 5, 3)], 'a', 3);
+    const out = withoutLights(init, tokens);
+    expect(out.entries.map((x) => x.id)).toEqual(['b', 'c']);
+    expect(out.turn).toBe('b');
+    expect(out.round).toBe(3);
+    expect(withoutLights(state([e('b', 10, 2, { tk: 'g' })], 'b', 1), tokens).turn).toBe('b');
+  });
+  it('leaves the same object when there is nothing to take out, and ends combat when only lights were in it', () => {
+    const tokens = new Map<string, any>([['t', torch]]);
+    const plain = state([e('x', 1, 1)], 'x', 1);
+    expect(withoutLights(plain, tokens)).toBe(plain);
+    const onlyTorch = withoutLights(state([e('a', 20, 1, { tk: 't' })], 'a', 2), tokens);
+    expect(onlyTorch.entries).toEqual([]);
+    expect(onlyTorch.turn).toBeNull();
+    expect(onlyTorch.round).toBe(0);
   });
 });

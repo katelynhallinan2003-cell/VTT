@@ -2,6 +2,7 @@ import { Container, Graphics, Sprite, Text } from 'pixi.js';
 import { healthState, HEALTH_COLOR } from '../core/combat';
 import { altLabel, type Altitude } from '../core/height';
 import { addFx, tintColor } from '../core/effects';
+import { isLightMark } from '../core/light';
 import type { Effect, GridSettings, Token } from '../types';
 import { loadTexture, type LoadedTexture } from './textures';
 
@@ -19,8 +20,7 @@ export interface TokenCtx {
 /** what has to change on screen when a token's effects change */
 const fxKey = (fx: Effect[]): string => fx.map((e) => `${e.id}${e.n}${e.ic}${e.c}${e.look}${e.tint ? 't' + e.tc : ''}${e.left ?? ''}`).join(',');
 
-/** A token that is only a light: no picture, no frame. */
-export const isLightMark = (t: Pick<Token, 'shape' | 'img' | 'light'>): boolean => t.shape === 'none' && !t.img && !!t.light;
+export { isLightMark };
 
 const hex = (c: string) => parseInt(c.replace('#', '').padEnd(6, '0').slice(0, 6), 16) || 0xffffff;
 

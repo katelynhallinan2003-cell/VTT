@@ -15,7 +15,7 @@ import { findHexGrid } from '../core/hexcut';
 import { lightOf, viewerOf, type LightSrc, type Viewer } from '../core/light';
 import { LightLayer } from './LightLayer';
 import { DEFAULT_GRID, MAX_VIA } from '../core/model';
-import { pctOf, toPub, visionCircles } from '../core/combat';
+import { pctOf, toPub, visionCircles, withoutLights } from '../core/combat';
 import type { DrawingPatch, TableClient } from '../state/client';
 import type { StrokeSize, UiState } from '../state/ui';
 import type { Ambient, Aura, DrawKind, Drawing, GridSettings, Ping, Rect, Token, Vec } from '../types';
@@ -1444,9 +1444,10 @@ export class Board {
     const scene = this.client.scene;
     if (!scene) return null;
     if (this.client.isDM && !this.ui.data.dmPreview) {
-      return scene.init.entries.find((e) => e.id === scene.init.turn)?.tk ?? null;
+      const init = withoutLights(scene.init, scene.tokens);
+      return init.entries.find((e) => e.id === init.turn)?.tk ?? null;
     }
-    const pub = this.client.isDM ? toPub(scene.init, scene.tokens) : scene.initPub;
+    const pub = this.client.isDM ? toPub(withoutLights(scene.init, scene.tokens), scene.tokens) : scene.initPub;
     return pub?.entries.find((e) => e.id === pub.turn)?.tk ?? null;
   }
 

@@ -58,7 +58,7 @@ await dm.mouse.move(stage.x + 150, stage.y + 150);
 await dm.mouse.wheel(0, -300);
 await sleep(200);
 await dm.screenshot({ path: '/tmp/shots/42-editor-dragged.png' });
-await dm.getByRole('button', { name: 'Save' }).click();
+await dm.getByRole('button', { name: 'Save', exact: true }).click();
 await sleep(300);
 const t = await dm.evaluate((i) => window.__vtt.client.scene.tokens.get(i), id);
 check('dragging and zooming in the editor saved the framing', t.imgX > 0.1 && t.imgY < -0.05 && t.imgScale > 1.2, `x=${t.imgX.toFixed(2)} y=${t.imgY.toFixed(2)} z=${t.imgScale.toFixed(2)}`);

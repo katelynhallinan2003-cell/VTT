@@ -18,22 +18,21 @@ nothing gets forgotten between sessions. **Read this first at the start of every
 
 ## In progress
 
-- [ ] Round 7h: scene folders (next).
 
 ## To do (asked for, not done)
 
+Asked 2026-11-21 20:12 PT:
+
+
 Asked 2026-11-21 18:34 PT:
 
-- [ ] Scene folders in the scene selector: make folders, swap between them, to prep many scenes over a campaign.
-- [ ] DM token library: tokens remember their settings and can be dropped in whenever wanted.
-- [ ] Player token library; players claim a token and bring it to other scenes; it remembers HP, effects and other settings.
 - [ ] Player can place templates and draw without a "permission denied": **verify with the user** after they republish `database.rules.json` (a template permission was added; the exact failing message was never seen).
 - [ ] Handout pop-up for players: **verify with the user** (two causes fixed in round 7a; needs the rules republished).
 
 
 ## Waiting on the user
 
-- [ ] Republish `database.rules.json` in the Firebase console (handouts node in round 6g; template permission in round 7a; a player library rule will be needed for the player token library).
+- [ ] Republish `database.rules.json` in the Firebase console (handouts node in round 6g; template permission in round 7a; `users/$uid/tokenLib` in round 7i for saved tokens and characters).
 - [ ] Tell me the exact wording if "permission denied" still appears for a player drawing or placing a template.
 
 ## Ideas (mine, not requested; do only if time allows or the user wants them)
@@ -48,6 +47,10 @@ Asked 2026-11-21 18:34 PT:
 
 ## Done
 
+2026-11-21 (round 7i): **saved tokens.** The DM can **Save to library** any token (selection bar or right-click): picture and framing, size, shape, ring, auras, sight, darkvision, light, initiative bonus, max hit points (not damage or conditions); **Library → Saved tokens → Add to board** drops a fresh one wherever the view is, any number of times, in any scene. Players can **Save character** on their own token (or in My token): the entry keeps the look and conditions and **keeps itself current** as the token changes; **My token → Your characters → Bring here** puts it into any scene (once per scene). Tokens carry a `cid` (character id). Hit points stay the DM's: the DM's screen files each character's hit points (`dm/chars/$cid`) and gives them back when that character arrives in another scene. **Summoning players copies their tokens** (hit points, conditions, owner) onto the new scene unless that character is already there (Settings → Moving between scenes, on by default). New rule: `users/$uid/tokenLib` writable by its own uid (**republish `database.rules.json`**).
+Tests: `tests/tokenlib.test.ts`, `tests/charlib.test.ts`, `tests/rules.test.ts` (token library rules), `tests/e2e/batchZ9.mjs`; batchA Save locator made exact.
+2026-11-21 (round 7h, asked 18:34 and 20:12 PT): **scene folders** (folder picker beside the scene picker; scene list filters by folder; new scenes start in the showing folder; "Manage scenes and folders…" groups scenes by folder with move / rename folder / delete folder (scenes kept); the picker follows a scene opened from another folder; folders go in the campaign file by name; stored under `dm/sceneFolders` and a `folder` on each scene index entry, so no new rules). **Torches and other light-only marks are no longer in the initiative tracker** (not in the roll list, refused by `initApply`, dropped from the order on the next change, never take a turn; a creature carrying a light is unaffected).
+Tests: `tests/folders.test.ts`, `tests/combat.test.ts` + `tests/client.test.ts` (lights), `tests/e2e/batchZ7.mjs`, `tests/e2e/batchZ8.mjs`.
 2026-11-21 (round 7g): **a second map can be added to a scene** (Scene → Map → "Add a second map…", up to four extra): each has a name, "Players can see it", "Locked in place" and Size; unlocked ones are dragged on the board; fog, grid, light and walls cover all the maps (`sceneRect`); Ctrl+Z undoes; the view moves clear of the side panel after adding. Stored in scene meta (`maps`), no new rules.
 Tests: `tests/extramaps.test.ts`, `tests/e2e/batchZ6.mjs`. Also fixed old e2e checks that expected the earlier fog/test-move/token-editor wording (batchB2, C, J, U).
 2026-11-21 (round 7f): **a new map is looked at once for a printed grid** (square or hex, the clearer wins; setting "Look for a printed grid when I add a map", on by default); when

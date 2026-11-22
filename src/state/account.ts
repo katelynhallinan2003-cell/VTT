@@ -2,6 +2,7 @@ import type { Backend } from '../backend/types';
 import { SERVER_TS } from '../backend/types';
 import { emailKey, randomId } from '../core/ids';
 import { normalizeLibraryItem } from '../core/model';
+import { cleanSavedName, normalizeSavedToken, type SavedToken } from '../core/tokenlib';
 import { PRESETS } from '../core/permissions';
 import type { AuthUser, LibraryItem, LibraryKind, UserTableEntry } from '../types';
 import { P } from './paths';
@@ -70,6 +71,28 @@ export async function addLibraryItem(backend: Backend, uid: string, kind: Librar
   if (item.h) wire.h = item.h;
   await backend.set(`${P.userLibrary(uid, kind)}/${id}`, wire);
   return id;
+}
+
+/** The tokens this account has saved (the DM's templates, a player's characters), newest first. */
+export function watchTokenLib(backend: Backend, uid: string, cb: (items: SavedToken[]) => void) {
+  return backend.listen(P.userTokenLib(uid), (v) => {
+    const items = Object.entries<any>(v ?? {})
+      .map(([id, raw]) => normalizeSavedToken(id, raw))
+      .filter((x): x is SavedToken => !!x)
+      .sort((a, b) => b.addedAt - a.addedAt);
+    cb(items);
+  });
+}
+
+/** Saves (or, with an existing `id`, replaces) a saved token. Returns its id. */
+export async function saveTokenToLib(backend: Backend, uid: string, entry: { name: string; t: Record<string, unknown> }, id?: string, addedAt?: number): Promise<string> {
+  const key = id ?? backend.newKey();
+  await backend.set(`${P.userTokenLib(uid)}/${key}`, { name: cleanSavedName(entry.name) || 'Token', t: entry.t, addedAt: addedAt ?? SERVER_TS });
+  return key;
+}
+
+export async function removeTokenFromLib(backend: Backend, uid: string, id: string) {
+  await backend.remove(`${P.userTokenLib(uid)}/${id}`);
 }
 
 export async function removeLibraryItem(backend: Backend, uid: string, kind: LibraryKind, id: string) {

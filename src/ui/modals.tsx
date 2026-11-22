@@ -6,9 +6,12 @@ import { PLAYER_COLORS, TOKEN_SIZES } from '../core/model';
 import { PERM_LABELS, PRESETS, detectPreset } from '../core/permissions';
 import { makeSampleMap } from '../core/sample';
 import { addLibraryItem, removeLibraryItem, watchLibrary } from '../state/account';
+import type { SavedToken } from '../core/tokenlib';
+import { SavedTokenGrid, saveTokensToLibrary } from './tokenLib';
 import type { TableClient } from '../state/client';
 import type { UiState } from '../state/ui';
-import type { GridShape, LibraryItem, Permissions, TokenShape, Vec } from '../types';
+import type { GridShape, LibraryItem, Permissions, SceneIndexEntry, TokenShape, Vec } from '../types';
+import { folderOf, groupScenes } from '../core/folders';
 import { Field, Modal, SliderField, Toggle, copyText, toast, useClient, useTheme, useUi } from './common';
 import { CampaignFileSection } from './campaignFile';
 import { THEMES, getAccent, getTheme, setAccent, setTheme } from './theme';
@@ -169,8 +172,10 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
 }
 
 // ================================================================== new scene
-export function NewSceneModal(props: { client: TableClient; onClose: () => void; onCreated?: () => void }) {
+export function NewSceneModal(props: { client: TableClient; onClose: () => void; onCreated?: () => void; /** the folder to start in */ folder?: string | null }) {
   const { client } = props;
+  useClient(client);
+  const [folderId, setFolderId] = useState<string | null>(props.folder ?? null);
   const lib = useLibrary(client, 'maps');
   const [name, setName] = useState('');
   const [file, setFile] = useState<File | Blob | null>(null);
@@ -198,7 +203,7 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
         const img = await loadImage(url.trim(), true).catch(() => { throw new Error('That image link could not be loaded.'); });
         mapUrl = url.trim(); w = img.naturalWidth; h = img.naturalHeight;
       }
-      await client.createScene({ name: name || fileName.replace(/\.\w+$/, '') || picked?.name || 'New scene', mapUrl, mapW: w, mapH: h, makeActive, /* the demo map is made by the app and its grid is known */ gridTried: fileName === 'Sample dungeon.png' });
+      await client.createScene({ name: name || fileName.replace(/\.\w+$/, '') || picked?.name || 'New scene', mapUrl, mapW: w, mapH: h, makeActive, folder: folderId, /* the demo map is made by the app and its grid is known */ gridTried: fileName === 'Sample dungeon.png' });
       props.onCreated?.();
       props.onClose();
     } catch (e) {
@@ -211,6 +216,14 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
     <Modal title="New scene" onClose={props.onClose} width={560}
       footer={<><button class="btn" onClick={props.onClose}>Cancel</button><button class="btn primary" disabled={busy || preparing} onClick={create}>{busy ? 'Uploading…' : 'Create scene'}</button></>}>
       <Field label="Scene name"><input type="text" value={name} autoFocus onInput={(e) => setName((e.target as HTMLInputElement).value)} placeholder="Goblin cave" /></Field>
+      {client.sceneFolders.length > 0 && (
+        <Field label="Folder">
+          <select value={folderId ?? ''} onChange={(e) => setFolderId((e.target as HTMLSelectElement).value || null)}>
+            <option value="">Not in a folder</option>
+            {client.sceneFolders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+          </select>
+        </Field>
+      )}
       <h3>Map image</h3>
       <p class="muted">Maps keep their full resolution (up to your host's size limit). You can skip this and add a map later.</p>
       <div class="row wrap">
@@ -242,54 +255,114 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
 }
 
 // ================================================================== scenes list
-export function ScenesModal(props: { client: TableClient; onClose: () => void; onNew: () => void }) {
+/** Asks for a name and makes a folder for scenes. */
+export function NewFolderModal(props: { client: TableClient; onClose: () => void; onCreated?: (id: string) => void }) {
+  const { client } = props;
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  async function create() {
+    if (!name.trim() || busy) return;
+    setBusy(true);
+    try {
+      const id = await client.createFolder(name);
+      props.onCreated?.(id);
+      props.onClose();
+    } catch (e) { toast(asErr(e), 'error'); setBusy(false); }
+  }
+  return (
+    <Modal title="New folder" onClose={props.onClose} width={400}
+      footer={<><button class="btn" onClick={props.onClose}>Cancel</button><button class="btn primary" disabled={!name.trim() || busy} onClick={create}>Create folder</button></>}>
+      <Field label="Folder name" hint="For example “Act 1”, “Waterdeep” or “Random encounters”. Scenes can be moved in and out of it any time.">
+        <input type="text" value={name} autoFocus maxLength={60} placeholder="Act 1" onInput={(e) => setName((e.target as HTMLInputElement).value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void create(); }} />
+      </Field>
+    </Modal>
+  );
+}
+
+export function ScenesModal(props: { client: TableClient; onClose: () => void; onNew: () => void; onNewFolder: () => void }) {
   const { client } = props;
   useClient(client);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [renamingFolder, setRenamingFolder] = useState<string | null>(null);
+  const folders = client.sceneFolders;
+  const groups = groupScenes(client.sceneIndex, folders).filter((g) => g.folder || g.scenes.length || !folders.length);
+  const sceneRow = (s: SceneIndexEntry) => {
+    const live = client.activeSceneId === s.id;
+    const viewing = client.viewSceneId === s.id;
+    return (
+      <li key={s.id} class={viewing ? 'on' : ''}>
+        {renaming === s.id ? (
+          <input type="text" autoFocus value={s.name}
+            onBlur={(e) => { const v = (e.target as HTMLInputElement).value.trim(); setRenaming(null); if (v && v !== s.name) { if (viewing) void client.updateScene({ name: v }); } }}
+            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
+        ) : (
+          <button class="link grow left" onClick={() => { client.openScene(s.id); props.onClose(); }}>
+            {s.name} {live && <span class="badge live">live</span>} {viewing && !live && <span class="badge">viewing</span>}
+          </button>
+        )}
+        {folders.length > 0 && (
+          <select class="mini-select" aria-label={`Folder for ${s.name}`} title="Move to a folder" value={folderOf(s, folders) ?? ''}
+            onChange={(e) => void client.moveScene(s.id, (e.target as HTMLSelectElement).value || null)}>
+            <option value="">No folder</option>
+            {folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+          </select>
+        )}
+        {!live && <button class="btn small" title="Moves everyone at the table onto this scene" onClick={() => void client.setActiveScene(s.id).then((n) => { if (n) toast(`${n} player token${n === 1 ? '' : 's'} came along`, 'ok', 2600); })}>Summon players</button>}
+        <button class="btn small" disabled={!viewing} title={viewing ? '' : 'Open the scene to rename it'} onClick={() => setRenaming(s.id)}>Rename</button>
+        <button class="btn small danger" onClick={() => { if (confirm(`Delete scene “${s.name}”? Tokens and fog in it are lost.`)) void client.deleteScene(s.id); }}>Delete</button>
+      </li>
+    );
+  };
   return (
-    <Modal title="Scenes" onClose={props.onClose} width={520}
-      footer={<button class="btn primary" onClick={props.onNew}>+ New scene</button>}>
-      {client.sceneIndex.length === 0 && <p class="muted">No scenes yet. Create one to get started.</p>}
-      <ul class="list">
-        {client.sceneIndex.map((s) => {
-          const live = client.activeSceneId === s.id;
-          const viewing = client.viewSceneId === s.id;
-          return (
-            <li key={s.id} class={viewing ? 'on' : ''}>
-              {renaming === s.id ? (
-                <input type="text" autoFocus value={s.name}
-                  onBlur={(e) => { const v = (e.target as HTMLInputElement).value.trim(); setRenaming(null); if (v && v !== s.name) { if (viewing) void client.updateScene({ name: v }); } }}
-                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
+    <Modal title="Scenes and folders" onClose={props.onClose} width={620}
+      footer={<><button class="btn" onClick={props.onNewFolder}>+ New folder</button><button class="btn primary" onClick={props.onNew}>+ New scene</button></>}>
+      {client.sceneIndex.length === 0 && folders.length === 0 && <p class="muted">No scenes yet. Create one to get started.</p>}
+      {groups.map((g) => (
+        <div key={g.folder?.id ?? 'none'} class="scene-group">
+          {(g.folder || folders.length > 0) && (
+            <div class="scene-group-head">
+              {g.folder && renamingFolder === g.folder.id ? (
+                <input type="text" autoFocus maxLength={60} value={g.folder.name} aria-label="Folder name"
+                  onBlur={(e) => { const v = (e.target as HTMLInputElement).value.trim(); setRenamingFolder(null); if (v && g.folder && v !== g.folder.name) void client.renameFolder(g.folder.id, v); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); else if (e.key === 'Escape') setRenamingFolder(null); }} />
               ) : (
-                <button class="link grow left" onClick={() => { client.openScene(s.id); props.onClose(); }}>
-                  {s.name} {live && <span class="badge live">live</span>} {viewing && !live && <span class="badge">viewing</span>}
-                </button>
+                <strong class="grow">{g.folder ? `📁 ${g.folder.name}` : 'Not in a folder'} <span class="muted small">{g.scenes.length}</span></strong>
               )}
-              {!live && <button class="btn small" title="Moves everyone at the table onto this scene" onClick={() => void client.setActiveScene(s.id)}>Summon players</button>}
-              <button class="btn small" disabled={!viewing} title={viewing ? '' : 'Open the scene to rename it'} onClick={() => setRenaming(s.id)}>Rename</button>
-              <button class="btn small danger" onClick={() => { if (confirm(`Delete scene “${s.name}”? Tokens and fog in it are lost.`)) void client.deleteScene(s.id); }}>Delete</button>
-            </li>
-          );
-        })}
-      </ul>
+              {g.folder && renamingFolder !== g.folder.id && (
+                <>
+                  <button class="btn small" onClick={() => setRenamingFolder(g.folder!.id)}>Rename folder</button>
+                  <button class="btn small danger" onClick={() => { if (confirm(`Delete the folder “${g.folder!.name}”? ${g.scenes.length ? `Its ${g.scenes.length} scene${g.scenes.length === 1 ? '' : 's'} are kept and move out of the folder.` : 'It is empty.'}`)) void client.deleteFolder(g.folder!.id); }}>Delete folder</button>
+                </>
+              )}
+            </div>
+          )}
+          <ul class="list">
+            {g.scenes.map(sceneRow)}
+            {g.folder && g.scenes.length === 0 && <li class="muted small">Empty. Use the folder picker on a scene to move it here.</li>}
+          </ul>
+        </div>
+      ))}
     </Modal>
   );
 }
 
 // ================================================================== library
-export function LibraryModal(props: { client: TableClient; onClose: () => void; onUseMap: (item: LibraryItem) => void; onAddToken: (item: LibraryItem) => void }) {
+export function LibraryModal(props: { client: TableClient; onClose: () => void; onUseMap: (item: LibraryItem) => void; onAddToken: (item: LibraryItem) => void; onAddSaved: (entry: SavedToken) => void }) {
   const { client } = props;
-  const [tab, setTab] = useState<'maps' | 'tokens'>('maps');
-  const items = useLibrary(client, tab);
+  useClient(client);
+  const [tab, setTab] = useState<'maps' | 'tokens' | 'saved'>('maps');
+  const items = useLibrary(client, tab === 'saved' ? 'tokens' : tab);
+  const artTab = tab === 'saved' ? 'tokens' : tab;
   const [busy, setBusy] = useState(false);
   const [url, setUrl] = useState('');
 
   async function upload(f: File) {
     setBusy(true);
     try {
-      const up = await uploadImage(client, f, tab === 'maps' ? 'map' : 'token', f.name);
+      const up = await uploadImage(client, f, artTab === 'maps' ? 'map' : 'token', f.name);
       if (client.backend.kind === 'mock') toast('Demo mode: images are not saved to the library (they only live in this tab).', 'info');
-      else await addLibraryItem(client.backend, client.uid, tab, { name: f.name.replace(/\.\w+$/, ''), url: up.url, thumb: up.thumb, w: up.w, h: up.h });
+      else await addLibraryItem(client.backend, client.uid, artTab, { name: f.name.replace(/\.\w+$/, ''), url: up.url, thumb: up.thumb, w: up.w, h: up.h });
     } catch (e) { toast(asErr(e), 'error'); }
     setBusy(false);
   }
@@ -299,7 +372,7 @@ export function LibraryModal(props: { client: TableClient; onClose: () => void; 
     setBusy(true);
     try {
       const img = await loadImage(u, true);
-      await addLibraryItem(client.backend, client.uid, tab, { name: u.split('/').pop()?.replace(/\.\w+$/, '') || 'Image', url: u, w: img.naturalWidth, h: img.naturalHeight });
+      await addLibraryItem(client.backend, client.uid, artTab, { name: u.split('/').pop()?.replace(/\.\w+$/, '') || 'Image', url: u, w: img.naturalWidth, h: img.naturalHeight });
       setUrl('');
     } catch { toast('That image link could not be loaded.', 'error'); }
     setBusy(false);
@@ -310,14 +383,21 @@ export function LibraryModal(props: { client: TableClient; onClose: () => void; 
       <div class="tabs">
         <button class={tab === 'maps' ? 'on' : ''} onClick={() => setTab('maps')}>Maps</button>
         <button class={tab === 'tokens' ? 'on' : ''} onClick={() => setTab('tokens')}>Token art</button>
+        <button class={tab === 'saved' ? 'on' : ''} onClick={() => setTab('saved')}>Saved tokens{client.tokenLib.length ? ` (${client.tokenLib.length})` : ''}</button>
       </div>
-      <div class="row wrap">
+      {tab === 'saved' && (
+        <>
+          <p class="muted">Tokens you have saved with all their settings: picture, size, sight, light, auras and hit points. Select a token and press <strong>Save to library</strong>. Add one to any scene whenever you want, as many times as you like.</p>
+          <SavedTokenGrid client={client} empty="Nothing saved yet. Select a token on the board and press Save to library." action={() => 'Add to board'} onAction={(e) => props.onAddSaved(e)} />
+        </>
+      )}
+      {tab !== 'saved' && <div class="row wrap">
         <FilePick label={busy ? 'Uploading…' : 'Upload image…'} onFile={upload} />
         <input type="text" class="grow" placeholder="…or paste an image link" value={url} onInput={(e) => setUrl((e.target as HTMLInputElement).value)} onKeyDown={(e) => { if (e.key === 'Enter') void addUrl(); }} />
         <button class="btn" onClick={addUrl} disabled={!url.trim() || busy}>Add</button>
-      </div>
-      {items.length === 0 && <p class="muted">Nothing here yet. Your library is saved to your Google account, so it follows you to any device.</p>}
-      <div class="thumbs big">
+      </div>}
+      {tab !== 'saved' && items.length === 0 && <p class="muted">Nothing here yet. Your library is saved to your Google account, so it follows you to any device.</p>}
+      {tab !== 'saved' && <div class="thumbs big">
         {items.map((it) => (
           <div key={it.id} class="lib-item">
             <img src={it.thumb ?? it.url} alt={it.name} loading="lazy" />
@@ -326,11 +406,11 @@ export function LibraryModal(props: { client: TableClient; onClose: () => void; 
               {tab === 'maps'
                 ? <button class="btn small" onClick={() => props.onUseMap(it)}>Use in scene</button>
                 : <button class="btn small" onClick={() => props.onAddToken(it)}>Add to board</button>}
-              <button class="btn small danger" onClick={() => void removeLibraryItem(client.backend, client.uid, tab, it.id)}>✕</button>
+              <button class="btn small danger" onClick={() => void removeLibraryItem(client.backend, client.uid, artTab, it.id)}>✕</button>
             </div>
           </div>
         ))}
-      </div>
+      </div>}
     </Modal>
   );
 }
@@ -344,6 +424,7 @@ export function SettingsModal(props: { client: TableClient; ui: UiState; onClose
   const [log, setLog] = useState<string[] | null>(null);
   const [testing, setTesting] = useState(false);
   const [showKey, setShowKey] = useState(false);
+  const [carry, setCarry] = useState(client.carryParty);
   const link = `${location.href.split('#')[0]}#/t/${client.tableId}`;
   const perm = client.settings.perm;
   useTheme();
@@ -363,6 +444,11 @@ export function SettingsModal(props: { client: TableClient; ui: UiState; onClose
           <Field label="Player link" hint="Send this to your players. No accounts needed.">
             <div class="row"><input type="text" readOnly value={link} onFocus={(e) => (e.target as HTMLInputElement).select()} /><button class="btn" onClick={() => copyText(link)}>Copy</button></div>
           </Field>
+
+          <h3>Moving between scenes</h3>
+          <Toggle checked={carry} onChange={(v) => { setCarry(v); client.carryParty = v; try { localStorage.setItem('vtt-carry-party', v ? '1' : '0'); } catch { /* ignore */ } }}
+            label="Bring the players' tokens along when I summon them"
+            hint="Copies each player's token (with its hit points and conditions) onto the scene you summon them to, unless that character is already there. The tokens stay on the scene they left too." />
 
           <h3>What players can do</h3>
           <div class="seg">
@@ -496,7 +582,7 @@ export function GridDialog(props: { shape?: GridShape; onApply: (cols: number, r
 }
 
 // ================================================================== claim a token
-export function ClaimModal(props: { client: TableClient; onClose: () => void; onNewToken: () => void }) {
+export function ClaimModal(props: { client: TableClient; onClose: () => void; onNewToken: () => void; onBring?: (entry: SavedToken) => void }) {
   const { client } = props;
   useClient(client);
   const free = [...(client.scene?.tokens.values() ?? [])].filter((t) => t.ownerUid === null && !t.hidden && !t.locked);
@@ -508,12 +594,23 @@ export function ClaimModal(props: { client: TableClient; onClose: () => void; on
         <>
           <div class="field-label">You control</div>
           <ul class="list">
-            {mine.map((t) => (
-              <li key={t.id}><span class="grow">{t.name || 'Unnamed token'}</span><button class="btn small" onClick={() => void client.updateToken(t.id, { ownerUid: null })}>Release</button></li>
-            ))}
+            {mine.map((t) => {
+              const saved = !!t.cid && client.tokenLib.some((e) => e.id === t.cid);
+              return (
+                <li key={t.id}>
+                  <span class="grow">{t.name || 'Unnamed token'}{saved && <span class="badge" title="Kept in your characters"> saved</span>}</span>
+                  <button class="btn small" title={saved ? 'Update what is saved about it' : 'Keep it: its look and conditions follow you to every scene'} onClick={() => void saveTokensToLibrary(client, [t.id])}>{saved ? 'Update saved' : 'Save as my character'}</button>
+                  <button class="btn small" onClick={() => void client.updateToken(t.id, { ownerUid: null })}>Release</button>
+                </li>
+              );
+            })}
           </ul>
         </>
       )}
+      <div class="field-label">Your characters</div>
+      <SavedTokenGrid client={client} empty="No saved characters yet. Save one of your tokens and it will be here in every scene."
+        action={(e) => (mine.some((t) => t.cid === e.id) ? 'Here already' : 'Bring here')} disabled={(e) => mine.some((t) => t.cid === e.id)}
+        onAction={(e) => { props.onBring?.(e); props.onClose(); }} />
       <div class="field-label">{free.length ? 'Unclaimed tokens on this map' : 'No unclaimed tokens right now'}</div>
       <div class="thumbs big">
         {free.map((t) => (

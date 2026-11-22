@@ -6,6 +6,8 @@ export const P = {
   userTables: (uid: string) => `users/${uid}/tables`,
   userTable: (uid: string, tid: string) => `users/${uid}/tables/${tid}`,
   userLibrary: (uid: string, kind: string) => `users/${uid}/library/${kind}`,
+  userTokenLib: (uid: string) => `users/${uid}/tokenLib`,
+  dmChars: (tid: string) => `tables/${tid}/dm/chars`,
   userSetting: (uid: string, key: string) => `users/${uid}/settings/${key}`,
 
   table: (tid: string) => `tables/${tid}`,
@@ -45,4 +47,5 @@ export const P = {
   dmSceneHp: (tid: string, sid: string) => `tables/${tid}/dm/scenes/${sid}/hp`,
   dmSceneHpOf: (tid: string, sid: string, id: string) => `tables/${tid}/dm/scenes/${sid}/hp/${id}`,
   sceneIndex: (tid: string) => `tables/${tid}/dm/sceneIndex`,
+  sceneFolders: (tid: string) => `tables/${tid}/dm/sceneFolders`,
 };

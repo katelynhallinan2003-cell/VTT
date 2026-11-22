@@ -65,6 +65,8 @@ export interface UiData {
   rulerMulti: boolean;
   /** a map that has just been added is looked at for a printed grid, which is then hidden and used as the grid */
   autoGrid: boolean;
+  /** which scenes the scene picker lists: 'all', 'none' (in no folder) or a folder's id */
+  sceneFolder: string;
   /** which mouse button pans the view (the other one opens the menu / pings) */
   panButton: 'right' | 'middle';
   /** how pinging works: middle click, or holding the left button */
@@ -159,6 +161,7 @@ export class UiState {
     testMulti: readFlag('vtt-test-multi', false),
     rulerMulti: readFlag('vtt-ruler-multi', false),
     autoGrid: readFlag('vtt-auto-grid', true),
+    sceneFolder: (() => { try { return localStorage.getItem('vtt-scene-folder') || 'all'; } catch { return 'all'; } })(),
     textEdit: null, camRev: 0, initOpen: false,
     fxJump: readFlag('vtt-fx-jump', true), fxDraft: null,
     heightFt: (() => { try { const n = Number(localStorage.getItem('vtt-height-ft')); return Number.isFinite(n) && localStorage.getItem('vtt-height-ft') !== null ? n : 10; } catch { return 10; } })(),
@@ -242,6 +245,7 @@ export class UiState {
       if (patch.testMulti !== undefined) localStorage.setItem('vtt-test-multi', patch.testMulti ? '1' : '0');
       if (patch.rulerMulti !== undefined) localStorage.setItem('vtt-ruler-multi', patch.rulerMulti ? '1' : '0');
       if (patch.autoGrid !== undefined) localStorage.setItem('vtt-auto-grid', patch.autoGrid ? '1' : '0');
+      if (patch.sceneFolder !== undefined) localStorage.setItem('vtt-scene-folder', patch.sceneFolder);
       if (patch.sharePlot !== undefined) localStorage.setItem('vtt-share-plot', patch.sharePlot ? '1' : '0');
       if (patch.fxJump !== undefined) localStorage.setItem('vtt-fx-jump', patch.fxJump ? '1' : '0');
     } catch { /* ignore */ }

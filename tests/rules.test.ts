@@ -199,6 +199,23 @@ describe('security rules: tables and DM powers', () => {
       expect(can(db, p1, 'write', p, { a: 1 })).toBe(false);
     }
   });
+  it('anyone signed in can keep their own saved tokens, nobody else\'s', () => {
+    expect(can(db, p1, 'write', 'users/p1/tokenLib/c1', { name: 'Aria', t: { size: 1 } })).toBe(true);
+    expect(can(db, p1, 'write', 'users/p1/tokenLib/c1', null)).toBe(true);
+    expect(can(db, p1, 'write', 'users/p2/tokenLib/c1', { name: 'Aria', t: { size: 1 } })).toBe(false);
+    expect(can(db, dm, 'write', 'users/dm-uid/tokenLib/c1', { name: 'Goblin', t: { size: 1 } })).toBe(true);
+    expect(can(db, null, 'write', 'users/p1/tokenLib/c1', { name: 'x', t: {} })).toBe(false);
+  });
+  it('a saved token needs a name and its settings, and a short name', () => {
+    expect(can(db, p1, 'write', 'users/p1/tokenLib/c1', { name: 'Aria' })).toBe(false);
+    expect(can(db, p1, 'write', 'users/p1/tokenLib/c1', { t: { size: 1 } })).toBe(false);
+    expect(can(db, p1, 'write', 'users/p1/tokenLib/c1', { name: 'x'.repeat(61), t: { size: 1 } })).toBe(false);
+  });
+  it('saved tokens are private to their owner', () => {
+    expect(can(db, p1, 'read', 'users/p1/tokenLib')).toBe(true);
+    expect(can(db, p2, 'read', 'users/p1/tokenLib')).toBe(false);
+    expect(can(db, dm, 'read', 'users/p1/tokenLib')).toBe(false);
+  });
   it('a DM can only write their own library', () => {
     expect(can(db, dm, 'write', 'users/dm-uid/library/maps/x', { url: 'u' })).toBe(true);
     expect(can(db, dm, 'write', 'users/other/library/maps/x', { url: 'u' })).toBe(false);

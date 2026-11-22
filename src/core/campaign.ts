@@ -2,6 +2,7 @@
 // The file is plain JSON. These functions are pure (no database, no browser) so they can be tested on their own.
 import { handoutToWire } from './model';
 import { P } from '../state/paths';
+import { cleanFolderName } from './folders';
 import type { Handout } from '../types';
 
 export const CAMPAIGN_FORMAT = 'vtt-campaign';
@@ -13,6 +14,8 @@ type Json = any;
 
 export interface CampaignScene {
   name: string;
+  /** the name of the folder it was in, if any */
+  folder?: string;
   /** whether it was the scene the players were on */
   active: boolean;
   /** what the players could see: scenes/$sid without the live pointers and pings */
@@ -36,7 +39,7 @@ export interface CampaignFile {
 export function buildCampaign(input: {
   name: string;
   settings?: Record<string, Json> | null;
-  scenes: { name: string; active: boolean; pub: Json; dm: Json }[];
+  scenes: { name: string; active: boolean; folder?: string; pub: Json; dm: Json }[];
   handouts: Handout[];
   library?: { maps: CampaignLibraryItem[]; tokens: CampaignLibraryItem[] } | null;
   now: number;
@@ -50,7 +53,7 @@ export function buildCampaign(input: {
       const pub = { ...(s.pub ?? {}) };
       delete pub.live; // where people are looking and pinging right now is not part of the map
       delete pub.pings;
-      return { name: s.name, active: s.active, pub: (clean(pub) ?? {}) as Record<string, Json>, dm: (clean(s.dm ?? {}) ?? {}) as Record<string, Json> };
+      return { name: s.name, active: s.active, ...(s.folder ? { folder: s.folder } : {}), pub: (clean(pub) ?? {}) as Record<string, Json>, dm: (clean(s.dm ?? {}) ?? {}) as Record<string, Json> };
     }),
     handouts: [...input.handouts]
       .sort((a, b) => a.createdAt - b.createdAt)
@@ -79,6 +82,7 @@ export function parseCampaign(text: string): ParsedCampaign {
       scenes.push({
         name: typeof s.name === 'string' && s.name.trim() ? s.name.trim().slice(0, 120) : (typeof pub.meta?.name === 'string' ? pub.meta.name : 'Scene'),
         active: s.active === true,
+        ...(cleanFolderName(s.folder) ? { folder: cleanFolderName(s.folder) } : {}),
         pub,
         dm: s.dm && typeof s.dm === 'object' ? (clean(s.dm) as Record<string, Json>) ?? {} : {},
       });
@@ -139,6 +143,10 @@ export interface ImportOptions {
   existingNames: string[];
   /** the highest scene order already in use */
   orderBase: number;
+  /** folders already in the table: scenes from the file go into the one with the same name, or into a new one */
+  existingFolders?: { id: string; name: string }[];
+  /** the highest folder order already in use */
+  folderOrderBase?: number;
   /** is any scene active yet? if not, one of the new ones becomes active */
   hasActive: boolean;
 }
@@ -154,6 +162,20 @@ export function planImport(file: CampaignFile, o: ImportOptions): ImportPlan {
   const updates: Record<string, Json> = {};
   const sceneIds: string[] = [];
   const taken = new Set(o.existingNames.map((n) => n.toLowerCase()));
+  const folderIds = new Map<string, string>((o.existingFolders ?? []).map((f) => [f.name.toLowerCase(), f.id]));
+  let folderOrder = o.folderOrderBase ?? 0;
+  const folderFor = (name: string | undefined): string | null => {
+    const n = cleanFolderName(name);
+    if (!n) return null;
+    let id = folderIds.get(n.toLowerCase());
+    if (!id) {
+      id = o.newKey();
+      folderIds.set(n.toLowerCase(), id);
+      folderOrder += 1;
+      updates[`${P.sceneFolders(o.tid)}/${id}`] = { name: n, order: folderOrder };
+    }
+    return id;
+  };
   let order = o.orderBase;
   let activate: string | null = null;
   for (const s of file.scenes) {
@@ -176,7 +198,8 @@ export function planImport(file: CampaignFile, o: ImportOptions): ImportPlan {
     order += 1;
     updates[P.scene(o.tid, sid)] = pub;
     if (Object.keys(dm).length) updates[P.dmScene(o.tid, sid)] = dm;
-    updates[`${P.sceneIndex(o.tid)}/${sid}`] = { name, order };
+    const folder = folderFor(s.folder);
+    updates[`${P.sceneIndex(o.tid)}/${sid}`] = { name, order, ...(folder ? { folder } : {}) };
     if (!o.hasActive && !activate && s.active) activate = sid;
   }
   if (!o.hasActive && !activate && sceneIds.length) activate = sceneIds[0];

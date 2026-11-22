@@ -5,24 +5,26 @@ import {
   normalizeLibraryItem, normalizePlayer, normalizeSceneMeta, normalizeSettings, normalizeToken, stripUndefined, tokenToWire, viaToWire, DEFAULT_GRID, DM_COLOR, MAX_EXTRA_MAPS, mapsToWire,
 } from '../core/model';
 import {
-  applyDamage, cleanHp, EXPLORE_MIN_CELLS, EXPLORE_JUMP_CELLS, EXPLORE_TELEPORT_CELLS, EXPLORE_TELEPORT_MS, emptyInit, moveEntry, nextTurn, orderOf, pctOf, prevTurn, publicHp, sightRadiusPx, sortByInit, toPub,
+  applyDamage, cleanHp, withoutLights, EXPLORE_MIN_CELLS, EXPLORE_JUMP_CELLS, EXPLORE_TELEPORT_CELLS, EXPLORE_TELEPORT_MS, emptyInit, moveEntry, nextTurn, orderOf, pctOf, prevTurn, publicHp, sightRadiusPx, sortByInit, toPub,
 } from '../core/combat';
 import { lineOp, polyOp } from '../core/fog';
 import { addFx, fxToWire, tickFx } from '../core/effects';
 import { can, detectPreset, PRESETS, type Action } from '../core/permissions';
 import { sceneRect, snapTokenCenter } from '../core/geometry';
 import { isHex } from '../core/hex';
+import { cleanFolderName, folderOf, normalizeFolder, uniqueFolderName } from '../core/folders';
+import { sameSaved, savedFields, tokenFromSaved, type SavedToken } from '../core/tokenlib';
 import { isTemplate, movedPoints } from '../core/draw';
 import { throttle } from '../core/throttle';
 import type {
-  Drawing, Effect, ExtraMap, FogMode, FogOp, InitEntry, InitPub, InitState, LivePlot, GridSettings, Permissions, PermPreset, Ping, Player, Role, SceneIndexEntry,
+  Drawing, Effect, ExtraMap, FogMode, FogOp, InitEntry, InitPub, InitState, LivePlot, GridSettings, Permissions, PermPreset, Ping, Player, Role, SceneFolder, SceneIndexEntry,
   Handout, Rect, SceneMeta, TableMeta, TableSettings, Token, Vec, ViewCall,
 } from '../types';
 import { altitudeOf, groundAt, zonesOf } from '../core/height';
-import { litSeen, lightOf, viewerOf, type LightSrc } from '../core/light';
+import { isLightMark, litSeen, lightOf, viewerOf, type LightSrc } from '../core/light';
 import { carveWalls, joinAt, normalizeWall, routeReveal, sightSegs, splitPieces, wallMid, wallToWire, type Wall } from '../core/walls';
 import { buildCampaign, newLibraryItems, planImport, type CampaignFile, type CampaignLibraryItem } from '../core/campaign';
-import { addLibraryItem } from './account';
+import { addLibraryItem, saveTokenToLib, watchTokenLib } from './account';
 import { History } from './history';
 import { P } from './paths';
 
@@ -79,6 +81,17 @@ export class TableClient {
   settings: TableSettings = { perm: { ...PRESETS.trusting }, preset: 'trusting' };
   players = new Map<string, Player>();
   sceneIndex: SceneIndexEntry[] = [];
+  /** folders the DM has made to group scenes */
+  sceneFolders: SceneFolder[] = [];
+  /** the tokens this account has saved: a DM's templates, a player's characters */
+  tokenLib: SavedToken[] = [];
+  /** DM: when the table is moved to another scene, the players' tokens come along (with their conditions and hit points) */
+  carryParty = (() => { try { return localStorage.getItem('vtt-carry-party') !== '0'; } catch { return true; } })();
+  /** DM: the hit points each saved character was last seen with, so it arrives in a new scene as it left the last one */
+  private charMem = new Map<string, { hp: number; max: number; tmp: number }>();
+  private charAdopted = new Set<string>();
+  private charTimer: ReturnType<typeof setTimeout> | null = null;
+  private syncTimers = new Map<string, ReturnType<typeof setTimeout>>();
   uploadKey: string | null = null;
   viewSceneId: string | null = null;
   scene: SceneState | null = null;
@@ -249,7 +262,18 @@ export class TableClient {
         changed: (k, v) => this.setIndex(k, v),
         removed: (k) => { this.sceneIndex = this.sceneIndex.filter((s) => s.id !== k); this.bump(); },
       }, this.fail('scenes')));
+      this.unsubs.push(b.listenChildren(P.sceneFolders(tid), {
+        added: (k, v) => this.setFolder(k, v),
+        changed: (k, v) => this.setFolder(k, v),
+        removed: (k) => { this.sceneFolders = this.sceneFolders.filter((f) => f.id !== k); this.bump(); },
+      }, this.fail('scene folders')));
+      this.unsubs.push(b.listenChildren(P.dmChars(tid), {
+        added: (k, v) => this.setCharMem(k, v),
+        changed: (k, v) => this.setCharMem(k, v),
+        removed: (k) => { this.charMem.delete(k); },
+      }, this.fail('characters')));
     }
+    this.unsubs.push(watchTokenLib(b, this.uid, (items) => { this.tokenLib = items; this.bump(); }));
 
     this.armPresence();
     if (b.kind === 'firebase') {
@@ -287,10 +311,15 @@ export class TableClient {
   }
 
   private setIndex(id: string, v: any) {
-    const entry: SceneIndexEntry = { id, name: typeof v?.name === 'string' ? v.name : 'Scene', order: Number(v?.order) || 0 };
+    const entry: SceneIndexEntry = { id, name: typeof v?.name === 'string' ? v.name : 'Scene', order: Number(v?.order) || 0, folder: typeof v?.folder === 'string' && v.folder ? v.folder : null };
     this.sceneIndex = [...this.sceneIndex.filter((s) => s.id !== id), entry].sort((a, b) => a.order - b.order);
     // DM with nothing open yet: open the active scene, or the first scene
     if (this.role === 'dm' && !this.viewSceneId && this.metaLoaded) this.followActiveScene();
+    this.bump();
+  }
+
+  private setFolder(id: string, v: unknown) {
+    this.sceneFolders = [...this.sceneFolders.filter((f) => f.id !== id), normalizeFolder(id, v)].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
     this.bump();
   }
 
@@ -339,8 +368,8 @@ export class TableClient {
     }, sceneFail('scene')));
 
     const tokenHandlers = (hidden: boolean) => ({
-      added: (k: string, v: any) => { if (live()) { s.tokens.set(k, this.withHp(s, normalizeToken(k, v, hidden))); s.tokensRev++; this.tokensChanged(); this.bump(); } },
-      changed: (k: string, v: any) => { if (live()) { s.tokens.set(k, this.withHp(s, normalizeToken(k, v, hidden))); s.tokensRev++; this.tokensChanged(); this.bump(); } },
+      added: (k: string, v: any) => { if (live()) { s.tokens.set(k, this.withHp(s, normalizeToken(k, v, hidden))); s.tokensRev++; this.tokensChanged(); this.characterSeen(k); this.bump(); } },
+      changed: (k: string, v: any) => { if (live()) { s.tokens.set(k, this.withHp(s, normalizeToken(k, v, hidden))); s.tokensRev++; this.tokensChanged(); this.characterSeen(k); this.bump(); } },
       removed: (k: string) => {
         if (!live()) return;
         const cur = s.tokens.get(k);
@@ -357,6 +386,7 @@ export class TableClient {
         if (c.hp == null || c.max == null) s.hpDm.delete(k); else s.hpDm.set(k, { hp: c.hp, max: c.max, tmp: typeof v?.tmp === 'number' && v.tmp > 0 ? Math.round(v.tmp) : 0 });
         const t = s.tokens.get(k);
         if (t) s.tokens.set(k, this.withHp(s, t));
+        this.characterSeen(k);
         s.tokensRev++; this.bump();
       };
       this.sceneUnsubs.push(b.listenChildren(P.dmSceneHp(tid, sid), {
@@ -1010,8 +1040,10 @@ export class TableClient {
     if (!sid || !this.isDM) return;
     // keep the stored names in step with the tokens they stand for
     const tokens = this.scene?.tokens ?? new Map<string, Token>();
-    const entries = next.entries.map((e) => ({ ...e, n: (e.tk && tokens.get(e.tk)?.name) || e.n }));
-    const state: InitState = { ...next, entries };
+    // a torch or other light-only mark is never a combatant, so it never stays in the order
+    const clean = withoutLights(next, tokens);
+    const entries = clean.entries.map((e) => ({ ...e, n: (e.tk && tokens.get(e.tk)?.name) || e.n }));
+    const state: InitState = { ...clean, entries };
     const pub = initPubToWire(toPub(state, tokens));
     this.mirrorSig = JSON.stringify(pub);
     await this.backend.update({
@@ -1029,7 +1061,7 @@ export class TableClient {
       this.mirrorTimer = null;
       const sc = this.scene;
       if (!sc || !this.viewSceneId || !sc.init.shown) return;
-      const pub = initPubToWire(toPub(sc.init, sc.tokens));
+      const pub = initPubToWire(toPub(withoutLights(sc.init, sc.tokens), sc.tokens));
       const sig = JSON.stringify(pub);
       if (sig === this.mirrorSig) return;
       this.mirrorSig = sig;
@@ -1045,6 +1077,8 @@ export class TableClient {
     let seq = entries.length;
     for (const r of rows) {
       if (!Number.isFinite(r.i)) continue;
+      const tk = r.tk ? s.tokens.get(r.tk) : undefined;
+      if (tk && isLightMark(tk)) continue; // a light is not a combatant
       const cur = r.tk ? entries.find((e) => e.tk === r.tk) : undefined;
       if (cur) entries = entries.map((e) => (e === cur ? { ...e, i: r.i, n: r.n || e.n } : e));
       else entries.push({ id: this.backend.newKey(), tk: r.tk, n: r.n, i: r.i, h: !!r.h, o: (++seq + 1000) * 1000 });
@@ -1123,9 +1157,12 @@ export class TableClient {
   }
 
   async initStep(dir: 1 | -1): Promise<void> {
-    const s = this.scene;
+    const sc = this.scene;
     const sid = this.viewSceneId;
-    if (!s || !sid || !this.isDM || !s.init.entries.length) return;
+    if (!sc || !sid || !this.isDM) return;
+    // a light that was somehow in the order does not take a turn
+    const s = { ...sc, init: withoutLights(sc.init, sc.tokens) };
+    if (!s.init.entries.length) return;
     if (dir === -1) {
       const snap = this.stepSnap;
       this.stepSnap = null;
@@ -1333,7 +1370,7 @@ export class TableClient {
   }
 
   // ---------------------------------------------------------------- scenes (DM)
-  async createScene(opts: { name: string; mapUrl?: string | null; mapW?: number; mapH?: number; grid?: Partial<GridSettings>; makeActive?: boolean; /** do not look for a printed grid in the map */ gridTried?: boolean }): Promise<string> {
+  async createScene(opts: { name: string; mapUrl?: string | null; mapW?: number; mapH?: number; grid?: Partial<GridSettings>; makeActive?: boolean; /** do not look for a printed grid in the map */ gridTried?: boolean; /** the folder to put it in */ folder?: string | null }): Promise<string> {
     const tid = this.tableId;
     const sid = this.backend.newKey();
     const order = Math.max(0, ...this.sceneIndex.map((s) => s.order)) + 1;
@@ -1349,7 +1386,7 @@ export class TableClient {
     };
     await this.backend.update({
       [P.sceneMeta(tid, sid)]: { ...stripUndefined(meta as unknown as Record<string, unknown>), maps: mapsToWire(meta.maps) },
-      [`${P.sceneIndex(tid)}/${sid}`]: { name: meta.name, order },
+      [`${P.sceneIndex(tid)}/${sid}`]: { name: meta.name, order, ...(opts.folder && this.sceneFolders.some((f) => f.id === opts.folder) ? { folder: opts.folder } : {}) },
     });
     if (opts.makeActive || !this.activeSceneId) await this.backend.set(P.activeScene(tid), sid);
     this.openScene(sid);
@@ -1401,6 +1438,161 @@ export class TableClient {
     await this.updateScene({ mapUrl: url, mapW: w, mapH: h, mapX: 0, mapY: 0, mapScale: 1, mapLocked: true, mapGrid: null, gridTried: false });
   }
 
+  // ---------------------------------------------------------------- saved tokens and characters
+  private setCharMem(cid: string, v: any) {
+    const c = cleanHp(typeof v?.hp === 'number' ? v.hp : null, typeof v?.max === 'number' ? v.max : null);
+    if (c.hp == null || c.max == null) this.charMem.delete(cid);
+    else this.charMem.set(cid, { hp: c.hp, max: c.max, tmp: typeof v?.tmp === 'number' && v.tmp > 0 ? Math.round(v.tmp) : 0 });
+  }
+
+  /** A token with a `cid` appeared or changed: the DM keeps its hit points on file, a player keeps their library entry up to date. */
+  private characterSeen(id: string) {
+    const t = this.scene?.tokens.get(id);
+    if (!t || !t.cid) return;
+    if (this.isDM) {
+      if (!t.ownerUid || this.charTimer) return;
+      this.charTimer = setTimeout(() => { this.charTimer = null; void this.charSweep(); }, 200);
+    } else if (t.ownerUid === this.uid && this.tokenLib.some((e) => e.id === t.cid)) {
+      clearTimeout(this.syncTimers.get(id));
+      this.syncTimers.set(id, setTimeout(() => { this.syncTimers.delete(id); void this.syncCharacter(id); }, 1200));
+    }
+  }
+
+  /** DM: remember the hit points of every saved character on the map, and give a character that has just arrived the ones it left with. */
+  private async charSweep() {
+    const s = this.scene;
+    if (!this.isDM || !s || !this.viewSceneId) return;
+    const writes: Record<string, any> = {};
+    for (const t of s.tokens.values()) {
+      if (!t.cid || !t.ownerUid) continue;
+      const mem = this.charMem.get(t.cid);
+      if (t.hp != null && t.maxHp != null) {
+        this.charAdopted.add(t.id);
+        if (!mem || mem.hp !== t.hp || mem.max !== t.maxHp || mem.tmp !== t.tempHp) writes[`${P.dmChars(this.tableId)}/${t.cid}`] = hpWire(t.hp, t.maxHp, t.tempHp);
+      } else if (mem && !this.charAdopted.has(t.id)) {
+        this.charAdopted.add(t.id);
+        // only if it truly has none on file (the record may simply not have arrived yet)
+        if ((await this.backend.get(this.hpPath(t.id))) != null) continue;
+        const pub = publicHp(t.hpShow, mem.hp, mem.max);
+        const base = this.tokenPath(t);
+        writes[this.hpPath(t.id)] = hpWire(mem.hp, mem.max, mem.tmp);
+        writes[`${base}/hpPct`] = pub.hpPct;
+        writes[`${base}/hpNow`] = pub.hpNow;
+        writes[`${base}/hpCap`] = pub.hpCap;
+      }
+    }
+    if (Object.keys(writes).length) await this.backend.update(writes).catch(() => undefined);
+  }
+
+  /** A player: write what this character looks like now (settings, conditions) into their library entry. */
+  private async syncCharacter(id: string) {
+    const t = this.scene?.tokens.get(id);
+    if (!t || !t.cid || t.ownerUid !== this.uid) return;
+    const e = this.tokenLib.find((x) => x.id === t.cid);
+    if (!e) return;
+    const fields = savedFields(t, { character: true, cid: t.cid });
+    if (sameSaved(fields, e.t) && (t.name || e.name) === e.name) return;
+    await saveTokenToLib(this.backend, this.uid, { name: t.name || e.name, t: fields }, e.id, e.addedAt).catch(() => undefined);
+  }
+
+  /**
+   * Keep a token in your library.
+   * - The DM saves a **template**: look and settings (and maximum hit points), for dropping into any scene whenever wanted.
+   * - A player saves a **character**: that token is remembered, with the conditions on it, and follows them from scene to scene.
+   * Returns the library entry's id.
+   */
+  async saveTokenToLibrary(tokenId: string): Promise<string | null> {
+    const t = this.scene?.tokens.get(tokenId);
+    if (!t) return null;
+    if (this.isDM) return saveTokenToLib(this.backend, this.uid, { name: t.name || 'Token', t: savedFields(t, { character: false }) });
+    if (t.ownerUid !== this.uid) return null;
+    const cid = t.cid ?? this.backend.newKey();
+    const have = this.tokenLib.find((e) => e.id === cid);
+    await saveTokenToLib(this.backend, this.uid, { name: t.name || 'Character', t: savedFields(t, { character: true, cid }) }, cid, have?.addedAt);
+    if (!t.cid) await this.updateToken(t.id, { cid });
+    return cid;
+  }
+
+  /** Puts a saved token on the open scene. A character that is already here (yours) is not added twice: its id is returned. */
+  async addSavedToken(entryId: string, at: Vec): Promise<string | null> {
+    const e = this.tokenLib.find((x) => x.id === entryId);
+    if (!e || !this.scene) return null;
+    if (!this.isDM) {
+      const here = [...this.scene.tokens.values()].find((t) => t.cid === e.id && t.ownerUid === this.uid);
+      if (here) return here.id;
+    }
+    return this.addToken(tokenFromSaved(e, at, this.isDM ? { dm: true, owner: null } : { dm: false, owner: this.uid, cid: e.id }));
+  }
+
+  /**
+   * DM: copy the players' tokens (conditions, hit points and all) from one scene to another, unless that character is already there.
+   * Used when the table is moved. Returns how many came along.
+   */
+  async carryTokens(fromSid: string, toSid: string): Promise<number> {
+    if (!this.isDM || fromSid === toSid) return 0;
+    const tid = this.tableId;
+    const [src, dst, hp, dstMeta] = await Promise.all([
+      this.backend.get(P.sceneTokens(tid, fromSid)), this.backend.get(P.sceneTokens(tid, toSid)),
+      this.backend.get(P.dmSceneHp(tid, fromSid)), this.backend.get(P.sceneMeta(tid, toSid)),
+    ]);
+    const keyOf = (v: any) => (typeof v?.cid === 'string' && v.cid ? `c:${v.cid}` : `o:${v?.ownerUid}|${v?.name ?? ''}`);
+    const there = new Set(Object.values<any>(dst ?? {}).map(keyOf));
+    const meta = normalizeSceneMeta(dstMeta ?? {});
+    const rect = sceneRect(meta);
+    const cell = meta.grid.cell;
+    let x = rect ? rect.x + rect.w / 2 : cell * 5;
+    const y = rect ? rect.y + rect.h / 2 : cell * 5;
+    let z = Math.max(0, ...Object.values<any>(dst ?? {}).map((t) => Number(t?.z) || 0));
+    const updates: Record<string, any> = {};
+    let n = 0;
+    for (const [id, v] of Object.entries<any>(src ?? {})) {
+      if (!v || typeof v.ownerUid !== 'string') continue;
+      const cid = typeof v.cid === 'string' && v.cid ? v.cid : this.backend.newKey();
+      if (there.has(keyOf({ ...v, cid })) || there.has(keyOf(v))) continue;
+      const nid = this.backend.newKey();
+      const size = Math.max(0.25, Number(v.size) || 1);
+      updates[P.sceneToken(tid, toSid, nid)] = { ...v, cid, x: Math.round(x), y: Math.round(y), z: ++z, locked: undefined };
+      if (!v.cid) updates[`${P.sceneToken(tid, fromSid, id)}/cid`] = cid; // the same character from now on
+      if (hp?.[id]) updates[P.dmSceneHpOf(tid, toSid, nid)] = hp[id];
+      x += cell * size;
+      n++;
+    }
+    if (n) await this.backend.update(JSON.parse(JSON.stringify(updates)));
+    return n;
+  }
+
+  // ---------------------------------------------------------------- scene folders (DM)
+  /** Makes an empty folder and returns its id. */
+  async createFolder(name: string): Promise<string> {
+    if (!this.isDM) throw new Error('Only the DM can make folders.');
+    const id = this.backend.newKey();
+    const order = Math.max(0, ...this.sceneFolders.map((f) => f.order)) + 1;
+    await this.backend.update({ [`${P.sceneFolders(this.tableId)}/${id}`]: { name: uniqueFolderName(name, this.sceneFolders), order } });
+    return id;
+  }
+
+  async renameFolder(id: string, name: string): Promise<void> {
+    const clean = cleanFolderName(name);
+    if (!this.isDM || !clean || !this.sceneFolders.some((f) => f.id === id)) return;
+    await this.backend.update({ [`${P.sceneFolders(this.tableId)}/${id}/name`]: clean });
+  }
+
+  /** Removes the folder. Its scenes are kept and go back to being in no folder. */
+  async deleteFolder(id: string): Promise<void> {
+    if (!this.isDM) return;
+    const tid = this.tableId;
+    const updates: Record<string, any> = { [`${P.sceneFolders(tid)}/${id}`]: null };
+    for (const s of this.sceneIndex) if (s.folder === id) updates[`${P.sceneIndex(tid)}/${s.id}/folder`] = null;
+    await this.backend.update(updates);
+  }
+
+  /** Puts a scene in a folder, or in none (null). */
+  async moveScene(sid: string, folder: string | null): Promise<void> {
+    if (!this.isDM || !this.sceneIndex.some((s) => s.id === sid)) return;
+    if (folder && !this.sceneFolders.some((f) => f.id === folder)) return;
+    await this.backend.update({ [`${P.sceneIndex(this.tableId)}/${sid}/folder`]: folder });
+  }
+
   async deleteScene(sid: string): Promise<void> {
     const tid = this.tableId;
     const rest = this.sceneIndex.filter((s) => s.id !== sid);
@@ -1419,11 +1611,13 @@ export class TableClient {
   async exportCampaign(opts: { library: boolean }): Promise<CampaignFile> {
     if (!this.isDM) throw new Error('Only the DM can save the campaign.');
     const tid = this.tableId;
-    const scenes: { name: string; active: boolean; pub: any; dm: any }[] = [];
+    const scenes: { name: string; active: boolean; folder?: string; pub: any; dm: any }[] = [];
     for (const e of [...this.sceneIndex].sort((a, b) => a.order - b.order)) {
       const [pub, dm] = await Promise.all([this.backend.get(P.scene(tid, e.id)), this.backend.get(P.dmScene(tid, e.id))]);
       if (!pub || !pub.meta) continue;
-      scenes.push({ name: e.name, active: e.id === this.activeSceneId, pub, dm: dm ?? {} });
+      const fid = folderOf(e, this.sceneFolders);
+      const folder = fid ? this.sceneFolders.find((f) => f.id === fid)?.name : undefined;
+      scenes.push({ name: e.name, active: e.id === this.activeSceneId, ...(folder ? { folder } : {}), pub, dm: dm ?? {} });
     }
     let library: { maps: CampaignLibraryItem[]; tokens: CampaignLibraryItem[] } | null = null;
     if (opts.library) {
@@ -1454,6 +1648,8 @@ export class TableClient {
     const plan = planImport(file, {
       tid, uid: this.uid, newKey: () => this.backend.newKey(), now: Date.now(),
       existingNames: this.sceneIndex.map((s) => s.name),
+      existingFolders: this.sceneFolders.map((f) => ({ id: f.id, name: f.name })),
+      folderOrderBase: Math.max(0, ...this.sceneFolders.map((f) => f.order)),
       orderBase: Math.max(0, ...this.sceneIndex.map((s) => s.order)),
       hasActive: !!this.activeSceneId && this.sceneIndex.some((s) => s.id === this.activeSceneId),
     });
@@ -1475,8 +1671,15 @@ export class TableClient {
     return { scenes: plan.sceneIds.length, handouts: plan.handoutIds.length, library: added, firstScene: plan.sceneIds[0] ?? null };
   }
 
-  async setActiveScene(sid: string): Promise<void> {
+  /** Moves the table onto a scene. With `carryParty` on, the players' tokens come along. Returns how many came. */
+  async setActiveScene(sid: string): Promise<number> {
+    const from = this.activeSceneId;
+    let carried = 0;
+    if (this.isDM && this.carryParty && from && from !== sid) {
+      try { carried = await this.carryTokens(from, sid); } catch (e) { this.fail('bring the players\' tokens along')(e as Error); }
+    }
     await this.backend.set(P.activeScene(this.tableId), sid);
+    return carried;
   }
 
   // ---------------------------------------------------------------- fog (DM)

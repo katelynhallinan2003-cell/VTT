@@ -72,6 +72,20 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
   const claimOffered = useRef(false);
   const modalRef = useRef<ModalState>(null);
   modalRef.current = modal;
+  /** a handout the DM just showed: it opens over whatever else is open, so it is never missed */
+  const [popup, setPopup] = useState<string | null>(null);
+  const topRef = useRef<HTMLDivElement>(null);
+  // the turn order sits just under whatever hangs from the top edge
+  useEffect(() => {
+    const el = topRef.current;
+    const root = el?.parentElement;
+    if (!el || !root) return;
+    const set = () => root.style.setProperty('--topstack-h', `${el.offsetHeight}px`);
+    set();
+    const ro = new ResizeObserver(set);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // Esc closes the right-click menu (and stops there, so it doesn't also clear the selection)
   useEffect(() => {
@@ -107,10 +121,9 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
   useEffect(() => {
     if (client.isDM) return;
     return client.onHandout((h) => {
-      // it opens over nothing, or over the handouts window (so a second one is not missed); another window is left alone
-      const busy = modalRef.current && modalRef.current.kind !== 'handouts';
-      toast(busy ? `The DM shared a handout: ${h.title || 'Handout'}. Open Handouts to read it.` : `The DM shared a handout: ${h.title || 'Handout'}`, 'info', 4000);
-      if (!busy) setModal({ kind: 'handouts', openId: h.id });
+      toast(`The DM shared a handout: ${h.title || 'Handout'}`, 'info', 4000);
+      setModal((m) => (m?.kind === 'handouts' ? null : m)); // the list window would only sit behind it
+      setPopup(h.id);
     });
   }, [client]);
 
@@ -140,6 +153,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
       if (e.ctrlKey || e.metaKey || e.altKey || modalRef.current) return;
+      if (e.key === '?') { e.preventDefault(); setModal({ kind: 'settings' }); }
       if (e.key.toLowerCase() === 't' && client.canDo('create')) openAddToken();
       if (e.key.toLowerCase() === 'e') {
         const ids = [...ui.data.selection].filter((id) => { const t = client.scene?.tokens.get(id); return t && client.canDo('edit', t); });
@@ -213,6 +227,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       if (toks.every((t) => client.canDo('delete', t))) menuItems.push({ label: 'Delete', danger: true, onClick: () => { void client.removeTokens(ids); ui.select([]); } });
     } else {
       if (client.canDo('ping')) menuItems.push({ label: 'Ping here', onClick: () => void client.ping(menu.world.x, menu.world.y) });
+      if (client.isDM && d.selection.size) menuItems.push({ label: d.selection.size > 1 ? 'Teleport selected tokens here' : 'Teleport selected token here', onClick: () => boardRef.current?.teleportSelectedTo(menu.world) });
       if (client.canDo('create')) menuItems.push({ label: 'Add token here…', onClick: () => openAddToken(menu.world) });
     }
   }
@@ -240,8 +255,8 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
         {client.isDM && <ToolBtn icon="fog" label="Fog of war" hotkey="F" on={d.tool === 'fog'} onClick={() => ui.set({ tool: d.tool === 'fog' ? 'select' : 'fog' })} />}
         <ToolBtn icon="token" label="Add token" hotkey="T" onClick={() => client.canDo('create') ? openAddToken() : toast('You are not allowed to add tokens.', 'error')} />
         <div class="tool-sep" />
-        <ToolBtn icon="draw" label="Draw and write" hotkey="D" on={d.tool === 'draw'} disabled={!client.canDo('draw')} onClick={() => ui.set({ tool: d.tool === 'draw' ? 'select' : 'draw' })} />
-        <ToolBtn icon="template" label="Spell templates" hotkey="S" on={d.tool === 'template'} disabled={!client.canDo('draw')} onClick={() => ui.set({ tool: d.tool === 'template' ? 'select' : 'template' })} />
+        <ToolBtn icon="draw" label="Draw and write" hotkey="P" on={d.tool === 'draw'} disabled={!client.canDo('draw')} onClick={() => ui.set({ tool: d.tool === 'draw' ? 'select' : 'draw' })} />
+        <ToolBtn icon="template" label="Spell templates" hotkey="C" on={d.tool === 'template'} disabled={!client.canDo('template')} onClick={() => ui.set({ tool: d.tool === 'template' ? 'select' : 'template' })} />
         <ToolBtn icon="ruler" label="Ruler" hotkey="R" on={d.tool === 'ruler'} disabled={!client.canDo('measure')} onClick={() => ui.set({ tool: d.tool === 'ruler' ? 'select' : 'ruler' })} />
         {client.isDM && <ToolBtn icon="height" label="Heights: draw high and low ground" hotkey="H" on={d.tool === 'height'} onClick={() => ui.set({ tool: d.tool === 'height' ? 'select' : 'height' })} />}
         {client.isDM && <ToolBtn icon="wall" label="Walls: draw walls, doors and windows" hotkey="B" on={d.tool === 'wall'} onClick={() => ui.set({ tool: d.tool === 'wall' ? 'select' : 'wall' })} />}
@@ -260,7 +275,6 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {d.tool === 'ruler' && <RulerFlyout ui={ui} client={client} />}
       {d.tool === 'height' && client.isDM && <HeightFlyout ui={ui} client={client} />}
       {d.tool === 'wall' && client.isDM && <WallFlyout ui={ui} client={client} />}
-      <TestMoveBar ui={ui} board={board} />
       <TextEditor ui={ui} client={client} board={board} />
       <DrawInspector ui={ui} client={client} board={board} />
 
@@ -309,7 +323,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
               <option value="__new">+ New scene…</option>
               {client.sceneIndex.length > 0 && <option value="__manage">Manage scenes…</option>}
             </select>
-            {client.viewSceneId && !live && <button class="btn small primary" title="Players are looking at another scene. Switch them to this one." onClick={() => void client.setActiveScene(client.viewSceneId!)}>Show to players</button>}
+            {client.viewSceneId && !live && <button class="btn small primary" title="Players are on another scene. This moves everyone at the table to this one." onClick={() => void client.setActiveScene(client.viewSceneId!)}>Summon players</button>}
           </>
         ) : (
           scene?.meta && <span class="scene-name">{scene.meta.name}</span>
@@ -323,7 +337,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
             Handouts{!client.isDM && client.handoutList().length ? ` (${client.handoutList().length})` : ''}
           </button>
         )}
-        {client.isDM && <button class="btn small" title="Moves every player's view to the part of the map you are looking at" onClick={() => { const r = boardRef.current?.viewRect(); if (r) { void client.callView(r); toast('Everyone is being brought to this view', 'ok', 2200); } }}>Bring players here</button>}
+        {client.isDM && live && <button class="btn small" title="Moves every player's view to the part of the map you are looking at" onClick={() => { const r = boardRef.current?.viewRect(); if (r) { void client.callView(r); toast('Everyone is being brought to this view', 'ok', 2200); } }}>Bring players here</button>}
         {client.isDM && <button class="btn small" onClick={() => copyText(`${location.href.split('#')[0]}#/t/${client.tableId}`)}>Copy player link</button>}
         <button class="btn small" onClick={() => setModal({ kind: 'settings' })}>Settings</button>
       </header>
@@ -355,8 +369,12 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
           <button class="btn small primary" onClick={() => setModal({ kind: 'settings' })}>Open settings</button>
         </div>
       )}
-      {client.isDM && d.dmPreview && <div class="hint-chip top">Previewing what players see</div>}
-      {client.isDM && !live && client.viewSceneId && <div class="hint-chip top">Private scene: players can't see this yet</div>}
+      {/* ---------------- top middle: things that hang from the top edge */}
+      <div class="topstack" ref={topRef}>
+        {client.isDM && !live && client.viewSceneId && <div class="topchip warn">Private scene: players can't see this yet</div>}
+        {client.isDM && d.dmPreview && <div class="topchip">Previewing what players see</div>}
+        <TestMoveBar ui={ui} board={board} />
+      </div>
 
       {/* ---------------- context menu */}
       {menu && menuItems.length > 0 && (
@@ -377,6 +395,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {modal?.kind === 'settings' && <SettingsModal client={client} ui={ui} onClose={() => setModal(null)} onSignOut={client.isDM ? props.onSignOut : undefined} />}
       {modal?.kind === 'editToken' && <TokenEditorModal client={client} ids={modal.ids} onClose={() => setModal(null)} />}
       {modal?.kind === 'handouts' && <HandoutsModal key={modal.openId ?? 'list'} client={client} openId={modal.openId ?? null} onClose={() => setModal(null)} />}
+      {popup && <HandoutsModal key={'popup-' + popup} client={client} openId={popup} onClose={() => setPopup(null)} />}
       {modal?.kind === 'claim' && <ClaimModal client={client} onClose={() => setModal(null)} onNewToken={() => openAddToken()} />}
       {modal?.kind === 'grid' && (
         <GridDialog shape={client.grid.shape} onCancel={() => { setModal(null); ui.set({ tool: 'select' }); }}

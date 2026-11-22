@@ -169,8 +169,10 @@ export class Board {
   private textRes = 2;
   private destroyed = false;
   private sendMoves: ReturnType<typeof throttle<[{ id: string; x: number; y: number }[], boolean]>>;
-  /** W (for warp) is held: tokens being dragged jump instead of walking (they do not clear the ground between) */
+  /** Q is held (the DM teleporting): tokens being dragged jump instead of walking (they do not clear the ground between) */
   private teleportHeld = false;
+  /** W A S D keys held down: the view pans while they are */
+  private panKeys = new Set<string>();
   /** Alt was held at the last pointer move (the Heights brush flips between cells and free with it) */
   private altDown = false;
   private shiftDown = false;
@@ -391,6 +393,18 @@ export class Board {
 
   // ------------------------------------------------------------------ frame loop
   private frame(dt: number) {
+    if (this.panKeys.size) {
+      const dx = (this.panKeys.has('a') ? 1 : 0) - (this.panKeys.has('d') ? 1 : 0);
+      const dy = (this.panKeys.has('w') ? 1 : 0) - (this.panKeys.has('s') ? 1 : 0);
+      if (dx || dy) {
+        const v = (this.shiftDown ? 1800 : 750) * dt / (dx && dy ? Math.SQRT2 : 1);
+        this.cam.tx += dx * v;
+        this.cam.ty += dy * v;
+        this.applyCamera();
+        this.ui.set({ camRev: this.ui.data.camRev + 1 });
+        this.dirty = true;
+      }
+    }
     this.reconcile();
     let moving = false;
     for (const v of this.views.values()) if (v.tick(dt)) moving = true;
@@ -1652,8 +1666,14 @@ export class Board {
     on(canvas, 'dblclick', (e: MouseEvent) => this.onDoubleClick(e));
     on(canvas, 'wheel', (e: WheelEvent) => this.onWheel(e), { passive: false });
     on(window, 'keydown', (e: KeyboardEvent) => this.onKeyDown(e));
-    on(window, 'keyup', (e: KeyboardEvent) => { if (e.code === 'Space') { this.spaceDown = false; this.updateCursor(); } if (e.key.toLowerCase() === 'w') this.teleportHeld = false; });
-    on(window, 'blur', () => { this.teleportHeld = false; });
+    on(window, 'keyup', (e: KeyboardEvent) => {
+      this.shiftDown = e.shiftKey;
+      if (e.code === 'Space') { this.spaceDown = false; this.updateCursor(); }
+      const k = e.key.toLowerCase();
+      if (k === 'q') this.setTeleport(false);
+      this.panKeys.delete(k);
+    });
+    on(window, 'blur', () => { this.setTeleport(false); this.panKeys.clear(); });
     on(window, 'blur', () => { this.spaceDown = false; });
   }
 
@@ -1804,9 +1824,11 @@ export class Board {
     return Math.max(1.5, STROKE_CELLS[this.ui.data.drawSize] * this.client.grid.cell);
   }
 
-  private drawingsShown(): Drawing[] {
+  drawingsShown(): Drawing[] {
     // ground (boxes, circles and brush strokes with a height) is painted by the terrain layer, not here
-    const list = this.client.drawingsSorted().filter((d) => d.hz == null && d.k !== 'terrain');
+    const c = this.client;
+    // a template its maker kept private is for them and the DM only
+    const list = c.drawingsSorted().filter((d) => d.hz == null && d.k !== 'terrain' && !(d.pv && !c.isDM && d.uid !== c.uid));
     const pv = this.drawPreview;
     return pv ? list.map((d) => (d.id === pv.id ? { ...d, ...pv.patch } : d)) : list;
   }
@@ -1923,6 +1945,56 @@ export class Board {
   private nudged(_t: unknown, size: number, to: Vec): Vec {
     const g = this.client.grid;
     return g.snap && isHex(g) ? snapTokenCenter(g, size, to) : to;
+  }
+
+  /** Holding Q (DM): drags become jumps. Says so on screen while it is on. */
+  private setTeleport(on: boolean) {
+    if (this.teleportHeld === on) return;
+    this.teleportHeld = on;
+    const msg = 'Teleport: drag a token anywhere. Walls and distance do not count.';
+    if (on) this.ui.set({ status: msg });
+    else if (this.ui.data.status === msg) this.ui.set({ status: null });
+  }
+
+  /** (DM) put the selected tokens down around a point, as a jump. They keep their arrangement. */
+  teleportSelectedTo(at: Vec) {
+    const c = this.client;
+    const toks = [...this.ui.data.selection].map((id) => c.scene?.tokens.get(id)).filter((t): t is Token => !!t && c.canDo('move', t));
+    if (!toks.length || !c.isDM) return;
+    const cx = toks.reduce((a, t) => a + t.x, 0) / toks.length, cy = toks.reduce((a, t) => a + t.y, 0) / toks.length;
+    const g = c.grid;
+    const before = toks.map((t) => ({ id: t.id, x: t.x, y: t.y }));
+    const moves = toks.map((t) => {
+      const p = { x: at.x + (t.x - cx), y: at.y + (t.y - cy) };
+      return { id: t.id, ...(g.snap ? snapTokenCenter(g, t.size, p) : p) };
+    });
+    void c.moveTokens(moves, before, { teleport: true });
+  }
+
+  /** Bring the selected tokens into view (or fit the map when nothing is selected). */
+  focusSelection() {
+    const c = this.client;
+    const toks = [...this.ui.data.selection].map((id) => c.scene?.tokens.get(id)).filter((t): t is Token => !!t);
+    if (!toks.length) { this.fit(); return; }
+    const cell = c.grid.cell;
+    const minX = Math.min(...toks.map((t) => t.x)), maxX = Math.max(...toks.map((t) => t.x));
+    const minY = Math.min(...toks.map((t) => t.y)), maxY = Math.max(...toks.map((t) => t.y));
+    const w = Math.max(maxX - minX + cell * 6, cell * 12);
+    const h = Math.max(maxY - minY + cell * 6, cell * 8);
+    this.showRect({ x: (minX + maxX) / 2 - w / 2, y: (minY + maxY) / 2 - h / 2, w, h });
+  }
+
+  /** Tab / Shift+Tab: select the next token you control (the DM: the next token on the board). */
+  cycleSelection(dir: 1 | -1) {
+    const c = this.client;
+    const all = [...(c.scene?.tokens.values() ?? [])].filter((t) => (c.isDM ? true : c.canDo('move', t)) && (c.isDM || !t.hidden));
+    all.sort((a, b) => (a.id < b.id ? -1 : 1));
+    if (!all.length) return;
+    const cur = [...this.ui.data.selection][0];
+    const i = all.findIndex((t) => t.id === cur);
+    const next = all[(i < 0 ? (dir === 1 ? 0 : all.length - 1) : (i + dir + all.length) % all.length)];
+    this.ui.select([next.id]);
+    this.focusSelection();
   }
 
   raiseSelected(ft: number) {
@@ -2066,7 +2138,7 @@ export class Board {
   }
 
   private startTemplate(w: Vec, e: PointerEvent) {
-    if (!this.client.canDo('draw')) { this.cb.onNotice('Drawing is turned off for players.', 'error'); return; }
+    if (!this.client.canDo('template')) { this.cb.onNotice('The DM has turned off spell templates for players.', 'error'); return; }
     // `start` stays where the pointer went down; where the template really starts depends on its kind and size (see snapTemplate)
     const kind = this.ui.data.tplKind;
     const d: Extract<Drag, { kind: 'shape' }> = { kind: 'shape', dk: kind, start: w, pts: [w, w] };
@@ -2177,7 +2249,7 @@ export class Board {
     void this.client.addDrawing({
       k, p: joinPts(pts), color: u.drawColor, w: isT ? Math.max(2, stroke) : stroke,
       fill: !isT && closed ? FILL_LEVEL[u.drawFillMode] : 0, fc: closed ? u.drawFillColor : '',
-      dash: !isT && u.drawDash, txt: '', fs: 28, bw: u.tplWidth, of: k === 'emanation' && d.of ? d.of : undefined,
+      dash: !isT && u.drawDash, txt: '', fs: 28, bw: u.tplWidth, of: k === 'emanation' && d.of ? d.of : undefined, pv: isT && !u.tplShare ? true : undefined,
     }, { onId: (id) => { if (closed || k === 'line' || k === 'arrow' || k === 'pen') this.ui.selectDrawings([id]); } }).catch((err: Error) => this.cb.onNotice(err.message, 'error'));
   }
 
@@ -2489,7 +2561,16 @@ export class Board {
     const mod = e.ctrlKey || e.metaKey;
 
     if (e.code === 'Space') { this.spaceDown = true; this.updateCursor(); e.preventDefault(); return; }
-    if (e.key.toLowerCase() === 'w' && !mod) { this.teleportHeld = true; return; }
+    this.shiftDown = e.shiftKey;
+    const key = e.key.toLowerCase();
+    // Q held while dragging: teleport (the DM's tokens jump, ignoring walls and the ground between)
+    if (key === 'q' && !mod && !e.altKey) { if (c.isDM) this.setTeleport(true); return; }
+    // W A S D pan the view while held (Shift: faster)
+    if (!mod && !e.altKey && (key === 'w' || key === 'a' || key === 's' || key === 'd')) {
+      e.preventDefault();
+      if (!this.panKeys.has(key)) { this.panKeys.add(key); this.dirty = true; }
+      return;
+    }
 
     if (e.key === 'Escape') {
       if (this.testMoves.size) { this.resetTestMoves(); return; }
@@ -2614,8 +2695,13 @@ export class Board {
       case 'v': ui.set({ tool: 'select' }); break;
       case 'g': if (c.isDM && c.scene?.meta) void c.updateScene({ grid: { visible: !c.scene.meta.grid.visible } }); break;
       case 'f': if (c.isDM) ui.set({ tool: ui.data.tool === 'fog' ? 'select' : 'fog' }); break;
-      case 'd': ui.set({ tool: ui.data.tool === 'draw' ? 'select' : 'draw' }); break;
-      case 's': ui.set({ tool: ui.data.tool === 'template' ? 'select' : 'template' }); break;
+      case 'p': if (c.canDo('draw')) ui.set({ tool: ui.data.tool === 'draw' ? 'select' : 'draw' }); break;
+      case 'c': if (c.canDo('template')) ui.set({ tool: ui.data.tool === 'template' ? 'select' : 'template' }); break;
+      case 'z': this.focusSelection(); break;
+      case 'tab': e.preventDefault(); this.cycleSelection(e.shiftKey ? -1 : 1); break;
+      case 'n': if (c.isDM) void c.initStep(e.shiftKey ? -1 : 1); break;
+      case 'k': if (c.isDM && ui.data.selection.size) { const ts = [...ui.data.selection].map((id) => c.scene?.tokens.get(id)).filter((t): t is Token => !!t); void c.updateTokens(ts.map((t) => t.id), { hidden: !ts.every((t) => t.hidden) }); } break;
+      case 'l': if (c.isDM && ui.data.selection.size) { const ts = [...ui.data.selection].map((id) => c.scene?.tokens.get(id)).filter((t): t is Token => !!t); void c.updateTokens(ts.map((t) => t.id), { locked: !ts.every((t) => t.locked) }); } break;
       case 'r': ui.set({ tool: ui.data.tool === 'ruler' ? 'select' : 'ruler' }); break;
       case 'm': ui.set({ testMove: !ui.data.testMove }); break;
       case 'i': if (c.isDM) ui.set({ initOpen: !ui.data.initOpen }); break;

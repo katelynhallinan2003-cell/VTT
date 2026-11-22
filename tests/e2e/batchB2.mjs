@@ -56,7 +56,7 @@ const X0 = 7 * cell; // keeps test strokes clear of the tool panel on the left (
 const rel = (page, a, b, steps, mods) => drag(page, { x: a.x + X0, y: a.y }, { x: b.x + X0, y: b.y }, steps, mods);
 
 // ---- draw tools
-await dm.keyboard.press('d');
+await dm.keyboard.press('p');
 check('D opens the draw flyout', (await dm.locator('.flyout-title', { hasText: 'Draw' }).count()) === 1);
 await rel(dm, { x: 300, y: 300 }, { x: 520, y: 380 }, 14);
 let list = await draws(dm);
@@ -103,7 +103,7 @@ await sleep(250);
 check('Ctrl+Y brings it back', (await draws(dm)).length === n0);
 
 // player draws too, and cannot erase the DM's drawing
-await pl.keyboard.press('d');
+await pl.keyboard.press('p');
 await pl.locator('.flyout .seg button', { hasText: 'Line' }).first().click();
 await rel(pl, { x: 900, y: 300 }, { x: 1000, y: 360 });
 await sleep(300);
@@ -120,7 +120,7 @@ check('a player can erase their own', !(await draws(dm)).some((d) => d.uid === p
 await pl.keyboard.press('Escape');
 
 // eraser (DM) and select / move / delete
-await dm.keyboard.press('d');
+await dm.keyboard.press('p');
 await pick('Erase');
 await rel(dm, { x: 300, y: 450 }, { x: 600, y: 450 });
 check('eraser removes what it crosses', !(await draws(dm)).some((d) => d.k === 'line'));
@@ -142,7 +142,7 @@ await dm.keyboard.press('Control+z');
 await sleep(200);
 
 // clear mine (DM clear all)
-await dm.keyboard.press('d');
+await dm.keyboard.press('p');
 await dm.locator('.flyout button', { hasText: 'Clear all' }).click();
 await sleep(300);
 check('Clear all removes every drawing', (await draws(dm)).length === 0);
@@ -154,7 +154,7 @@ await sleep(300);
 await dm.keyboard.press('Escape');
 
 // ---- spell templates
-await dm.keyboard.press('s');
+await dm.keyboard.press('c');
 check('S opens the template flyout', (await dm.locator('.flyout-title', { hasText: 'Spell templates' }).count()) === 1);
 const origin = { x: 5 * cell, y: 5 * cell };
 await dm.locator('.flyout .seg button', { hasText: 'Cone' }).click();

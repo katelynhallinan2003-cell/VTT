@@ -33,7 +33,7 @@ async function drag(kind, from, to, mods = []) {
   await dm.mouse.move(a.x, a.y); await dm.mouse.down(); await dm.mouse.move(b.x, b.y, { steps: 6 });
   await dm.mouse.up(); await sleep(250);
 }
-await dm.keyboard.press('s');
+await dm.keyboard.press('c');
 check('template flyout has an Emanation button', (await dm.locator('.flyout .seg button', { hasText: 'Emanation' }).count()) === 1);
 
 // emanation: click inside the square at (13,9), drag about 2.4 squares right

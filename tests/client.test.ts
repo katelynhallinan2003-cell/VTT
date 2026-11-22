@@ -97,7 +97,7 @@ describe('TableClient over the mock backend', () => {
     await waitFor(() => !!pl.scene?.tokens.get(id), 'token');
     const tok = () => pl.scene!.tokens.get(id)!;
     expect(pl.canDo('move', tok())).toBe(true);
-    await dm.setPermissions({ playersMoveAnyToken: false, playersCreateTokens: false, playersDeleteAnyToken: false, playersPing: true, playersDraw: false, playersMeasure: true });
+    await dm.setPermissions({ playersMoveAnyToken: false, playersCreateTokens: false, playersDeleteAnyToken: false, playersPing: true, playersDraw: false, playersTemplates: true, playersMeasure: true });
     await waitFor(() => pl.settings.perm.playersMoveAnyToken === false, 'perm sync');
     expect(pl.settings.preset).toBe('strict');
     expect(pl.canDo('move', tok())).toBe(false);

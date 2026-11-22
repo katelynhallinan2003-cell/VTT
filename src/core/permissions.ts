@@ -8,6 +8,7 @@ export const PRESETS: Record<'trusting' | 'standard' | 'strict', Permissions> = 
     playersDeleteAnyToken: true,
     playersPing: true,
     playersDraw: true,
+    playersTemplates: true,
     playersMeasure: true,
   },
   // Players move and edit only their own token, but may still make tokens, draw and measure.
@@ -17,6 +18,7 @@ export const PRESETS: Record<'trusting' | 'standard' | 'strict', Permissions> = 
     playersDeleteAnyToken: false,
     playersPing: true,
     playersDraw: true,
+    playersTemplates: true,
     playersMeasure: true,
   },
   // Players can only move their own token (assigned by you), ping and measure.
@@ -26,6 +28,7 @@ export const PRESETS: Record<'trusting' | 'standard' | 'strict', Permissions> = 
     playersDeleteAnyToken: false,
     playersPing: true,
     playersDraw: false,
+    playersTemplates: true,
     playersMeasure: true,
   },
 };
@@ -35,7 +38,8 @@ export const PERM_LABELS: Record<keyof Permissions, { label: string; hint: strin
   playersCreateTokens: { label: 'Create tokens', hint: 'Players can add their own tokens to the board.' },
   playersDeleteAnyToken: { label: 'Delete any token', hint: 'Off: players can only delete tokens they own.' },
   playersPing: { label: 'Ping the map', hint: 'Show everyone a spot on the map (middle click by default).' },
-  playersDraw: { label: 'Draw and place spell templates', hint: 'Players can add, move and erase their own drawings.' },
+  playersDraw: { label: 'Draw and write', hint: 'Players can add, move and erase their own drawings and text.' },
+  playersTemplates: { label: 'Place spell templates', hint: 'Players can place, move and remove their own cones, cubes, spheres, emanations and lines, even if drawing is off.' },
   playersMeasure: { label: 'Use the ruler', hint: 'Measure distances on the map.' },
 };
 
@@ -47,7 +51,7 @@ export function detectPreset(perm: Permissions): PermPreset {
   return 'custom';
 }
 
-export type Action = 'move' | 'edit' | 'delete' | 'create' | 'claim' | 'ping' | 'draw' | 'measure';
+export type Action = 'move' | 'edit' | 'delete' | 'create' | 'claim' | 'ping' | 'draw' | 'template' | 'measure';
 
 export interface PermCtx {
   role: Role;
@@ -68,6 +72,7 @@ export function can(ctx: PermCtx, action: Action, token?: Token): boolean {
   switch (action) {
     case 'ping': return ctx.perm.playersPing;
     case 'draw': return ctx.perm.playersDraw;
+    case 'template': return ctx.perm.playersTemplates || ctx.perm.playersDraw;
     case 'measure': return ctx.perm.playersMeasure;
     case 'create': return ctx.perm.playersCreateTokens;
     case 'claim': return !!token && token.ownerUid === null && !token.locked && !token.hidden;

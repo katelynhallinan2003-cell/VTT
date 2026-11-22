@@ -65,7 +65,7 @@ await sleep(200);
 
 // ---------------------------------------------------------------- sphere snap modes
 await dm.evaluate(() => window.__vtt.ui.select([]));
-await dm.keyboard.press('s');
+await dm.keyboard.press('c');
 await dm.locator('.flyout .seg button', { hasText: 'Sphere' }).click();
 check('the sphere shows its snap choices', (await dm.locator('.flyout .seg button', { hasText: 'Middle of a square' }).count()) === 1);
 const draws = () => dm.evaluate(() => [...window.__vtt.client.scene.draws.values()]);
@@ -132,19 +132,19 @@ check('walking leaves a trail along the route', !!route, `${added.length} new fo
 const turned = !!route && (() => { const xs = []; for (let i = 0; i < route.length; i += 2) xs.push([route[i], route[i + 1]]); return xs.some(([x, y]) => Math.abs(x - worldPt(12.5, 12.5).x) < c * 0.8 && Math.abs(y - worldPt(12.5, 12.5).y) < c * 0.8); })();
 check('and it follows the corner instead of cutting across', turned);
 
-// teleport: hold T while dragging
+// teleport: hold Q while dragging
 const n1 = (await fogOps()).length;
 const b0 = await toScreen(worldPt(12.5, 15.5)), b1 = await toScreen(worldPt(18.5, 15.5));
 console.log('teleport drag', JSON.stringify([b0, b1, grid.cell]), JSON.stringify((await tokens()).find((q) => q.id === elf)));
-await dm.keyboard.down('w');
+await dm.keyboard.down('q');
 await dm.mouse.move(b0.x, b0.y); await dm.mouse.down();
 await dm.mouse.move(b1.x, b1.y, { steps: 12 });
 await dm.mouse.up();
 await sleep(100);
-await dm.keyboard.up('w');
+await dm.keyboard.up('q');
 await sleep(1500);
 const tele = (await fogOps()).slice(n1);
-check('holding W teleports: only where it lands is cleared', tele.length === 1 && tele[0].length === 2, JSON.stringify(tele.map((q) => q.length)));
+check('holding Q teleports: only where it lands is cleared', tele.length === 1 && tele[0].length === 2, JSON.stringify(tele.map((q) => q.length)));
 const e = (await tokens()).find((q) => q.id === elf);
 check('and the token did arrive', Math.abs(e.x - worldPt(18.5, 15.5).x) < c);
 

@@ -57,9 +57,20 @@ export function Toasts() {
 }
 
 // ---------------------------------------------------------------- modal
+/** the windows that are open, the last one on top: Esc closes only the top one */
+const modalStack: symbol[] = [];
 export function Modal(props: { title: string; onClose: () => void; width?: number; children: ComponentChildren; footer?: ComponentChildren }) {
+  const me = useRef(Symbol('modal')).current;
   useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); props.onClose(); } };
+    modalStack.push(me);
+    return () => { const i = modalStack.indexOf(me); if (i >= 0) modalStack.splice(i, 1); };
+  }, []);
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || modalStack[modalStack.length - 1] !== me) return;
+      e.stopPropagation();
+      props.onClose();
+    };
     window.addEventListener('keydown', h, true);
     return () => window.removeEventListener('keydown', h, true);
   }, [props.onClose]);

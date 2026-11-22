@@ -6,6 +6,9 @@ const TABLE = "root.child('tables').child($tid)";
 const OWNER = `${TABLE}.child('owner').val() === auth.uid`;
 const ACTIVE = `${TABLE}.child('meta').child('activeScene').val() === $sid`;
 const perm = (name) => `${TABLE}.child('settings').child('perm').child('${name}').val() === true`;
+// a permission added later: a table saved before it existed has no value, which counts as allowed
+const permUnlessOff = (name) => `${TABLE}.child('settings').child('perm').child('${name}').val() !== false`;
+const tplKind = (n) => ['cone', 'cube', 'sphere', 'emanation', 'beam'].map((k) => `${n}.child('k').val() === '${k}'`).join(' || ');
 // Database keys can't contain '.', so the email is stored with every '.' written as ','.
 // replace() is chained a few times so it also works if an engine only replaces the first match.
 const EMAIL_KEY = "auth.token.email.toLowerCase()" + ".replace('.', ',')".repeat(6);
@@ -74,7 +77,8 @@ const rules = {
             // drawings: players with the draw permission can add their own and change or remove only their own
             draw: {
               $did: {
-                '.write': `auth != null && ${ACTIVE} && ${perm('playersDraw')} && ((!data.exists() && newData.child('uid').val() === auth.uid) || (data.exists() && data.child('uid').val() === auth.uid))`,
+                // spell templates have their own permission, so a table can allow them without allowing drawing
+                '.write': `auth != null && ${ACTIVE} && (${perm('playersDraw')} || (${permUnlessOff('playersTemplates')} && ((${tplKind('newData')}) || (${tplKind('data')})))) && ((!data.exists() && newData.child('uid').val() === auth.uid) || (data.exists() && data.child('uid').val() === auth.uid))`,
                 '.validate': `newData.hasChildren(['uid', 'k', 'p']) && (${OWNER} || newData.child('uid').val() === auth.uid)`,
               },
             },

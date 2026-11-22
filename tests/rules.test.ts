@@ -301,6 +301,24 @@ describe('security rules: drawings and live plotting', () => {
     expect(can(withDraw(), p1, 'write', `${T}/scenes/S2/draw/new`, draw)).toBe(false);
     expect(can(off, dm, 'write', `${T}/scenes/S1/draw/new`, { ...draw, uid: 'dm-uid' })).toBe(true);
   });
+  it('spell templates have their own switch: on unless the table turns them off, even when drawing is off', () => {
+    const cone = { uid: 'p1', k: 'cone', p: '0,0,40,0' };
+    const off = withDraw();
+    off.tables.T1.settings.perm = { ...allTrue, playersDraw: false }; // no template setting saved (an older table): templates stay allowed
+    expect(can(off, p1, 'write', `${T}/scenes/S1/draw/c1`, cone)).toBe(true);
+    expect(can(off, p1, 'write', `${T}/scenes/S1/draw/c1`, { ...cone, uid: 'p2' })).toBe(false);
+    expect(can(off, p1, 'write', `${T}/scenes/S1/draw/pen1`, draw)).toBe(false);
+    off.tables.T1.scenes.S1.draw.mycone = { ...cone };
+    expect(can(off, p1, 'write', `${T}/scenes/S1/draw/mycone`, { ...cone, p: '0,0,10,10' })).toBe(true);
+    expect(can(off, p1, 'write', `${T}/scenes/S1/draw/mycone`, null)).toBe(true);
+    const none = withDraw();
+    none.tables.T1.settings.perm = { ...allTrue, playersDraw: false, playersTemplates: false };
+    expect(can(none, p1, 'write', `${T}/scenes/S1/draw/c1`, cone)).toBe(false);
+    const on = withDraw();
+    on.tables.T1.settings.perm = { ...allTrue, playersDraw: false, playersTemplates: true };
+    expect(can(on, p1, 'write', `${T}/scenes/S1/draw/c1`, { ...cone, k: 'emanation' })).toBe(true);
+    expect(can(on, p1, 'write', `${T}/scenes/S1/draw/c1`, { ...cone, k: 'terrain' })).toBe(false);
+  });
   it('everyone writes only their own live plotting entry', () => {
     const db = withDraw();
     expect(can(db, p1, 'write', `${T}/scenes/S1/live/p1`, { ruler: { ax: 0, ay: 0, bx: 5, by: 5 } })).toBe(true);

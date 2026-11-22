@@ -235,7 +235,7 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
       )}
       <div class="stack">
         {file && client.backend.kind !== 'mock' && <Toggle checked={saveLib} onChange={setSaveLib} label="Save this map to my library" />}
-        <Toggle checked={makeActive} onChange={setMakeActive} label="Show it to players right away" hint="Off: you can prep it privately and switch players over later." />
+        <Toggle checked={makeActive} onChange={setMakeActive} label="Summon players to it as soon as it is made" hint="On: everyone at the table is moved onto this scene the moment you create it. Off: it stays private while you set it up, and you move the players over later with the Summon players button." />
       </div>
     </Modal>
   );
@@ -265,7 +265,7 @@ export function ScenesModal(props: { client: TableClient; onClose: () => void; o
                   {s.name} {live && <span class="badge live">live</span>} {viewing && !live && <span class="badge">viewing</span>}
                 </button>
               )}
-              {!live && <button class="btn small" onClick={() => void client.setActiveScene(s.id)}>Show to players</button>}
+              {!live && <button class="btn small" title="Moves everyone at the table onto this scene" onClick={() => void client.setActiveScene(s.id)}>Summon players</button>}
               <button class="btn small" disabled={!viewing} title={viewing ? '' : 'Open the scene to rename it'} onClick={() => setRenaming(s.id)}>Rename</button>
               <button class="btn small danger" onClick={() => { if (confirm(`Delete scene “${s.name}”? Tokens and fog in it are lost.`)) void client.deleteScene(s.id); }}>Delete</button>
             </li>
@@ -428,17 +428,29 @@ export function SettingsModal(props: { client: TableClient; ui: UiState; onClose
 
       <h3>Keyboard &amp; mouse</h3>
       <ul class="keys">
+        <li class="keys-head">Moving around</li>
+        <li><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> — pan the view (hold <kbd>Shift</kbd> to go faster)</li>
         <li><kbd>Right-drag</kbd> or <kbd>Middle-drag</kbd> (your choice above) or <kbd>Space</kbd>+drag — pan</li>
-        <li><kbd>Wheel</kbd> — zoom, <kbd>0</kbd> — fit the map</li>
+        <li><kbd>Wheel</kbd> or <kbd>+</kbd> <kbd>-</kbd> — zoom, <kbd>0</kbd> — fit the map</li>
+        <li><kbd>Z</kbd> — bring the selected tokens into view (or fit the map if none)</li>
         <li><kbd>Middle-click</kbd> or hold <kbd>left mouse</kbd> for a moment (your choice above) — ping</li>
-        <li><kbd>Shift</kbd>+click — multi-select, drag on empty space — box select</li>
-        <li><kbd>Alt</kbd> while dragging — move without snapping</li>
-        <li><kbd>Arrows</kbd> — nudge one square (or hex), <kbd>Del</kbd> — delete</li>
-        <li><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo, <kbd>Ctrl</kbd>+<kbd>Y</kbd> redo, <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>X</kbd> / <kbd>V</kbd> copy, cut, paste tokens</li>
-        <li><kbd>V</kbd> select · <kbd>D</kbd> draw · <kbd>S</kbd> spell templates · <kbd>R</kbd> ruler · <kbd>M</kbd> test move · <kbd>I</kbd> initiative (DM) · <kbd>H</kbd> heights (DM)</li>
+        <li class="keys-head">Tools</li>
+        <li><kbd>V</kbd> select · <kbd>P</kbd> draw and write · <kbd>C</kbd> spell templates · <kbd>R</kbd> ruler · <kbd>M</kbd> test move</li>
+        <li><kbd>G</kbd> grid · <kbd>F</kbd> fog · <kbd>H</kbd> heights · <kbd>B</kbd> walls · <kbd>I</kbd> initiative (DM)</li>
+        <li><kbd>T</kbd> add a token · <kbd>E</kbd> edit the selected tokens · <kbd>?</kbd> this list</li>
+        <li><kbd>Esc</kbd> — back to select, let go of what you are drawing, or put test moves back</li>
+        <li class="keys-head">Tokens</li>
+        <li><kbd>Shift</kbd>+click — multi-select, drag on empty space — box select, <kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd> — next / previous token</li>
+        <li><kbd>Arrows</kbd> — nudge one square (or hex), <kbd>Alt</kbd> while dragging — move without snapping, <kbd>Del</kbd> — delete</li>
         <li><kbd>]</kbd> raise the selected tokens 5 ft (they fly) · <kbd>[</kbd> lower them (down to the ground)</li>
-        <li><kbd>G</kbd> grid · <kbd>F</kbd> fog (DM) · <kbd>Esc</kbd> back to select / put test moves back · <kbd>Enter</kbd> keep test moves</li>
-        <li>While drawing: <kbd>Shift</kbd> locks angles and makes squares, <kbd>Alt</kbd> turns off snapping</li>
+        <li><kbd>Q</kbd> — hold while dragging a token to <b>teleport</b> it (DM: it jumps, walls and distance do not count). Or right-click empty ground and choose "Teleport selected token here".</li>
+        <li><kbd>K</kbd> hide / reveal the selected tokens · <kbd>L</kbd> lock / unlock them (DM)</li>
+        <li><kbd>N</kbd> next turn · <kbd>Shift</kbd>+<kbd>N</kbd> previous turn (DM, with initiative running)</li>
+        <li><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo, <kbd>Ctrl</kbd>+<kbd>Y</kbd> redo, <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>X</kbd> / <kbd>V</kbd> copy, cut, paste tokens, <kbd>Ctrl</kbd>+<kbd>D</kbd> duplicate, <kbd>Ctrl</kbd>+<kbd>A</kbd> select all</li>
+        <li class="keys-head">Test move</li>
+        <li><kbd>Enter</kbd> — keep the test moves, <kbd>Esc</kbd> — put everything back</li>
+        <li class="keys-head">While drawing</li>
+        <li><kbd>Shift</kbd> locks angles and makes squares, <kbd>Alt</kbd> turns off snapping</li>
       </ul>
 
       {props.onSignOut && <div class="row"><button class="btn danger" onClick={props.onSignOut}>Sign out</button></div>}

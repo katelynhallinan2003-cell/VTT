@@ -181,3 +181,30 @@ describe('permissions', () => {
     expect(detectPreset({ ...PRESETS.standard, playersPing: false })).toBe('custom');
   });
 });
+
+import { can as canDoIt } from '../src/core/permissions';
+import { PRESETS as PRE } from '../src/core/permissions';
+import { normalizeDrawing as normDraw, normalizeSettings as normSet, drawingToWire as drawWire } from '../src/core/model';
+
+describe('template permission and private templates', () => {
+  const ctx = (perm: any) => ({ role: 'player' as const, uid: 'p', perm, sceneActive: true });
+  it('a table saved before templates had their own switch allows them', () => {
+    expect(normSet({ perm: { playersDraw: false } }, PRE).perm.playersTemplates).toBe(true);
+    expect(normSet({ perm: { playersTemplates: false } }, PRE).perm.playersTemplates).toBe(false);
+  });
+  it('every preset lets players place templates, and strict still stops drawing', () => {
+    for (const p of Object.values(PRE)) expect(p.playersTemplates).toBe(true);
+    expect(canDoIt(ctx(PRE.strict), 'template')).toBe(true);
+    expect(canDoIt(ctx(PRE.strict), 'draw')).toBe(false);
+    expect(canDoIt(ctx({ ...PRE.strict, playersTemplates: false }), 'template')).toBe(false);
+    expect(canDoIt(ctx({ ...PRE.strict, playersTemplates: false, playersDraw: true }), 'template')).toBe(true);
+  });
+  it('a private template stays private through the database', () => {
+    const d = normDraw('a', { k: 'cone', p: '0,0,10,10', pv: true, uid: 'u' })!;
+    expect(d.pv).toBe(true);
+    expect(drawWire(d).pv).toBe(true);
+    const shared = normDraw('b', { k: 'cone', p: '0,0,10,10', uid: 'u' })!;
+    expect(shared.pv).toBeUndefined();
+    expect('pv' in drawWire(shared)).toBe(false);
+  });
+});

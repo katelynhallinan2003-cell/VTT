@@ -248,7 +248,7 @@ check('turning the height view to "only in the tool" keeps the ground, only hidi
 void hiddenCount;
 
 // ---- the draw tool's Clear all leaves terrain alone
-await dm.keyboard.press('d');
+await dm.keyboard.press('p');
 await dm.getByRole('button', { name: 'Clear all', exact: true }).click();
 await sleep(400);
 check('"Clear all" drawings does not wipe the terrain', (await zones(dm)).length === 2);

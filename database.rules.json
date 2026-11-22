@@ -60,7 +60,7 @@
             },
             "draw": {
               "$did": {
-                ".write": "auth != null && root.child('tables').child($tid).child('meta').child('activeScene').val() === $sid && root.child('tables').child($tid).child('settings').child('perm').child('playersDraw').val() === true && ((!data.exists() && newData.child('uid').val() === auth.uid) || (data.exists() && data.child('uid').val() === auth.uid))",
+                ".write": "auth != null && root.child('tables').child($tid).child('meta').child('activeScene').val() === $sid && (root.child('tables').child($tid).child('settings').child('perm').child('playersDraw').val() === true || (root.child('tables').child($tid).child('settings').child('perm').child('playersTemplates').val() !== false && ((newData.child('k').val() === 'cone' || newData.child('k').val() === 'cube' || newData.child('k').val() === 'sphere' || newData.child('k').val() === 'emanation' || newData.child('k').val() === 'beam') || (data.child('k').val() === 'cone' || data.child('k').val() === 'cube' || data.child('k').val() === 'sphere' || data.child('k').val() === 'emanation' || data.child('k').val() === 'beam')))) && ((!data.exists() && newData.child('uid').val() === auth.uid) || (data.exists() && data.child('uid').val() === auth.uid))",
                 ".validate": "newData.hasChildren(['uid', 'k', 'p']) && (root.child('tables').child($tid).child('owner').val() === auth.uid || newData.child('uid').val() === auth.uid)"
               }
             },

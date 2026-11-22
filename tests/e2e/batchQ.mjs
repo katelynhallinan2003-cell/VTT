@@ -36,7 +36,7 @@ const drag = async (a, b) => {
 };
 
 // ---- drawings follow the panel while they are selected
-await dm.keyboard.press('d');
+await dm.keyboard.press('p');
 await dm.locator('.flyout-title', { hasText: /^Draw$/ }).waitFor();
 await dm.locator('.flyout .seg button', { hasText: /^Box$/ }).click();
 const tool = await dm.evaluate(() => window.__vtt.ui.data.drawTool);

@@ -93,7 +93,8 @@ export class TableClient {
   handouts = new Map<string, Handout>();
   private handoutListeners = new Set<(h: Handout) => void>();
   private handoutSeen = new Map<string, number>();
-  private handoutT0 = 0;
+  private handoutReady = false;
+  private handoutTimer: ReturnType<typeof setTimeout> | undefined;
   private viewCallN = 0;
   private unsubs: Unsub[] = [];
   private sceneUnsubs: Unsub[] = [];
@@ -212,14 +213,16 @@ export class TableClient {
     }, this.fail('players')));
 
     // handouts: the DM works on their own copies, a player gets only what is being shown
-    this.handoutT0 = performance.now();
+    // what is already out when someone arrives is not announced; only what is shown after that is. The first read of the list says when "after" starts.
+    this.handoutReady = false;
+    clearTimeout(this.handoutTimer);
     const handoutRow = (k: string, v: any) => {
       const h = normalizeHandout(k, v);
       this.handouts.set(k, h);
       const prev = this.handoutSeen.get(k);
       this.handoutSeen.set(k, h.n);
       // a player's screen opens a handout when it is shown to them while they are here (not for ones already out when they arrived)
-      if (this.role === 'player' && h.shown && h.n && prev !== h.n && performance.now() - this.handoutT0 > 1500 && (!h.to || h.to.includes(this.uid))) {
+      if (this.role === 'player' && this.handoutReady && h.shown && h.n && prev !== h.n && (!h.to || h.to.includes(this.uid))) {
         for (const fn of [...this.handoutListeners]) fn(h);
       }
       this.bump();
@@ -229,6 +232,11 @@ export class TableClient {
       changed: handoutRow,
       removed: (k) => { this.handouts.delete(k); this.handoutSeen.delete(k); this.bump(); },
     }, this.fail('handouts')));
+    if (this.role === 'player') {
+      const ready = () => { clearTimeout(this.handoutTimer); this.handoutTimer = setTimeout(() => { this.handoutReady = true; }, 300); };
+      void b.get(P.handouts(tid)).then(ready, ready);
+      this.handoutTimer = setTimeout(() => { this.handoutReady = true; }, 4000); // if the first read never answers
+    }
 
     this.unsubs.push(b.listen(P.uploadKey(tid), (v) => {
       this.uploadKey = typeof v === 'string' && v ? v : null;
@@ -260,6 +268,7 @@ export class TableClient {
     this.pingListeners.clear();
     this.viewListeners.clear();
     this.handoutListeners.clear();
+    clearTimeout(this.handoutTimer);
   }
 
   private armPresence() {
@@ -665,7 +674,7 @@ export class TableClient {
   }
 
   // ---------------------------------------------------------------- drawings
-  canEditDrawing(d: Drawing): boolean { return this.isDM || (this.canDo('draw') && d.uid === this.uid); }
+  canEditDrawing(d: Drawing): boolean { return this.isDM || (this.canDo(isTemplate(d.k) ? 'template' : 'draw') && d.uid === this.uid); }
 
   /** Drawings in the order they were made (keys sort by time). */
   drawingsSorted(): Drawing[] {
@@ -676,7 +685,7 @@ export class TableClient {
 
   async addDrawing(d: NewDrawing, opts: { record?: boolean; onId?: (id: string) => void; label?: string } = {}): Promise<string> {
     if (!this.viewSceneId) throw new Error('No scene is open');
-    if (!this.canDo('draw')) throw new Error('You are not allowed to draw here.');
+    if (!this.canDo(isTemplate(d.k) ? 'template' : 'draw')) throw new Error(isTemplate(d.k) ? 'The DM has turned off spell templates for players.' : 'The DM has turned off drawing for players.');
     const id = this.backend.newKey();
     const full: Drawing = { fc: '', font: '', b: false, i: false, u: false, ho: false, hz: null, ...d, id, uid: this.uid, t: this.backend.now() };
     const wrote = this.backend.set(this.drawPath(id), drawingToWire(full));

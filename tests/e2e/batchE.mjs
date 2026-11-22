@@ -28,7 +28,7 @@ const toScreen = (x, y) => dm.evaluate(([x, y]) => window.__vtt.board.worldToScr
 const cell = await dm.evaluate(() => window.__vtt.client.grid.cell);
 
 // ---- draw a box
-await dm.keyboard.press('d');
+await dm.keyboard.press('p');
 await dm.locator('.flyout .seg button', { hasText: 'Box' }).click();
 check('draw flyout offers None / See-through / Solid', (await dm.locator('.flyout .seg button').allTextContents()).join('|').includes('None|See-through|Solid'));
 const a = await toScreen(11 * cell, 3 * cell);
@@ -93,7 +93,7 @@ check('but once selected, dragging from inside moves it', p1[0] - p0[0] > 10, `$
 await dm.keyboard.press('Delete'); await sleep(200);
 
 // ---- text: type in place, then edit it again
-await dm.keyboard.press('d');
+await dm.keyboard.press('p');
 await dm.locator('.flyout .seg button', { hasText: 'Text' }).click();
 const t0 = await toScreen(12 * cell, 8 * cell);
 await dm.mouse.click(t0.x, t0.y); await sleep(250);
@@ -163,7 +163,7 @@ await dm.keyboard.press('Delete'); await sleep(200);
 check('Delete removes the text too', (await draws()).length === 0);
 
 // ---- a line has two end handles and a length in feet
-await dm.keyboard.press('d');
+await dm.keyboard.press('p');
 await dm.locator('.flyout .seg button', { hasText: 'Arrow' }).click();
 const l0 = await toScreen(10 * cell, 10 * cell), l1 = await toScreen(14 * cell, 10 * cell);
 await dm.mouse.move(l0.x, l0.y); await dm.mouse.down(); await dm.mouse.move(l1.x, l1.y, { steps: 5 }); await dm.mouse.up(); await sleep(300);

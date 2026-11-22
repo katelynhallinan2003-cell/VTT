@@ -388,7 +388,7 @@ export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
   return (
     <div class="flyout">
       <div class="flyout-title">Spell templates</div>
-      {!client.canDo('draw') && <p class="hint">Placing templates is turned off for players.</p>}
+      {!client.canDo('template') && <p class="hint">Placing templates is turned off for players.</p>}
       <div class="seg wrap">
         {TEMPLATES.map((x) => <button key={x.id} class={d.tplKind === x.id ? 'on' : ''} onClick={() => ui.set({ tplKind: x.id })}>{x.label}</button>)}
       </div>
@@ -410,6 +410,7 @@ export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
           </div>
         </>
       )}
+      <Toggle checked={d.tplShare} onChange={(v) => ui.set({ tplShare: v })} label="Show others my templates" hint="On: everyone sees the templates you place. Off: only you (and the DM) see them." />
       <Toggle checked={d.tplCover} onChange={(v) => ui.set({ tplCover: v })} label={hex ? 'Show the hexes it covers' : 'Show the squares it covers'} hint={hex ? 'A hex counts when its middle is inside the area.' : 'A square counts when its middle is inside the area.'} />
       <p class="hint">{say(t.hint)} {say('Sizes snap to whole squares')} (hold Alt to turn that off, Shift to lock the angle).</p>
       <div class="row wrap">

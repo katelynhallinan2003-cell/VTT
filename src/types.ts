@@ -230,6 +230,8 @@ export interface Drawing {
   he?: boolean;
   /** terrain: the stroke is a list of whole cells (their centres), not a free brush */
   hc?: boolean;
+  /** private: only the person who made it (and the DM) can see it */
+  pv?: boolean;
   t: number;
 }
 
@@ -283,6 +285,8 @@ export interface Permissions {
   playersDeleteAnyToken: boolean;
   playersPing: boolean;
   playersDraw: boolean;
+  /** players may place spell templates (cones, cubes, spheres, emanations, lines) even when drawing is off */
+  playersTemplates: boolean;
   playersMeasure: boolean;
 }
 export type PermPreset = 'trusting' | 'standard' | 'strict' | 'custom';

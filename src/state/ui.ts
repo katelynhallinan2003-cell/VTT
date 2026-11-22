@@ -55,6 +55,8 @@ export interface UiData {
   testCount: number;
   /** show my ruler and test moves to everyone */
   sharePlot: boolean;
+  /** spell templates I place can be seen by everyone (on), or only by me and the DM (off) */
+  tplShare: boolean;
   /** which mouse button pans the view (the other one opens the menu / pings) */
   panButton: 'right' | 'middle';
   /** how pinging works: middle click, or holding the left button */
@@ -140,6 +142,7 @@ export class UiState {
     tplCover: readFlag('vtt-tpl-cover', true),
     drawSel: new Set(), testMove: false, testCount: 0,
     sharePlot: readFlag('vtt-share-plot', false),
+    tplShare: readFlag('vtt-tpl-share', true),
     textEdit: null, camRev: 0, initOpen: false,
     fxJump: readFlag('vtt-fx-jump', true), fxDraft: null,
     heightFt: (() => { try { const n = Number(localStorage.getItem('vtt-height-ft')); return Number.isFinite(n) && localStorage.getItem('vtt-height-ft') !== null ? n : 10; } catch { return 10; } })(),
@@ -178,6 +181,8 @@ export class UiState {
   set(patch: Partial<UiData>) {
     // the ruler and test moves do not mix: trying a move switches the ruler off
     if (patch.testMove === true && this.data.tool !== 'select' && patch.tool === undefined) patch = { ...patch, tool: 'select' }; // test move works on tokens, so it takes over from any other tool
+    // picking any other tool ends the test move (it only ever goes with the plain select tool)
+    if (patch.tool !== undefined && patch.tool !== 'select' && this.data.testMove && patch.testMove === undefined) patch = { ...patch, testMove: false };
     try {
       if (patch.drawTool !== undefined) localStorage.setItem('vtt-draw-tool', patch.drawTool);
       if (patch.tplKind !== undefined) localStorage.setItem('vtt-tpl-kind', patch.tplKind);
@@ -211,6 +216,7 @@ export class UiState {
       if (patch.wallSnap !== undefined) localStorage.setItem('vtt-wall-snap', patch.wallSnap);
       if (patch.showWalls !== undefined) localStorage.setItem('vtt-show-walls', patch.showWalls ? '1' : '0');
       if (patch.initPos !== undefined) localStorage.setItem('vtt-init-pos', patch.initPos);
+      if (patch.tplShare !== undefined) localStorage.setItem('vtt-tpl-share', patch.tplShare ? '1' : '0');
       if (patch.sharePlot !== undefined) localStorage.setItem('vtt-share-plot', patch.sharePlot ? '1' : '0');
       if (patch.fxJump !== undefined) localStorage.setItem('vtt-fx-jump', patch.fxJump ? '1' : '0');
     } catch { /* ignore */ }

@@ -305,7 +305,12 @@ input[type=text], input[type=number], input[type=password], select { border-radi
 .swatches .swatch { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--border); cursor: pointer; padding: 0; }
 .swatches .swatch.on { outline: 2px solid var(--accent); outline-offset: 2px; }
 .swatches input[type=color] { width: 28px; height: 24px; padding: 0; border: none; background: none; }
-.testbar { position: absolute; left: 50%; top: 68px; transform: translateX(-50%); z-index: 6; display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 8px 28px var(--shadow); }
+.testbar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--panel); border: 1px solid var(--border); border-top: none; border-radius: 0 0 14px 14px; box-shadow: 0 8px 28px var(--shadow); pointer-events: auto; }
+/* things that hang from the top edge, in the middle: stacked, flush with the top */
+.topstack { position: absolute; top: 0; left: 50%; transform: translateX(-50%); z-index: 6; display: flex; flex-direction: column; align-items: center; gap: 0; pointer-events: none; }
+.topstack > * { pointer-events: auto; }
+.topchip { padding: 6px 16px; background: var(--panel); border: 1px solid var(--border); border-top: none; border-radius: 0 0 12px 12px; color: var(--muted); white-space: nowrap; }
+.topchip.warn { background: var(--warn-bg); border-color: var(--warn-border); color: var(--warn); }
 
 .auras { margin-top: 12px; }
 .auras h3 { margin: 0 0 6px; }
@@ -371,7 +376,7 @@ input[type=text], input[type=number], input[type=password], select { border-radi
 .modal-foot .spacer { flex: 1; }
 
 /* the turn order: little boxes across the top middle (or a list down the right edge) */
-.initbar { position: absolute; top: 10px; left: 360px; right: 340px; display: flex; justify-content: center; pointer-events: none; z-index: 6; }
+.initbar { position: absolute; top: calc(10px + var(--topstack-h, 0px)); left: 360px; right: 340px; display: flex; justify-content: center; pointer-events: none; z-index: 6; }
 .initstrip { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 6px 8px; box-shadow: 0 8px 28px var(--shadow); backdrop-filter: blur(8px); pointer-events: auto; }
 .initstrip-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .initstrip-btns { display: inline-flex; align-items: center; gap: 4px; }
@@ -554,3 +559,5 @@ input[type=text], input[type=number], input[type=password], select { border-radi
 /* campaign file (Settings) */
 .campaign-confirm { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--sunken); display: grid; gap: 6px; }
 .campaign-error { margin: 8px 0 0; color: var(--danger); }
+
+.keys .keys-head { margin: 10px 0 0; font-weight: 700; color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: .06em; }

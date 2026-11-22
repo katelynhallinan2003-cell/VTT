@@ -448,7 +448,8 @@ export function SettingsModal(props: { client: TableClient; ui: UiState; onClose
         <li><kbd>N</kbd> next turn · <kbd>Shift</kbd>+<kbd>N</kbd> previous turn (DM, with initiative running)</li>
         <li><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo, <kbd>Ctrl</kbd>+<kbd>Y</kbd> redo, <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>X</kbd> / <kbd>V</kbd> copy, cut, paste tokens, <kbd>Ctrl</kbd>+<kbd>D</kbd> duplicate, <kbd>Ctrl</kbd>+<kbd>A</kbd> select all</li>
         <li class="keys-head">Test move</li>
-        <li><kbd>Enter</kbd> — keep the test moves, <kbd>Esc</kbd> — put everything back</li>
+        <li><kbd>Enter</kbd> — keep the test moves, <kbd>Esc</kbd> — put everything back, right-click — go back one step</li>
+        <li class="muted">"Multi-step" in the test move bar makes each drag a new leg of the move, with the whole distance shown.</li>
         <li class="keys-head">While drawing</li>
         <li><kbd>Shift</kbd> locks angles and makes squares, <kbd>Alt</kbd> turns off snapping</li>
       </ul>

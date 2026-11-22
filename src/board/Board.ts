@@ -1,6 +1,6 @@
 import { Application, Container, Graphics, Sprite, Text, Texture } from 'pixi.js';
 import {
-  clamp, distanceFt, fitCamera, gridFromRect, mapRect, normRect, pointInToken, rectContains, snapTokenCenter, snapToCellCenter, snapToCorner, zoomAt,
+  clamp, distanceFt, fitCamera, pathFt, gridFromRect, mapRect, normRect, pointInToken, rectContains, snapTokenCenter, snapToCellCenter, snapToCorner, zoomAt,
 } from '../core/geometry';
 import { FILL_LEVEL, STROKE_CELLS, beamWidthPx, dashSegments, fitPenPoints, handlesOf, hitDrawing, isTemplate, joinPts, resizeDrawing, setLineMeasurer, footprintPx, snapTemplate, templateLabel, templateWidthPx, type HandleId, type TemplateSnapState } from '../core/draw';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
@@ -12,7 +12,7 @@ import { findGrid, scaleCut, type GridCut } from '../core/gridcut';
 import { findHexGrid } from '../core/hexcut';
 import { lightOf, viewerOf, type LightSrc, type Viewer } from '../core/light';
 import { LightLayer } from './LightLayer';
-import { DEFAULT_GRID } from '../core/model';
+import { DEFAULT_GRID, MAX_VIA } from '../core/model';
 import { pctOf, toPub, visionCircles } from '../core/combat';
 import type { DrawingPatch, TableClient } from '../state/client';
 import type { StrokeSize, UiState } from '../state/ui';
@@ -50,7 +50,7 @@ type Drag =
   | { kind: 'erase'; ids: Set<string> }
   /** painting (or rubbing out) ground with the Heights brush */
   | { kind: 'terrain'; erase: boolean; /** the area it paints into (empty: rub out of every area) */ group: string; h: number; add: boolean; /** the cells covered so far (null for a free brush) */ cells: Map<string, Vec> | null; pts: Vec[]; last: Vec; size: number }
-  | { kind: 'ruler' }
+  | { kind: 'ruler'; /** another leg added to a measurement that is already there */ extend?: boolean }
   /** drawing a wall (or a box of walls) with the Walls tool; `cont` when it carries on from the last wall */
   | { kind: 'wall'; a: Vec; b: Vec; down: Vec; moved: boolean; cont: boolean; shape: 'line' | 'box' | 'free' | 'circle'; /** the pointer's path (freehand walls) */ pts: Vec[] }
   /** dragging the end of a wall (and every other wall end that sits on the same spot) */
@@ -61,6 +61,8 @@ type Drag =
   | { kind: 'drawmove'; ids: string[]; start: Vec; dx: number; dy: number; moved: boolean; /** ground being moved: it steps a whole cell at a time */ snap?: boolean }
   | { kind: 'drawresize'; id: string; handle: HandleId; orig: Drawing; patch: DrawingPatch | null };
 
+/** a token being tried out: where it really is, the corners it turned at, and where the test has put it */
+interface TestMove { from: Vec; to: Vec; via: Vec[] }
 const NO_IDS: Set<string> = new Set();
 const WALL_COLOR = { wall: 0xffd27a, door: 0xe8873a, window: 0x7fd8ff } as const;
 
@@ -107,8 +109,12 @@ export class Board {
   private fxLayer = new Container();
   private plotLabels: Text[] = [];
   private ghostViews = new Map<string, TokenView>();
-  private testMoves = new Map<string, { from: Vec; to: Vec }>();
-  private ruler: { a: Vec; b: Vec } | null = null;
+  /** token id -> the move being tried: where it really is, where it ends up, and the corners it turned at on the way (several steps) */
+  private testMoves = new Map<string, TestMove>();
+  /** what the test moves looked like before each step, so a right-click can go back one */
+  private testHistory: Map<string, TestMove>[] = [];
+  /** `via` are the corners between a and b (a measurement in several legs) */
+  private ruler: { a: Vec; b: Vec; via: Vec[] } | null = null;
   private liveSent = false;
   private seenDrawRev = -1;
   private seenLiveRev = -1;
@@ -496,6 +502,7 @@ export class Board {
     this.seenWallRev = -1;
     this.ui.set({ wallSel: new Set() });
     this.testMoves.clear();
+    this.testHistory = [];
     this.ruler = null;
     this.liveSent = false;
     this.ghostsDirty = true;
@@ -1319,8 +1326,8 @@ export class Board {
   /** Show (or stop showing) my ruler and test moves to everyone else, according to the share switch. */
   private publishLive(force = false) {
     const share = this.ui.data.sharePlot;
-    const ghosts = share ? Object.fromEntries([...this.testMoves].map(([id, m]) => [id, m.to])) : {};
-    const ruler = share && this.ruler ? { ...this.ruler, c: this.ui.data.rulerColor || undefined } : null;
+    const ghosts = share ? Object.fromEntries([...this.testMoves].map(([id, m]) => [id, { ...m.to, via: m.via.length ? m.via : undefined }])) : {};
+    const ruler = share && this.ruler ? { ...this.ruler, via: this.ruler.via.length ? this.ruler.via : undefined, c: this.ui.data.rulerColor || undefined } : null;
     const any = !!ruler || Object.keys(ghosts).length > 0;
     if (!any && !this.liveSent && !force) return;
     this.liveSent = any;
@@ -1340,8 +1347,44 @@ export class Board {
     if (!v) return;
     const cur = this.testMoves.get(id);
     const from = cur?.from ?? { x: v.token.x, y: v.token.y };
-    if (Math.hypot(to.x - from.x, to.y - from.y) < 1) { this.testMoves.delete(id); v.testPos = null; v.target = { ...from }; }
-    else { this.testMoves.set(id, { from, to: { ...to } }); v.testPos = { ...to }; v.target = { ...to }; }
+    if (this.ui.data.testMulti && cur) {
+      // a move in several steps: where it was becomes a corner, and the new place is the end
+      if (Math.hypot(to.x - cur.to.x, to.y - cur.to.y) < 1) return;
+      this.testMoves.set(id, { from, to: { ...to }, via: [...cur.via, cur.to].slice(-MAX_VIA) });
+      v.testPos = { ...to }; v.target = { ...to };
+    } else if (Math.hypot(to.x - from.x, to.y - from.y) < 1) { this.testMoves.delete(id); v.testPos = null; v.target = { ...from }; }
+    else { this.testMoves.set(id, { from, to: { ...to }, via: [] }); v.testPos = { ...to }; v.target = { ...to }; }
+  }
+
+  /** Remember how the test moves look now, before they change (a right-click goes back to it). */
+  private pushTestHistory() {
+    this.testHistory.push(new Map([...this.testMoves].map(([id, m]) => [id, { from: { ...m.from }, to: { ...m.to }, via: m.via.map((p) => ({ ...p })) }])));
+    if (this.testHistory.length > 60) this.testHistory.shift();
+  }
+
+  /** Go back one step of the tried-out moves. False when there is nothing to go back to. */
+  stepBackTest(): boolean {
+    const scene = this.client.scene;
+    if (!scene || !this.testMoves.size) return false;
+    const snap = this.testHistory.pop();
+    if (!snap) return false;
+    for (const [id] of this.testMoves) {
+      if (snap.has(id)) continue;
+      const v = this.views.get(id);
+      const m = this.testMoves.get(id)!;
+      if (v) { v.testPos = null; v.target = { ...m.from }; }
+    }
+    this.testMoves.clear();
+    for (const [id, m] of snap) {
+      const t = scene.tokens.get(id);
+      const v = this.views.get(id);
+      // a token that somebody else has moved since is no longer being tried out
+      if (!t || !v || Math.hypot(t.x - m.from.x, t.y - m.from.y) > 1) continue;
+      this.testMoves.set(id, m);
+      v.testPos = { ...m.to }; v.target = { ...m.to };
+    }
+    this.afterTestChange();
+    return true;
   }
 
   /** Make every test move real (one undo step). */
@@ -1351,6 +1394,7 @@ export class Board {
     const before = [...this.testMoves].map(([id, m]) => ({ id, x: m.from.x, y: m.from.y }));
     for (const id of this.testMoves.keys()) { const v = this.views.get(id); if (v) v.testPos = null; }
     this.testMoves.clear();
+    this.testHistory = [];
     void this.client.moveTokens(moves, before);
     this.afterTestChange();
     this.cb.onNotice(moves.length > 1 ? 'Moves made' : 'Move made', 'ok');
@@ -1361,6 +1405,7 @@ export class Board {
     if (!this.testMoves.size) return;
     for (const [id, m] of this.testMoves) { const v = this.views.get(id); if (v) { v.testPos = null; v.target = { ...m.from }; } }
     this.testMoves.clear();
+    this.testHistory = [];
     this.afterTestChange();
   }
 
@@ -1513,12 +1558,17 @@ export class Board {
     }
     if (d?.kind === 'tokens' && d.moved) {
       const a = this.views.get(d.anchor);
-      const o = this.testMoves.get(d.anchor)?.from ?? d.origins.get(d.anchor);
+      const tm = this.testMoves.get(d.anchor);
+      const o = tm?.from ?? d.origins.get(d.anchor);
       if (a && o) {
-        g.moveTo(o.x, o.y).lineTo(a.display.x, a.display.y).stroke({ width: 2 / z, color: 0xffffff, alpha: 0.7 });
-        const ft = distanceFt(grid, o, a.display);
+        // a move in several steps keeps the corners it has already turned at; the leg being dragged goes on from the last one
+        const before = this.ui.data.testMulti && tm ? [tm.from, ...tm.via, tm.to] : [o];
+        const lastLeg = before[before.length - 1];
+        if (before.length > 1) this.dashedLine(g, before, 0xffffff, z);
+        g.moveTo(lastLeg.x, lastLeg.y).lineTo(a.display.x, a.display.y).stroke({ width: 2 / z, color: 0xffffff, alpha: 0.7 });
+        const ft = pathFt(grid, [...before, { x: a.display.x, y: a.display.y }]);
         // walking up onto a cliff or off a ledge: say so
-        const note = a.token.fly ? '' : heightChangeNote(this.heightOf(a.token, o).alt, this.heightOf(a.token, a.display).alt);
+        const note = a.token.fly ? '' : heightChangeNote(this.heightOf(a.token, lastLeg).alt, this.heightOf(a.token, a.display).alt);
         this.distText.text = note ? `${ft} ft · ${note}` : `${ft} ft`;
         this.distText.scale.set(1 / z);
         this.distText.position.set(a.display.x, a.display.y - (a.token.size * grid.cell) / 2 - 6 / z);
@@ -1547,16 +1597,30 @@ export class Board {
     t.visible = true;
   }
 
-  private paintRuler(g: Graphics, z: number, r: { a: Vec; b: Vec }, color: number, name: string, li: number) {
+  /** A measurement of one or more legs. Returns the next free label slot. */
+  private paintRuler(g: Graphics, z: number, r: { a: Vec; b: Vec; via?: Vec[] }, color: number, name: string, li: number): number {
     const grid = this.client.grid;
-    g.moveTo(r.a.x, r.a.y).lineTo(r.b.x, r.b.y).stroke({ width: 6 / z, color: 0x000000, alpha: 0.35, cap: 'round' });
-    g.moveTo(r.a.x, r.a.y).lineTo(r.b.x, r.b.y).stroke({ width: 3 / z, color, cap: 'round' });
-    g.circle(r.a.x, r.a.y, 6 / z).fill(color).stroke({ width: 2 / z, color: 0xffffff });
-    g.circle(r.b.x, r.b.y, 6 / z).fill(color).stroke({ width: 2 / z, color: 0xffffff });
-    const up = this.pointAlt(r.b) - this.pointAlt(r.a);
-    const flat = distanceFt(grid, r.a, r.b);
-    const ft = up ? distanceFt(grid, r.a, r.b, grid.rule, up) : flat;
-    this.plotLabel(li, `${name ? name + ': ' : ''}${ft} ft${heightNote(flat, up)}`, r.b.x, r.b.y - 12 / z, color);
+    const pts = [r.a, ...(r.via ?? []), r.b];
+    for (const [w, c, a] of [[6 / z, 0x000000, 0.35], [3 / z, color, 1]] as const) {
+      g.moveTo(pts[0].x, pts[0].y);
+      for (const p of pts.slice(1)) g.lineTo(p.x, p.y);
+      g.stroke({ width: w, color: c, alpha: a, cap: 'round', join: 'round' });
+    }
+    pts.forEach((p, i) => g.circle(p.x, p.y, (i === 0 || i === pts.length - 1 ? 6 : 4.5) / z).fill(color).stroke({ width: 2 / z, color: 0xffffff }));
+    const rise = pts.slice(1).map((p, i) => this.pointAlt(p) - this.pointAlt(pts[i]));
+    if (pts.length === 2) {
+      const up = rise[0];
+      const flat = distanceFt(grid, r.a, r.b);
+      const ft = up ? distanceFt(grid, r.a, r.b, grid.rule, up) : flat;
+      this.plotLabel(li++, `${name ? name + ': ' : ''}${ft} ft${heightNote(flat, up)}`, r.b.x, r.b.y - 12 / z, color);
+      return li;
+    }
+    // several legs: the distance so far at every corner, and the whole at the end
+    for (let i = 2; i < pts.length; i++) {
+      const total = pathFt(grid, pts.slice(0, i + 1), rise.slice(0, i));
+      this.plotLabel(li++, i === pts.length - 1 ? `${name ? name + ': ' : ''}${total} ft` : `${total} ft`, pts[i].x, pts[i].y - 12 / z, color);
+    }
+    return li;
   }
 
   private drawPlots(g: Graphics, z: number) {
@@ -1613,17 +1677,18 @@ export class Board {
 
     // my ruler, then everybody else's
     const myCol = num(u.rulerColor || c.me?.color || '#ffffff');
-    if (this.ruler) this.paintRuler(g, z, this.ruler, myCol, '', li++);
+    if (this.ruler) li = this.paintRuler(g, z, this.ruler, myCol, '', li);
     for (const [uid, lv] of scene.live) {
       if (uid === c.uid) continue;
       const p = c.players.get(uid);
       const col = num(p?.color ?? '#ffffff');
-      if (lv.ruler) this.paintRuler(g, z, lv.ruler, lv.ruler.c ? num(lv.ruler.c) : col, p?.name ?? '', li++);
+      if (lv.ruler) li = this.paintRuler(g, z, lv.ruler, lv.ruler.c ? num(lv.ruler.c) : col, p?.name ?? '', li);
       for (const [id, pos] of Object.entries(lv.ghosts)) {
         const t = scene.tokens.get(id);
         if (!t || !this.visibleToViewer(t)) continue;
-        this.dashedLine(g, { x: t.x, y: t.y }, pos, col, z);
-        li = this.testLabel(li, { x: t.x, y: t.y }, pos, t, col, p?.name ?? '');
+        const path = [{ x: t.x, y: t.y }, ...(pos.via ?? []), { x: pos.x, y: pos.y }];
+        this.dashedLine(g, path, col, z);
+        li = this.testLabel(li, path, t, col, p?.name ?? '');
       }
     }
 
@@ -1632,19 +1697,23 @@ export class Board {
       if (d?.kind === 'tokens' && d.moved && d.ids.includes(id)) continue; // the live drag draws its own
       const t = scene.tokens.get(id);
       if (!t) continue;
-      this.dashedLine(g, m.from, m.to, 0xffffff, z);
-      li = this.testLabel(li, m.from, m.to, t, 0xffffff, '');
+      const path = [m.from, ...m.via, m.to];
+      this.dashedLine(g, path, 0xffffff, z);
+      li = this.testLabel(li, path, t, 0xffffff, '');
     }
   }
 
-  private dashedLine(g: Graphics, a: Vec, b: Vec, color: number, z: number) {
-    for (const [p, q] of dashSegments([a, b], 9 / z, 6 / z)) g.moveTo(p.x, p.y).lineTo(q.x, q.y);
+  /** A dashed line through the points (and a dot at each corner in between). */
+  private dashedLine(g: Graphics, pts: Vec[], color: number, z: number) {
+    for (const [p, q] of dashSegments(pts, 9 / z, 6 / z)) g.moveTo(p.x, p.y).lineTo(q.x, q.y);
     g.stroke({ width: 2.5 / z, color, alpha: 0.9, cap: 'round' });
+    for (const p of pts.slice(1, -1)) g.circle(p.x, p.y, 4 / z).fill({ color, alpha: 0.9 });
   }
 
-  private testLabel(li: number, from: Vec, to: Vec, t: Token, color: number, name: string): number {
+  private testLabel(li: number, path: Vec[], t: Token, color: number, name: string): number {
     const grid = this.client.grid;
-    this.plotLabel(li, `${name ? name + ': ' : ''}${distanceFt(grid, from, to)} ft`, to.x, to.y - (t.size * grid.cell) / 2 - 6 / this.cam.zoom, color);
+    const to = path[path.length - 1];
+    this.plotLabel(li, `${name ? name + ': ' : ''}${pathFt(grid, path)} ft`, to.x, to.y - (t.size * grid.cell) / 2 - 6 / this.cam.zoom, color);
     return li + 1;
   }
 
@@ -2180,8 +2249,15 @@ export class Board {
   private startRuler(w: Vec, e: PointerEvent) {
     if (!this.client.canDo('measure')) { this.cb.onNotice('The ruler is turned off for players.', 'error'); return; }
     const p = this.rulerPoint(w, e);
-    this.ruler = { a: p, b: p };
-    this.drag = { kind: 'ruler' };
+    if (this.ui.data.rulerMulti && this.ruler && !e.shiftKey) {
+      // another leg, from where the last one ended (Shift starts a new measurement instead)
+      this.ruler.via = [...this.ruler.via, this.ruler.b].slice(-MAX_VIA);
+      this.ruler.b = p;
+      this.drag = { kind: 'ruler', extend: true };
+    } else {
+      this.ruler = { a: p, b: p, via: [] };
+      this.drag = { kind: 'ruler' };
+    }
     this.publishLive();
   }
 
@@ -2487,10 +2563,13 @@ export class Board {
           this.wallStart = null;
           this.invalidate();
         } else if (!d.moved && d.button === 2 && this.ui.data.tool === 'ruler' && this.ruler) {
-          // right-click wipes the measurement instead of opening the menu
-          this.ruler = null;
+          // right-click takes back the last leg of the measurement (the whole of it when it is one leg) instead of opening the menu
+          if (this.ruler.via.length) this.ruler.b = this.ruler.via.pop()!;
+          else this.ruler = null;
           this.publishLive();
           this.invalidate();
+        } else if (!d.moved && d.button === 2 && this.ui.data.testMove && this.testMoves.size && this.stepBackTest()) {
+          // right-click goes back one step of a test move instead of opening the menu
         } else if (!d.moved && d.button === 2) {
           const w = this.screenToWorld(e.clientX, e.clientY);
           const hit = this.hitToken(w);
@@ -2501,6 +2580,7 @@ export class Board {
       case 'tokens': {
         this.sendMoves.cancel();
         if (this.ui.data.testMove) {
+          if (d.moved) this.pushTestHistory();
           for (const id of d.ids) {
             const v = this.views.get(id);
             if (!v) continue;
@@ -2544,10 +2624,18 @@ export class Board {
         this.drawLayer.setFaded(new Set());
         if (d.ids.size) void this.client.removeDrawings([...d.ids]);
         break;
-      case 'ruler':
-        if (this.ruler && Math.hypot(this.ruler.b.x - this.ruler.a.x, this.ruler.b.y - this.ruler.a.y) * this.cam.zoom < 6) this.ruler = null;
+      case 'ruler': {
+        if (this.ruler) {
+          // a leg too short to mean anything is dropped (the measurement before it stays)
+          const last = this.ruler.via.length ? this.ruler.via[this.ruler.via.length - 1] : this.ruler.a;
+          if (Math.hypot(this.ruler.b.x - last.x, this.ruler.b.y - last.y) * this.cam.zoom < 6) {
+            if (d.extend && this.ruler.via.length) this.ruler.b = this.ruler.via.pop()!;
+            else this.ruler = null;
+          }
+        }
         this.publishLive();
         break;
+      }
       case 'drawmove':
         this.drawLayer.setOffset(new Set(), 0, 0);
         if (d.moved) void this.client.moveDrawings(d.ids, d.dx, d.dy);
@@ -2699,6 +2787,7 @@ export class Board {
         .filter((t): t is Token => !!t && c.canDo('move', t))
         .map((t) => { const d = delta(t); return { id: t.id, ...this.nudged(t, t.size, { x: t.x + d.x, y: t.y + d.y }) }; });
       if (moves.length && ui.data.testMove) {
+        this.pushTestHistory();
         for (const m of moves) {
           const v = this.views.get(m.id);
           const cur = this.testMoves.get(m.id)?.to ?? (v ? { x: v.token.x, y: v.token.y } : null);

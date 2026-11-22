@@ -198,18 +198,35 @@ export function drawingToWire(d: Omit<Drawing, 'id'> | Drawing): Record<string, 
   });
 }
 
+/** The corners of a measurement or a move in several steps, as "x,y;x,y" (at most 24). */
+export const MAX_VIA = 24;
+export const viaToWire = (pts: Vec[] | undefined): string | undefined => (pts?.length ? pts.slice(0, MAX_VIA).map((p) => `${Math.round(p.x * 10) / 10},${Math.round(p.y * 10) / 10}`).join(';') : undefined);
+export function viaFromWire(s: unknown): Vec[] {
+  if (typeof s !== 'string' || !s) return [];
+  const out: Vec[] = [];
+  for (const part of s.split(';').slice(0, MAX_VIA)) {
+    const [x, y] = part.split(',').map(Number);
+    if (Number.isFinite(x) && Number.isFinite(y)) out.push({ x, y });
+  }
+  return out;
+}
+
 export function normalizeLive(uid: string, raw: any): LivePlot | null {
   if (!raw || typeof raw !== 'object') return null;
   const ruler = raw.ruler && typeof raw.ruler === 'object'
     ? {
       a: { x: num(raw.ruler.ax, 0), y: num(raw.ruler.ay, 0) }, b: { x: num(raw.ruler.bx, 0), y: num(raw.ruler.by, 0) },
       ...(typeof raw.ruler.c === 'string' && /^#[0-9a-fA-F]{6}$/.test(raw.ruler.c) ? { c: raw.ruler.c } : {}),
+      ...(viaFromWire(raw.ruler.w).length ? { via: viaFromWire(raw.ruler.w) } : {}),
     }
     : null;
-  const ghosts: Record<string, Vec> = {};
+  const ghosts: Record<string, Vec & { via?: Vec[] }> = {};
   if (raw.ghosts && typeof raw.ghosts === 'object') {
     for (const [id, v] of Object.entries(raw.ghosts as Record<string, any>)) {
-      if (v && typeof v === 'object') ghosts[id] = { x: num(v.x, 0), y: num(v.y, 0) };
+      if (v && typeof v === 'object') {
+        const via = viaFromWire(v.w);
+        ghosts[id] = { x: num(v.x, 0), y: num(v.y, 0), ...(via.length ? { via } : {}) };
+      }
     }
   }
   if (!ruler && !Object.keys(ghosts).length) return null;

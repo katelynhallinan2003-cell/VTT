@@ -57,6 +57,10 @@ export interface UiData {
   sharePlot: boolean;
   /** spell templates I place can be seen by everyone (on), or only by me and the DM (off) */
   tplShare: boolean;
+  /** test move: each drag adds a leg to the move instead of replacing it */
+  testMulti: boolean;
+  /** ruler: each drag adds a leg to the measurement instead of starting again */
+  rulerMulti: boolean;
   /** which mouse button pans the view (the other one opens the menu / pings) */
   panButton: 'right' | 'middle';
   /** how pinging works: middle click, or holding the left button */
@@ -143,6 +147,8 @@ export class UiState {
     drawSel: new Set(), testMove: false, testCount: 0,
     sharePlot: readFlag('vtt-share-plot', false),
     tplShare: readFlag('vtt-tpl-share', true),
+    testMulti: readFlag('vtt-test-multi', false),
+    rulerMulti: readFlag('vtt-ruler-multi', false),
     textEdit: null, camRev: 0, initOpen: false,
     fxJump: readFlag('vtt-fx-jump', true), fxDraft: null,
     heightFt: (() => { try { const n = Number(localStorage.getItem('vtt-height-ft')); return Number.isFinite(n) && localStorage.getItem('vtt-height-ft') !== null ? n : 10; } catch { return 10; } })(),
@@ -217,6 +223,8 @@ export class UiState {
       if (patch.showWalls !== undefined) localStorage.setItem('vtt-show-walls', patch.showWalls ? '1' : '0');
       if (patch.initPos !== undefined) localStorage.setItem('vtt-init-pos', patch.initPos);
       if (patch.tplShare !== undefined) localStorage.setItem('vtt-tpl-share', patch.tplShare ? '1' : '0');
+      if (patch.testMulti !== undefined) localStorage.setItem('vtt-test-multi', patch.testMulti ? '1' : '0');
+      if (patch.rulerMulti !== undefined) localStorage.setItem('vtt-ruler-multi', patch.rulerMulti ? '1' : '0');
       if (patch.sharePlot !== undefined) localStorage.setItem('vtt-share-plot', patch.sharePlot ? '1' : '0');
       if (patch.fxJump !== undefined) localStorage.setItem('vtt-fx-jump', patch.fxJump ? '1' : '0');
     } catch { /* ignore */ }

@@ -240,9 +240,10 @@ export interface Drawing {
 /** What someone is plotting right now (ruler, test moves). Short-lived, only shared when they choose to. */
 export interface LivePlot {
   uid: string;
-  ruler: { a: Vec; b: Vec; c?: string } | null;
-  /** token id -> where they are trying that token out */
-  ghosts: Record<string, Vec>;
+  /** `via` are the corners between a and b of a ruler that has several legs */
+  ruler: { a: Vec; b: Vec; c?: string; via?: Vec[] } | null;
+  /** token id -> where they are trying that token out (`via`: the points it went through on the way, for a move in several steps) */
+  ghosts: Record<string, Vec & { via?: Vec[] }>;
 }
 
 /** One line of the initiative order. */

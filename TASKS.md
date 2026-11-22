@@ -18,7 +18,7 @@ nothing gets forgotten between sessions. **Read this first at the start of every
 
 ## In progress
 
-- [ ] Round 7c: multi-step test move and multi-step ruler (next).
+- [ ] Round 7d: heights (gradient/ramp paint, auto wall over 10 ft, 5 ft stair, difficult terrain) (next).
 
 ## To do (asked for, not done)
 
@@ -37,8 +37,6 @@ Asked 2026-11-21 18:34 PT:
 - [ ] Scene folders in the scene selector: make folders, swap between them, to prep many scenes over a campaign.
 - [ ] DM token library: tokens remember their settings and can be dropped in whenever wanted.
 - [ ] Player token library; players claim a token and bring it to other scenes; it remembers HP, effects and other settings.
-- [ ] Test move: toggleable multi-step moves; right-click goes back one step.
-- [ ] Ruler: multi-step (several segments).
 - [ ] Player can place templates and draw without a "permission denied": **verify with the user** after they republish `database.rules.json` (a template permission was added; the exact failing message was never seen).
 - [ ] Handout pop-up for players: **verify with the user** (two causes fixed in round 7a; needs the rules republished).
 
@@ -63,6 +61,10 @@ Earlier requests that were reported again or only partly met:
 
 ## Done
 
+2026-11-21 (round 7c): test move "Multi-step" switch (each drag adds a leg; dashed path with corners; the whole distance; right-click or the Back button goes back one step,
+arrow keys count as steps); ruler "Measure in several steps" switch (each drag adds a leg, distance so far at each corner, right-click takes back the last leg, Shift+drag
+starts a new one); the 5-10-5 rule counts along the whole path (`pathFt`); corners are shared with others when "Show others" is on.
+Tests: `tests/multistep.test.ts`, `tests/e2e/batchZ2.mjs`.
 2026-11-21 (round 7b): auras follow the grid lines (per-aura "on grid" switch, on by default); the template flicker is fixed (squares exactly on the edge of a
 sphere/emanation were dropped or kept by a floating-point error that depended on the pointer's direction: the search box is now padded); lines snap to
 the nearer of a side middle or a corner; a spell sphere starting at a given ground height is not stopped by walls lower than that, so it spreads over

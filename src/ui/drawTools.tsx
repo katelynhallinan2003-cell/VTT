@@ -430,7 +430,9 @@ export function RulerFlyout(props: { ui: UiState; client: TableClient }) {
     <div class="flyout">
       <div class="flyout-title">Ruler</div>
       {!client.canDo('measure') && <p class="hint">The ruler is turned off for players.</p>}
-      <p class="hint">Drag to measure. Hold Alt to measure freely instead of from square to square (or hex to hex). Esc clears it.</p>
+      <p class="hint">Drag to measure. Hold Alt to measure freely instead of from square to square (or hex to hex). Right-click or Esc clears it.</p>
+      <Toggle checked={d.rulerMulti} onChange={(v) => ui.set({ rulerMulti: v })} label="Measure in several steps"
+        hint="Each drag adds a leg that carries on from the end of the last one, with the distance so far at every corner. Right-click takes back the last leg; Shift+drag starts a new measurement." />
       <span class="field-label">Colour</span>
       <Colors value={d.rulerColor} fallback={mine} sameLabel="Use my player colour" onPick={(c) => ui.set({ rulerColor: c })} />
       <Toggle checked={d.sharePlot} onChange={(v) => ui.set({ sharePlot: v })} label="Show my ruler to everyone" hint="Off by default so planning doesn't distract the table." />
@@ -446,8 +448,13 @@ export function TestMoveBar(props: { ui: UiState; board: Board | null }) {
   return (
     <div class="testbar">
       <strong>Test move</strong>
-      <span class="muted small">{d.testCount ? `${d.testCount} token${d.testCount > 1 ? 's' : ''} moved` : 'Drag a token to try a move'}</span>
+      <span class="muted small">{d.testCount ? `${d.testCount} moved` : 'Drag a token to try a move'}</span>
+      <label class="toggle small" title="Each drag adds a step to the move instead of replacing it. Right-click goes back one step.">
+        <input type="checkbox" checked={d.testMulti} onChange={(e) => ui.set({ testMulti: (e.target as HTMLInputElement).checked })} />
+        <span class="toggle-text">Multi-step</span>
+      </label>
       <button class="btn small primary" disabled={!d.testCount} onClick={() => board?.keepTestMoves()} title="Make the move for real (Enter)">Keep</button>
+      <button class="btn small" disabled={!d.testCount} onClick={() => board?.stepBackTest()} title="Go back one step (right-click)">Back</button>
       <button class="btn small" disabled={!d.testCount} onClick={() => board?.resetTestMoves()} title="Put them back (Esc)">Reset</button>
       <label class="toggle small" title="Let everyone see a ghost of where you are trying to go">
         <input type="checkbox" checked={d.sharePlot} onChange={(e) => ui.set({ sharePlot: (e.target as HTMLInputElement).checked })} />

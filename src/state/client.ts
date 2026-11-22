@@ -2,7 +2,7 @@ import type { Backend, Unsub } from '../backend/types';
 import { SERVER_TS } from '../backend/types';
 import {
   drawingToWire, handoutToWire, initPubToWire, initToWire, normalizeDrawing, normalizeFogOp, normalizeHandout, normalizeInit, normalizeInitPub, normalizeLive, normalizeMeta,
-  normalizeLibraryItem, normalizePlayer, normalizeSceneMeta, normalizeSettings, normalizeToken, stripUndefined, tokenToWire, DEFAULT_GRID, DM_COLOR,
+  normalizeLibraryItem, normalizePlayer, normalizeSceneMeta, normalizeSettings, normalizeToken, stripUndefined, tokenToWire, viaToWire, DEFAULT_GRID, DM_COLOR,
 } from '../core/model';
 import {
   applyDamage, cleanHp, EXPLORE_MIN_CELLS, EXPLORE_JUMP_CELLS, EXPLORE_TELEPORT_CELLS, EXPLORE_TELEPORT_MS, emptyInit, moveEntry, nextTurn, orderOf, pctOf, prevTurn, publicHp, sightRadiusPx, sortByInit, toPub,
@@ -899,13 +899,13 @@ export class TableClient {
   }
 
   // ---------------------------------------------------------------- live plotting (ruler, test moves)
-  private liveMine: { ruler: { a: Vec; b: Vec; c?: string } | null; ghosts: Record<string, Vec> } = { ruler: null, ghosts: {} };
+  private liveMine: { ruler: { a: Vec; b: Vec; c?: string; via?: Vec[] } | null; ghosts: Record<string, Vec & { via?: Vec[] }> } = { ruler: null, ghosts: {} };
   private liveSid: string | null = null;
   private liveArmed = false;
   private pushLive = throttle(() => { void this.writeLive(); }, 90);
 
   /** Share (or stop sharing) what you are plotting. Pass only the parts that changed. */
-  setLive(patch: { ruler?: { a: Vec; b: Vec; c?: string } | null; ghosts?: Record<string, Vec> }) {
+  setLive(patch: { ruler?: { a: Vec; b: Vec; c?: string; via?: Vec[] } | null; ghosts?: Record<string, Vec & { via?: Vec[] }> }) {
     if (!this.viewSceneId) return;
     if (patch.ruler !== undefined) this.liveMine.ruler = patch.ruler;
     if (patch.ghosts !== undefined) this.liveMine.ghosts = patch.ghosts;
@@ -918,12 +918,12 @@ export class TableClient {
     if (!sid) return;
     const path = P.sceneLiveOf(this.tableId, sid, this.uid);
     const { ruler, ghosts } = this.liveMine;
-    const gh = Object.fromEntries(Object.entries(ghosts).map(([id, v]) => [id, { x: Math.round(v.x * 10) / 10, y: Math.round(v.y * 10) / 10 }]));
+    const gh = Object.fromEntries(Object.entries(ghosts).map(([id, v]) => [id, { x: Math.round(v.x * 10) / 10, y: Math.round(v.y * 10) / 10, w: viaToWire(v.via) }]));
     try {
       if (!ruler && !Object.keys(gh).length) { await this.backend.remove(path); return; }
       if (!this.liveArmed) { this.backend.onDisconnectSet(path, null); this.liveArmed = true; }
       await this.backend.set(path, stripUndefined({
-        ruler: ruler ? { ax: Math.round(ruler.a.x), ay: Math.round(ruler.a.y), bx: Math.round(ruler.b.x), by: Math.round(ruler.b.y), c: ruler.c } : undefined,
+        ruler: ruler ? { ax: Math.round(ruler.a.x), ay: Math.round(ruler.a.y), bx: Math.round(ruler.b.x), by: Math.round(ruler.b.y), c: ruler.c, w: viaToWire(ruler.via) } : undefined,
         ghosts: Object.keys(gh).length ? gh : undefined,
       }));
     } catch (e) { console.warn('live plotting', (e as Error).message); }

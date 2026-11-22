@@ -66,6 +66,29 @@ export function distanceFt(grid: GridSettings, a: Vec, b: Vec, rule: DistanceRul
 }
 
 /**
+ * The length in feet of a path through several points, by the table's diagonal rule. On the 5-10-5 rule every second diagonal step costs double
+ * along the whole path (not once per leg), so a path of two diagonal legs costs what one long diagonal does.
+ * `rise[i]` is how much higher point i+1 is than point i (a leg that climbs or falls is measured with the height, and does not carry).
+ */
+export function pathFt(grid: GridSettings, pts: Vec[], rise: number[] = []): number {
+  let total = 0;
+  let diag = 0; // diagonal steps taken so far
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i];
+    const dz = rise[i - 1] ?? 0;
+    if (grid.rule === 'alt' && !isHex(grid) && !dz) {
+      const dx = Math.abs(b.x - a.x) / grid.cell;
+      const dy = Math.abs(b.y - a.y) / grid.cell;
+      const hi = Math.round(Math.max(dx, dy) * 1000) / 1000;
+      const lo = Math.round(Math.min(dx, dy) * 1000) / 1000;
+      total += (hi + Math.floor((diag + lo) / 2) - Math.floor(diag / 2)) * grid.ft;
+      diag += lo;
+    } else total += distanceFt(grid, a, b, grid.rule, dz);
+  }
+  return Math.round(total * 10) / 10;
+}
+
+/**
  * Derive grid settings from a rectangle the DM dragged over a block of squares.
  * `cols` x `rows` is how many squares the rectangle covers (1x1 by default).
  */

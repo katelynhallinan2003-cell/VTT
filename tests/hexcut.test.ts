@@ -96,7 +96,7 @@ describe('finding a printed hex grid', () => {
   });
 
   it('does not take a square grid for hexes, and a square finder does not take hexes for squares', () => {
-    expect(findGrid(hexMap(500, 450, 56, 5, 5, 2, 'pointy'), 56)).toBeNull();
+    expect(findGrid(hexMap(500, 450, 56, 5, 5, 2, 'pointy'))).toBeNull();
   });
 
   it('a very faint grid is not taken for one', () => {

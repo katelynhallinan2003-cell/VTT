@@ -16,7 +16,7 @@ import { Field, Modal, SliderField, Toggle, copyText, toast, useClient, useTheme
 import { CampaignFileSection } from './campaignFile';
 import { THEMES, getAccent, getTheme, setAccent, setTheme } from './theme';
 import { TokenCropper, NO_FRAMING, type Framing, type PaintApi } from './tokenCropper';
-import { addRecent, getRecent, uploadImage } from './uploads';
+import { addRecent, dragHasImage, droppedImage, getRecent, uploadImage } from './uploads';
 
 const asErr = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -172,14 +172,14 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
 }
 
 // ================================================================== new scene
-export function NewSceneModal(props: { client: TableClient; onClose: () => void; onCreated?: () => void; /** the folder to start in */ folder?: string | null }) {
+export function NewSceneModal(props: { client: TableClient; onClose: () => void; onCreated?: () => void; /** the folder to start in */ folder?: string | null; /** a picture that was dropped on the page: it starts as the map */ initialFile?: File | null }) {
   const { client } = props;
   useClient(client);
   const [folderId, setFolderId] = useState<string | null>(props.folder ?? null);
   const lib = useLibrary(client, 'maps');
   const [name, setName] = useState('');
-  const [file, setFile] = useState<File | Blob | null>(null);
-  const [fileName, setFileName] = useState('');
+  const [file, setFile] = useState<File | Blob | null>(props.initialFile ?? null);
+  const [fileName, setFileName] = useState(props.initialFile?.name ?? '');
   const [url, setUrl] = useState('');
   const [picked, setPicked] = useState<LibraryItem | null>(null);
   const [saveLib, setSaveLib] = useState(true);
@@ -187,6 +187,49 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
   const [busy, setBusy] = useState(false);
   /** the demo's sample map is drawn on request, so Create waits for it */
   const [preparing, setPreparing] = useState(false);
+  /** a picture is being dragged over the page right now */
+  const [dragOver, setDragOver] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);
+
+  const useFile = (f: File | Blob, n: string) => { setFile(f); setFileName(n); setPicked(null); setUrl(''); };
+
+  // a small look at the chosen picture, so it is clear which one will be used
+  useEffect(() => {
+    if (!file) { setPreview(null); return; }
+    const u = URL.createObjectURL(file);
+    setPreview(u);
+    return () => URL.revokeObjectURL(u);
+  }, [file]);
+
+  // a picture dropped anywhere on the page while this window is open becomes the map (it never falls through to the board behind)
+  useEffect(() => {
+    let depth = 0;
+    const enter = (e: DragEvent) => { if (!dragHasImage(e)) return; depth++; setDragOver(true); };
+    const leave = (e: DragEvent) => { if (!dragHasImage(e)) return; depth = Math.max(0, depth - 1); if (!depth) setDragOver(false); };
+    const over = (e: DragEvent) => { if (!dragHasImage(e)) return; e.preventDefault(); e.stopPropagation(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; };
+    const drop = (e: DragEvent) => {
+      if (!dragHasImage(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      depth = 0;
+      setDragOver(false);
+      const got = droppedImage(e);
+      if (got === 'other') { toast('That file is not a picture. Maps can be PNG, JPG or WebP.', 'error'); return; }
+      if (got === 'none') return;
+      if ('file' in got) useFile(got.file, got.file.name);
+      else { setUrl(got.url); setFile(null); setFileName(''); setPicked(null); }
+    };
+    window.addEventListener('dragenter', enter, true);
+    window.addEventListener('dragleave', leave, true);
+    window.addEventListener('dragover', over, true);
+    window.addEventListener('drop', drop, true);
+    return () => {
+      window.removeEventListener('dragenter', enter, true);
+      window.removeEventListener('dragleave', leave, true);
+      window.removeEventListener('dragover', over, true);
+      window.removeEventListener('drop', drop, true);
+    };
+  }, []);
 
   async function create() {
     setBusy(true);
@@ -215,7 +258,7 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
   return (
     <Modal title="New scene" onClose={props.onClose} width={560}
       footer={<><button class="btn" onClick={props.onClose}>Cancel</button><button class="btn primary" disabled={busy || preparing} onClick={create}>{busy ? 'Uploading…' : 'Create scene'}</button></>}>
-      <Field label="Scene name"><input type="text" value={name} autoFocus onInput={(e) => setName((e.target as HTMLInputElement).value)} placeholder="Goblin cave" /></Field>
+      <Field label="Scene name"><input type="text" value={name} autoFocus onInput={(e) => setName((e.target as HTMLInputElement).value)} placeholder={fileName.replace(/\.\w+$/, '') || 'Goblin cave'} /></Field>
       {client.sceneFolders.length > 0 && (
         <Field label="Folder">
           <select value={folderId ?? ''} onChange={(e) => setFolderId((e.target as HTMLSelectElement).value || null)}>
@@ -226,12 +269,23 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
       )}
       <h3>Map image</h3>
       <p class="muted">Maps keep their full resolution (up to your host's size limit). You can skip this and add a map later.</p>
-      <div class="row wrap">
-        <FilePick label="Upload map…" onFile={(f) => { setFile(f); setFileName(f.name); setPicked(null); setUrl(''); }} />
-        {client.backend.kind === 'mock' && (
-          <button class="btn" disabled={preparing} onClick={async () => { setPreparing(true); try { const s = await makeSampleMap(); setFile(s.blob); setFileName('Sample dungeon.png'); setPicked(null); setUrl(''); if (!name) setName('Sample dungeon'); } finally { setPreparing(false); } }}>Use sample dungeon</button>
+      <div class={`dropzone ${dragOver ? 'over' : ''} ${file ? 'has' : ''}`}>
+        {file && preview && !dragOver && (
+          <div class="dropzone-file">
+            <img src={preview} alt="" />
+            <span class="dropzone-name muted" title={fileName}>{fileName}</span>
+            <button class="icon-btn" aria-label="Remove this picture" title="Remove this picture" onClick={() => { setFile(null); setFileName(''); }}>✕</button>
+          </div>
         )}
-        {file && <span class="muted">{fileName}</span>}
+        <div class="dropzone-text">{dragOver ? 'Drop the picture to use it as the map' : file ? 'Drag another picture here to swap it' : 'Drag a map picture here'}</div>
+        {!dragOver && (
+          <div class="row wrap dropzone-btns">
+            <FilePick label={file ? 'Choose another…' : 'Upload map…'} onFile={(f) => useFile(f, f.name)} />
+            {client.backend.kind === 'mock' && (
+              <button class="btn" disabled={preparing} onClick={async () => { setPreparing(true); try { const s = await makeSampleMap(); useFile(s.blob, 'Sample dungeon.png'); if (!name) setName('Sample dungeon'); } finally { setPreparing(false); } }}>Use sample dungeon</button>
+            )}
+          </div>
+        )}
       </div>
       <Field label="…or paste an image link"><input type="text" value={url} placeholder="https://…" onInput={(e) => { setUrl((e.target as HTMLInputElement).value); setFile(null); setPicked(null); }} /></Field>
       {lib.length > 0 && (

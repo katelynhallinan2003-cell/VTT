@@ -1,12 +1,22 @@
 // Finding and hiding the grid that is printed on a map picture.
 //
-// A printed grid is a set of thin lines, evenly spaced, running straight across the picture. We look for them by
-// comparing every column (and row) of the picture with the pixels a few steps to either side of it: ground that is
-// the same all along the column cancels out, and a line shows up as a steady difference. Then we search for the
-// spacing and offset where those differences line up best. Hiding the lines means filling each one in from the
-// pixels right beside it, so the picture itself is never changed: only the copy on screen.
+// A printed grid is a set of thin lines, evenly spaced, running straight across the picture. Real maps make that hard to see:
+// walls and the edges of rooms are far stronger than the grid, the grid is often only drawn on the floor, furniture sits on
+// top of it, and the lines can be dashes, corner marks or barely there. So the finder works in four steps:
 //
-// This file is for squares (see hexcut.ts for hexes). Everything here works on plain pixel arrays so it can be tested without a browser.
+//  1. The picture is cut into bands. In each band every column is compared with the pixels a few steps to either side, and
+//     only counts when it is darker (or lighter) than BOTH sides: that is what a thin line looks like, and it is what an edge
+//     (a wall, a shadow, the border of the map) does not look like.
+//  2. Each band names the columns where it sees a line. A real grid line is seen by many bands; a wall or a table by one or two.
+//     So one big feature cannot outvote the grid, however strong it is.
+//  3. Every spacing is tried against that list of lines and marked on two things at once: how much of what was seen lies on the
+//     spacing, and how many of the spacing's own lines were seen. Twice the real spacing explains only half of what was seen and
+//     half the real spacing has every other line missing, so the real one wins without any special rule.
+//  4. The spacing and where the lines start are then fitted to the measured middle of every line, to a small fraction of a pixel.
+//
+// Hiding the lines means filling each one in from the pixels right beside it, so the picture itself is never changed: only the
+// copy on screen. This file is for squares (see hexcut.ts for hexes). Everything works on plain pixel arrays so it can be tested
+// without a browser.
 
 export interface PixelImage {
   data: Uint8ClampedArray | Uint8Array;
@@ -35,8 +45,26 @@ export interface GridCut {
 
 export interface Found {
   cut: GridCut;
-  /** how much stronger the lines are than the rest of the picture (higher is surer) */
+  /** how sure we are, from 0 to 10: see AUTO_GRID_STRENGTH in mapgrid.ts for what counts as "clearly there" */
   strength: number;
+  /** what the answer rests on (for tests and for working out why a map went wrong) */
+  info?: GridInfo;
+}
+
+export interface GridInfo {
+  /** how many of the grid's lines were seen, up and down and across */
+  linesX: number;
+  linesY: number;
+  /** of everything line-like that was seen, the part that lies on the grid (0 to 1) */
+  explained: number;
+  /** of the grid's own lines between the first and last one seen, the part that was seen (0 to 1) */
+  present: number;
+  /** the part of the picture the grid reaches over (0 to 1) */
+  cover: number;
+  /** how many brightness levels the lines differ from the ground beside them */
+  contrast: number;
+  /** the lines only showed when bigger parts of the picture were averaged together */
+  faint?: boolean;
 }
 
 export const luma = (img: PixelImage): Uint8Array => {
@@ -47,170 +75,10 @@ export const luma = (img: PixelImage): Uint8Array => {
   return L;
 };
 
-/**
- * Across each column: how much darker (positive) or lighter (negative) it is than the columns `d` steps either side, averaged down the picture.
- * Rows the same way. Picture that is the same all along cancels out; a printed line does not.
- */
-export function contrastProfiles(img: PixelImage, d: number): { col: Float32Array; row: Float32Array } {
-  const { width: W, height: H } = img;
-  const L = luma(img);
-  const col = new Float32Array(W);
-  const row = new Float32Array(H);
-  for (let y = 0; y < H; y++) {
-    const o = y * W;
-    for (let x = 0; x < W; x++) {
-      const a = L[o + (x - d < 0 ? 0 : x - d)];
-      const b = L[o + (x + d >= W ? W - 1 : x + d)];
-      col[x] += (a + b) / 2 - L[o + x];
-    }
-  }
-  for (let x = 0; x < W; x++) col[x] /= H;
-  for (let y = 0; y < H; y++) {
-    const o = y * W;
-    const oa = (y - d < 0 ? 0 : y - d) * W;
-    const ob = (y + d >= H ? H - 1 : y + d) * W;
-    let s = 0;
-    for (let x = 0; x < W; x++) s += (L[oa + x] + L[ob + x]) / 2 - L[o + x];
-    row[y] = s / W;
-  }
-  return { col, row };
-}
-
 export const medianAbs = (a: Float32Array): number => {
   const v = Float32Array.from(a, Math.abs).sort();
   return v[v.length >> 1] || 1e-3;
 };
-
-/** Average strength of a profile at x = o, o+p, o+2p… (looking one step either side to allow for rounding). */
-function comb(prof: Float32Array, p: number, o: number): number {
-  const n = prof.length;
-  let sum = 0, cnt = 0;
-  for (let c = o; c < n; c += p) {
-    const i = Math.round(c);
-    if (i < 1 || i >= n - 1) continue;
-    const a = prof[i - 1], b = prof[i], e = prof[i + 1];
-    sum += a > b ? (a > e ? a : e) : b > e ? b : e;
-    cnt++;
-  }
-  return cnt >= 3 ? sum / cnt : -Infinity;
-}
-
-function bestOffset(prof: Float32Array, p: number): { o: number; s: number } {
-  let o = 0, s = -Infinity;
-  const step = p > 40 ? 1 : 0.5;
-  for (let k = 0; k < p; k += step) {
-    const v = comb(prof, p, k);
-    if (v > s) { s = v; o = k; }
-  }
-  return { o, s };
-}
-
-/**
- * Look for a printed grid. `hint` is the spacing you expect (in pixels of this picture): with it we only try spacings close to it.
- * Without it every spacing from 12 pixels up is tried. Returns null when nothing regular enough is there.
- */
-export function findGrid(img: PixelImage, hint?: number): Found | null {
-  const { width: W, height: H } = img;
-  if (W < 60 || H < 60) return null;
-  const d = hint ? Math.max(3, Math.min(8, Math.round(hint * 0.07))) : 5;
-  const { col, row } = contrastProfiles(img, d);
-  const nc = medianAbs(col), nr = medianAbs(row);
-  const maxP = Math.min(W, H) / 3;
-  const lo = hint ? hint * 0.93 : 12;
-  const hi = hint ? hint * 1.07 : maxP;
-  if (hi <= lo) return null;
-  type Cand = { p: number; sign: number; ox: number; oy: number; score: number; sx: number; sy: number; ax: number; ay: number };
-  const cands: Cand[] = [];
-  for (const sign of [1, -1]) {
-    const pc = sign === 1 ? col : Float32Array.from(col, (v) => -v);
-    const pr = sign === 1 ? row : Float32Array.from(row, (v) => -v);
-    const grow = 1 + (hint ? Math.max(0.00005, 0.4 / Math.max(W, H)) : 0.0008);
-    for (let p = lo; p <= hi; p *= grow) {
-      const a = bestOffset(pc, p), b = bestOffset(pr, p);
-      if (!Number.isFinite(a.s) || !Number.isFinite(b.s)) continue;
-      cands.push({ p, sign, ox: a.o, oy: b.o, sx: a.s / nc, sy: b.s / nr, ax: a.s, ay: b.s, score: a.s / nc + b.s / nr });
-    }
-  }
-  if (!cands.length) return null;
-  let best = cands[0];
-  for (const c of cands) if (c.score > best.score) best = c;
-  // a spacing of 2p or 3p scores as well as p does: take the smallest one that is nearly as good
-  for (const c of cands) if (c.p < best.p * 0.97 && c.sign === best.sign && c.score >= best.score * 0.93) {
-    const ratio = best.p / c.p;
-    if (Math.abs(ratio - Math.round(ratio)) < 0.03 && Math.round(ratio) >= 2) best = c;
-  }
-  // both directions need to show clear lines
-  // (and strong in plain terms too: a line a couple of shades off the ground is not worth hiding, and texture alone can look like one)
-  if (best.sx < 3 || best.sy < 3 || best.ax < MIN_CONTRAST || best.ay < MIN_CONTRAST) return null;
-  const pc = best.sign === 1 ? col : Float32Array.from(col, (v) => -v);
-  const pr = best.sign === 1 ? row : Float32Array.from(row, (v) => -v);
-  // the search above forgives a pixel either way; now pin the spacing and offsets down to a fraction of a pixel
-  const fine = refine(pc, pr, best.p, best.ox, best.oy);
-  best = { ...best, ...wholeSpacing(pc, pr, fine) };
-  // measure where the lines really are and fit the spacing to them: it keeps lines far from the first one on target
-  const fx = fitSpacing(pc, best.p, best.ox), fy = fitSpacing(pr, best.p, best.oy);
-  if (fx && fy && fx.rms < 0.8 && fy.rms < 0.8 && Math.abs(fx.p - fy.p) < best.p * 0.003 && Math.abs((fx.p * fx.n + fy.p * fy.n) / (fx.n + fy.n) - best.p) < best.p * 0.004) {
-    best = { ...best, p: (fx.p * fx.n + fy.p * fy.n) / (fx.n + fy.n) };
-  }
-  const t = Math.max(1, Math.min(12, (thickness(pc, best.p, best.ox) + thickness(pr, best.p, best.oy)) / 2));
-  // put the offset on the middle of the line rather than on its strongest pixel
-  const x = centre(pc, best.p, best.ox), y = centre(pr, best.p, best.oy);
-  return { cut: { on: true, p: round2(best.p), x: round2(x), y: round2(y), t: round2(t) }, strength: Math.min(best.sx, best.sy) };
-}
-
-/** Brightness levels (0 to 255) a line has to differ from the ground by before we call it a grid. */
-export const MIN_CONTRAST = 3;
-
-/**
- * Looking for lines near an expected spacing can land on half of the real one (or a third), where every other line is missing.
- * If lines at 2x, 3x or 4x the spacing are clearly stronger on average than at 1x, that is the real spacing.
- */
-function wholeSpacing(pc: Float32Array, pr: Float32Array, f: { p: number; ox: number; oy: number }): { p: number; ox: number; oy: number } {
-  const base = exact(pc, f.p, f.ox) + exact(pr, f.p, f.oy);
-  let out = f;
-  let top = base;
-  for (let k = 2; k <= 4; k++) {
-    let sx = -Infinity, jx = 0, sy = -Infinity, jy = 0;
-    for (let j = 0; j < k; j++) {
-      const a = exact(pc, f.p * k, f.ox + j * f.p); if (a > sx) { sx = a; jx = j; }
-      const b = exact(pr, f.p * k, f.oy + j * f.p); if (b > sy) { sy = b; jy = j; }
-    }
-    // a true spacing of k*p has all of its lines strong, so its average is about k times that of p; random variation never gets near 1.4
-    if (sx + sy > base * 1.4 && sx + sy > top * 1.4) { out = { p: f.p * k, ox: f.ox + jx * f.p, oy: f.oy + jy * f.p }; top = sx + sy; }
-  }
-  return out;
-}
-
-/**
- * Where each line's middle really is, fitted with a straight line (position = start + number * spacing). The slope is the spacing,
- * true to a small fraction of a pixel however many lines there are. Null when the lines do not sit on a straight comb well enough to trust.
- */
-export function fitSpacing(prof: Float32Array, p: number, o: number): { p: number; n: number; rms: number } | null {
-  const ks: number[] = [], ys: number[] = [];
-  for (let k = 0; ; k++) {
-    const c = o + k * p;
-    const i = Math.round(c);
-    if (i >= prof.length - 4) break;
-    if (i < 4) continue;
-    // the strength-weighted middle of the line, with the level of the ground beside it taken off
-    let floor = Infinity;
-    for (let j = i - 4; j <= i + 4; j++) if (prof[j] < floor) floor = prof[j];
-    let w = 0, m = 0;
-    for (let j = i - 3; j <= i + 3; j++) { const v = Math.max(0, prof[j] - Math.max(0, floor)); w += v; m += v * j; }
-    if (w <= 0) continue;
-    ks.push(k); ys.push(m / w);
-  }
-  const n = ks.length;
-  if (n < 4) return null;
-  const mk = ks.reduce((a, b) => a + b, 0) / n, my = ys.reduce((a, b) => a + b, 0) / n;
-  let sxx = 0, sxy = 0;
-  for (let i = 0; i < n; i++) { sxx += (ks[i] - mk) ** 2; sxy += (ks[i] - mk) * (ys[i] - my); }
-  if (sxx <= 0) return null;
-  const slope = sxy / sxx, icpt = my - slope * mk;
-  let ss = 0;
-  for (let i = 0; i < n; i++) ss += (ys[i] - (icpt + slope * ks[i])) ** 2;
-  return { p: slope, n, rms: Math.sqrt(ss / n) };
-}
 
 /** Strength of a profile at a point between two pixels. */
 export const at = (prof: Float32Array, x: number): number => {
@@ -223,20 +91,6 @@ export function exact(prof: Float32Array, p: number, o: number): number {
   let sum = 0, cnt = 0;
   for (let c = o; c < prof.length - 1; c += p) { sum += at(prof, c); cnt++; }
   return cnt ? sum / cnt : -Infinity;
-}
-
-function refine(pc: Float32Array, pr: Float32Array, p0: number, ox0: number, oy0: number): { p: number; ox: number; oy: number } {
-  let best = { p: p0, ox: ox0, oy: oy0, s: -Infinity };
-  for (let k = -60; k <= 60; k++) {
-    const p = p0 * (1 + k * 0.00015);
-    let sx = -Infinity, ox = ox0, sy = -Infinity, oy = oy0;
-    for (let d = -1.5; d <= 1.5; d += 0.1) {
-      const a = exact(pc, p, ox0 + d); if (a > sx) { sx = a; ox = ox0 + d; }
-      const b = exact(pr, p, oy0 + d); if (b > sy) { sy = b; oy = oy0 + d; }
-    }
-    if (sx + sy > best.s) best = { p, ox, oy, s: sx + sy };
-  }
-  return best;
 }
 
 export const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -261,17 +115,351 @@ export function thickness(prof: Float32Array, p: number, o: number): number {
   return widths[widths.length >> 1];
 }
 
-/** The strength-weighted middle of the line near each comb position, averaged, so the offset sits on the line's centre. */
-export function centre(prof: Float32Array, p: number, o: number): number {
-  let sum = 0, cnt = 0;
-  for (let c = o; c < prof.length; c += p) {
-    const i = Math.round(c);
-    if (i < 3 || i >= prof.length - 3) continue;
-    let w = 0, m = 0;
-    for (let k = i - 3; k <= i + 3; k++) { const v = Math.max(0, prof[k]); w += v; m += v * k; }
-    if (w > 0) { sum += m / w - c; cnt++; }
+// ------------------------------------------------------------------ finding
+
+/** Brightness levels (0 to 255) a line has to differ from the ground beside it before we call it a grid. */
+export const MIN_CONTRAST = 3;
+/** The search is done on a copy no bigger than this on its long side: quicker, and very thick lines on huge maps become ordinary ones. */
+export const WORK_SIDE = 2048;
+/** How far to either side a pixel is compared with (in the working copy). Lines up to about twice this wide are seen. */
+const REACH = 5;
+/** One pixel never counts for more than this many levels, so a black wall is not worth ten grid lines. */
+export const CLIP = 64;
+/** A band sees a line where its profile stands this many times above its own unevenness. */
+const PEAK_SIGMA = 4.5;
+/** How far (pixels) a seen line may be from where the spacing puts it and still count as on it. */
+const TOL = 1.5;
+
+export type Lum = Uint8Array | Float32Array;
+
+/** A smaller copy: every `f` by `f` block of pixels becomes one, by averaging. */
+export function shrink(L: Lum, W: number, H: number, f: number): { L: Float32Array; W: number; H: number } {
+  const w = Math.floor(W / f), h = Math.floor(H / f);
+  const out = new Float32Array(w * h);
+  const k = 1 / (f * f);
+  for (let y = 0; y < h; y++) {
+    for (let yy = 0; yy < f; yy++) {
+      const o = (y * f + yy) * W, oo = y * w;
+      for (let x = 0; x < w; x++) {
+        let s = 0;
+        const b = o + x * f;
+        for (let xx = 0; xx < f; xx++) s += L[b + xx];
+        out[oo + x] += s * k;
+      }
+    }
   }
-  return o + (cnt ? sum / cnt : 0);
+  return { L: out, W: w, H: h };
+}
+
+/** What each band of the picture sees along one direction: one profile per band, for dark lines, for light lines, and a plain one for measuring width. */
+interface Bands {
+  /** length of each profile */
+  n: number;
+  dark: Float32Array[];
+  light: Float32Array[];
+  plain: Float32Array[];
+}
+
+const bandCount = (len: number) => Math.max(3, Math.min(16, Math.round(len / 120)));
+const clip = (v: number) => (v > CLIP ? CLIP : v < -CLIP ? -CLIP : v);
+
+/**
+ * For lines running down the picture (`x`) and across it (`y`): the picture is cut into bands along the lines, and in each band
+ * every position gets the average of how much darker it is than BOTH the pixels `d` steps either side of it (and how much lighter,
+ * and the plain difference from their average). A thin line scores its full contrast; an edge between light and dark scores nothing.
+ */
+function bandProfiles(L: Lum, W: number, H: number, d: number): { x: Bands; y: Bands } {
+  const mk = (n: number, S: number): Bands => ({ n, dark: Array.from({ length: S }, () => new Float32Array(n)), light: Array.from({ length: S }, () => new Float32Array(n)), plain: Array.from({ length: S }, () => new Float32Array(n)) });
+  const Sx = bandCount(H), Sy = bandCount(W);
+  const X = mk(W, Sx), Y = mk(H, Sy);
+  const rows = new Uint32Array(Sx);
+  for (let y = 0; y < H; y++) {
+    const s = Math.min(Sx - 1, Math.floor((y * Sx) / H));
+    rows[s]++;
+    const dk = X.dark[s], lt = X.light[s], pl = X.plain[s];
+    const o = y * W;
+    for (let x = d; x < W - d; x++) {
+      const a = L[o + x - d], b = L[o + x + d], c = L[o + x];
+      dk[x] += clip((a < b ? a : b) - c);
+      lt[x] += clip(c - (a > b ? a : b));
+      pl[x] += clip((a + b) / 2 - c);
+    }
+  }
+  for (let s = 0; s < Sx; s++) {
+    const k = 1 / Math.max(1, rows[s]);
+    for (let x = 0; x < W; x++) { X.dark[s][x] *= k; X.light[s][x] *= k; X.plain[s][x] *= k; }
+  }
+  const edges = Array.from({ length: Sy + 1 }, (_, s) => Math.floor((s * W) / Sy));
+  for (let y = d; y < H - d; y++) {
+    const oa = (y - d) * W, ob = (y + d) * W, oc = y * W;
+    for (let s = 0; s < Sy; s++) {
+      const x0 = edges[s], x1 = edges[s + 1];
+      let sd = 0, sl = 0, sp = 0;
+      for (let x = x0; x < x1; x++) {
+        const a = L[oa + x], b = L[ob + x], c = L[oc + x];
+        sd += clip((a < b ? a : b) - c);
+        sl += clip(c - (a > b ? a : b));
+        sp += clip((a + b) / 2 - c);
+      }
+      const k = 1 / Math.max(1, x1 - x0);
+      Y.dark[s][y] = sd * k; Y.light[s][y] = sl * k; Y.plain[s][y] = sp * k;
+    }
+  }
+  return { x: X, y: Y };
+}
+
+/** A line as one band sees it. */
+interface Peak { pos: number; h: number; band: number }
+
+const median = (v: Float32Array | number[]): number => {
+  if (!v.length) return 0;
+  const s = Float32Array.from(v).sort();
+  return s[s.length >> 1];
+};
+
+/** The places where each band's profile stands clear of its own level: where, how high, and in which band. */
+function findPeaks(profs: Float32Array[], n: number, d: number): Peak[] {
+  const out: Peak[] = [];
+  profs.forEach((prof, band) => {
+    const body = prof.subarray(d, n - d);
+    const med = median(body);
+    const sigma = 1.4826 * median(Float32Array.from(body, (v) => Math.abs(v - med)));
+    const thr = Math.max(PEAK_SIGMA * sigma, MIN_CONTRAST * 0.8);
+    for (let i = d + 2; i < n - d - 2; i++) {
+      const v = prof[i] - med;
+      if (v < thr || !(prof[i] > prof[i - 1] && prof[i] >= prof[i + 1] && prof[i] > prof[i - 2] && prof[i] >= prof[i + 2])) continue;
+      // the middle of the line: weighted by height, with the low skirt left out
+      const base = med + v * 0.3;
+      let w = 0, m = 0;
+      for (let j = i - 3; j <= i + 3; j++) { const u = prof[j] - base; if (u > 0) { w += u; m += u * j; } }
+      out.push({ pos: w > 0 ? m / w : i, h: v, band });
+    }
+  });
+  return out;
+}
+
+/** A line as the whole picture sees it: where it is and how many bands saw it. */
+interface Line { pos: number; w: number }
+
+function gather(peaks: Peak[]): Line[] {
+  const sorted = peaks.slice().sort((a, b) => a.pos - b.pos);
+  const out: Line[] = [];
+  let i = 0;
+  while (i < sorted.length) {
+    let sum = sorted[i].pos, cnt = 1, j = i + 1;
+    const bands = new Set([sorted[i].band]);
+    while (j < sorted.length && sorted[j].pos - sum / cnt <= 1.25) { sum += sorted[j].pos; cnt++; bands.add(sorted[j].band); j++; }
+    out.push({ pos: sum / cnt, w: bands.size });
+    i = j;
+  }
+  return out;
+}
+
+/** How well one spacing fits the lines seen along one direction. */
+interface Comb {
+  /** where a line of the spacing passes */
+  o: number;
+  /** how many of the spacing's lines were seen, and over how many in a row */
+  hits: number;
+  span: number;
+  /** the part of what was seen that lies on the spacing, and the part of the spacing's lines that were seen (both with luck taken off) */
+  explained: number;
+  present: number;
+  /** both at once: high only when the spacing explains what was seen AND its own lines are there */
+  fit: number;
+}
+
+function comb(lines: Line[], total: number, len: number, p: number, tol: number): Comb | null {
+  const n = lines.length;
+  if (n < 3) return null;
+  // the offset that most of the weight agrees on: slide a window over where each line falls within one spacing
+  const idx = lines.map((_, i) => i);
+  const res = lines.map((l) => ((l.pos % p) + p) % p);
+  idx.sort((a, b) => res[a] - res[b]);
+  let best = -1, bestI = 0, bestJ = 0, acc = 0, j = 0;
+  for (let i = 0; i < n; i++) {
+    if (j < i) { j = i; acc = 0; }
+    while (j < i + n) {
+      const r = res[idx[j % n]] + (j >= n ? p : 0);
+      if (r - res[idx[i]] > 2 * tol) break;
+      acc += lines[idx[j % n]].w;
+      j++;
+    }
+    if (acc > best) { best = acc; bestI = i; bestJ = j; }
+    acc -= lines[idx[i]].w;
+  }
+  let so = 0, sw = 0;
+  for (let k = bestI; k < bestJ; k++) { const l = lines[idx[k % n]]; so += (res[idx[k % n]] + (k >= n ? p : 0)) * l.w; sw += l.w; }
+  const o = (((so / sw) % p) + p) % p;
+  // which of the spacing's lines were seen
+  let hits = 0, kmin = Infinity, kmax = -Infinity, last = NaN, M = 0;
+  for (const l of lines) {
+    const k = Math.round((l.pos - o) / p);
+    if (Math.abs(l.pos - o - k * p) > tol) continue;
+    M += l.w;
+    if (k !== last) { hits++; last = k; }
+    if (k < kmin) kmin = k;
+    if (k > kmax) kmax = k;
+  }
+  if (hits < 3) return null;
+  const span = kmax - kmin + 1;
+  // lines scattered at random would land on the spacing this often by luck alone: only what is beyond that counts
+  const luckE = Math.min(0.9, (2 * tol) / p);
+  const luckP = 1 - Math.exp((-n / len) * 2 * tol);
+  const explained = Math.max(0, (M / total - luckE) / (1 - luckE));
+  const present = Math.max(0, (hits / span - luckP) / (1 - luckP));
+  return { o, hits, span, explained, present, fit: explained + present > 0 ? (2 * explained * present) / (explained + present) : 0 };
+}
+
+interface Match { p: number; x: Comb; y: Comb; score: number }
+
+/** Try every spacing from `lo` to `hi` (each `step` times the last) on the lines seen both ways; the same spacing has to fit both. */
+function search(X: Line[], Y: Line[], W: number, H: number, lo: number, hi: number, step: number, tol: number): Match | null {
+  const tx = X.reduce((s, l) => s + l.w, 0), ty = Y.reduce((s, l) => s + l.w, 0);
+  let best: Match | null = null;
+  for (let p = lo; p <= hi; p *= step) {
+    const x = comb(X, tx, W, p, tol);
+    if (!x) continue;
+    const y = comb(Y, ty, H, p, tol);
+    if (!y) continue;
+    const score = Math.sqrt(x.fit * y.fit);
+    if (!best || score > best.score) best = { p, x, y, score };
+  }
+  return best;
+}
+
+/**
+ * Pin the spacing and both starting points down from the measured middle of every line in every band (one straight-line fit for
+ * the three numbers together). Lines seen in many bands count many times; a wall beside a line is too far off to be used.
+ */
+function fit(px: Peak[], py: Peak[], p0: number, ox0: number, oy0: number): { p: number; ox: number; oy: number; contrast: number } {
+  let p = p0, ox = ox0, oy = oy0;
+  const heights: number[] = [];
+  for (const tol of [TOL, 1.1, 0.8]) {
+    let num = 0, den = 0;
+    const sums = [px, py].map((peaks, a) => {
+      const o = a ? oy : ox;
+      let S = 0, K = 0, Q = 0, U = 0, V = 0;
+      for (const pk of peaks) {
+        const k = Math.round((pk.pos - o) / p);
+        if (Math.abs(pk.pos - o - k * p) > tol) continue;
+        const w = Math.min(pk.h, CLIP / 2);
+        S += w; K += w * k; Q += w * k * k; U += w * pk.pos; V += w * k * pk.pos;
+        if (tol === 0.8) heights.push(pk.h);
+      }
+      if (S > 0) { num += V - (U * K) / S; den += Q - (K * K) / S; }
+      return { S, K, U };
+    });
+    if (den <= 0) break;
+    p = num / den;
+    if (sums[0].S > 0) ox = (sums[0].U - p * sums[0].K) / sums[0].S;
+    if (sums[1].S > 0) oy = (sums[1].U - p * sums[1].K) / sums[1].S;
+  }
+  return { p, ox: ((ox % p) + p) % p, oy: ((oy % p) + p) % p, contrast: median(heights) };
+}
+
+/** How wide the lines are: the average shape of a line across its width, from every band that saw it, measured where it is 40% as strong as its peak. */
+function lineWidth(bands: Bands, peaks: Peak[], sign: number, p: number, o: number): number {
+  const R = 14, Q = 4;
+  const acc = new Float32Array(2 * R * Q + 1);
+  let cnt = 0;
+  for (const pk of peaks) {
+    const k = Math.round((pk.pos - o) / p), c = o + k * p;
+    if (Math.abs(pk.pos - c) > 0.8 || c < R + 1 || c > bands.n - R - 2) continue;
+    const prof = bands.plain[pk.band];
+    for (let j = 0; j < acc.length; j++) acc[j] += sign * at(prof, c + (j - R * Q) / Q);
+    cnt++;
+  }
+  if (!cnt) return 2;
+  let pk = 0;
+  for (let j = (R - 2) * Q; j <= (R + 2) * Q; j++) if (acc[j] > pk) pk = acc[j];
+  if (pk <= 0) return 2;
+  let w = 0;
+  for (let j = R * Q; j < acc.length && acc[j] >= pk * 0.4; j++) w++;
+  for (let j = R * Q - 1; j >= 0 && acc[j] >= pk * 0.4; j--) w++;
+  return w / Q;
+}
+
+/** The same bands joined in groups of `k`: more of the picture is averaged together, so fainter lines stand out (and big features count for more). */
+function joinBands(b: Bands, k: number): Bands {
+  const join = (profs: Float32Array[]) => {
+    const out: Float32Array[] = [];
+    for (let i = 0; i < profs.length; i += k) {
+      const group = profs.slice(i, i + k);
+      const m = new Float32Array(b.n);
+      for (const g of group) for (let j = 0; j < b.n; j++) m[j] += g[j] / group.length;
+      out.push(m);
+    }
+    return out;
+  };
+  return { n: b.n, dark: join(b.dark), light: join(b.light), plain: join(b.plain) };
+}
+
+interface Seen { sign: number; m: Match; X: Line[]; Y: Line[]; px: Peak[]; py: Peak[] }
+
+/** The best spacing for what the bands see, looking for dark lines and for light lines apart. */
+function look(B: { x: Bands; y: Bands }, W: number, H: number, d: number, lo: number, hi: number, step: number, only?: number): Seen | null {
+  let top: Seen | null = null;
+  for (const sign of only ? [only] : [1, -1]) {
+    const px = findPeaks(sign === 1 ? B.x.dark : B.x.light, W, d), py = findPeaks(sign === 1 ? B.y.dark : B.y.light, H, d);
+    const X = gather(px), Y = gather(py);
+    const m = search(X, Y, W, H, lo, hi, step, TOL);
+    if (m && (!top || m.score > top.m.score)) top = { sign, m, X, Y, px, py };
+  }
+  return top;
+}
+
+/**
+ * Look for a printed square grid. Returns null when nothing regular enough is there.
+ * `strength` runs from 0 to 10: it is high when nearly everything line-like in the picture lies on the grid, nearly all of the grid's
+ * lines are there, and the grid reaches over most of the picture.
+ */
+export function findGrid(img: PixelImage): Found | null {
+  const { width: W0, height: H0 } = img;
+  if (W0 < 60 || H0 < 60) return null;
+  const L0 = luma(img);
+  const f = Math.max(1, Math.ceil(Math.max(W0, H0) / WORK_SIDE));
+  const small = f > 1 ? shrink(L0, W0, H0, f) : { L: L0 as Lum, W: W0, H: H0 };
+  const { W, H } = small;
+  const B = bandProfiles(small.L, W, H, REACH);
+  let full: { x: Bands; y: Bands } | null = f > 1 ? null : B;
+  // lines that are faint on busy ground only stand out when more of the picture is averaged together: if nothing is found,
+  // look again with the bands joined in twos, then in fours
+  for (const join of [1, 2, 4]) {
+    if (join > 1 && Math.min(B.x.dark.length, B.y.dark.length) / join < 1.5) break;
+    const bands = join === 1 ? B : { x: joinBands(B.x, join), y: joinBands(B.y, join) };
+    const seen = look(bands, W, H, REACH, 8, Math.min(W, H) / 3, 1.0015);
+    if (!seen) continue;
+    let { m, X, Y, px, py } = seen;
+    let at0 = bands;
+    let r = fit(px, py, m.p, m.x.o, m.y.o);
+    if (f > 1) {
+      // the search was on a small copy: measure the lines again on the picture itself, near where the small copy says they are
+      full ??= bandProfiles(L0, W0, H0, REACH * f);
+      at0 = join === 1 ? full : { x: joinBands(full.x, join), y: joinBands(full.y, join) };
+      const again = look(at0, W0, H0, REACH * f, r.p * f * 0.985, r.p * f * 1.015, 1.0002, seen.sign);
+      if (!again) continue;
+      ({ m, X, Y, px, py } = again);
+      r = fit(px, py, m.p, m.x.o, m.y.o);
+    }
+    // how the fitted grid does against everything that was seen
+    const tx = X.reduce((s, l) => s + l.w, 0), ty = Y.reduce((s, l) => s + l.w, 0);
+    const cx = comb(X, tx, W0, r.p, 1.1), cy = comb(Y, ty, H0, r.p, 1.1);
+    if (!cx || !cy || r.contrast < MIN_CONTRAST) continue;
+    const cover = Math.min(1, (cx.span * r.p) / W0) * Math.min(1, (cy.span * r.p) / H0);
+    const info: GridInfo = { linesX: cx.hits, linesY: cy.hits, explained: Math.min(cx.explained, cy.explained), present: Math.min(cx.present, cy.present), cover, contrast: round2(r.contrast), faint: join > 1 };
+    // a grid has its lines there, is a fair part of what looks like a line in the picture, and is more than a patch of floor tiles in one room;
+    // with only a handful of lines to go on, it has to be nearly all there is
+    const few = cx.hits + cy.hits < 8;
+    if (info.present < (few ? 0.9 : 0.55) || info.explained < (few ? 0.6 : 0.25) || cover < 0.12) continue;
+    let strength = 10 * Math.sqrt(cx.fit * cy.fit) * Math.max(0, Math.min(1, (cover - 0.1) / 0.4)) * Math.min(1, (cx.hits + cy.hits) / 8);
+    // never sure enough to act without being asked: lines that only showed with the bands joined, squares too small to stand a token on,
+    // or more squares across than any battle map has (that is a texture, like floor tiles, not a grid)
+    if (join > 1 || r.p < 16 || Math.max(W0, H0) / r.p > 120) strength = Math.min(strength, 4);
+    const t = Math.max(1, Math.min(12, (lineWidth(at0.x, px, seen.sign, r.p, r.ox) + lineWidth(at0.y, py, seen.sign, r.p, r.oy)) / 2));
+    return { cut: { on: true, p: round2(r.p), x: round2(r.ox), y: round2(r.oy), t: round2(t) }, strength: round2(strength), info };
+  }
+  return null;
 }
 
 /** How far past a line's own width (in pixels) the fill fades out, so the soft edge a printed line has is covered as well and no seam is left. */

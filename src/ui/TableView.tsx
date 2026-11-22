@@ -12,6 +12,7 @@ import { Toasts, copyText, toast, useClient, useTheme, useUi } from './common';
 import { AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewFolderModal, NewSceneModal, ScenesModal, SettingsModal } from './modals';
 import { SceneBar } from './sceneBar';
 import { saveTokensToLibrary } from './tokenLib';
+import { droppedImage } from './uploads';
 import { DrawFlyout, DrawInspector, HeightFlyout, RulerFlyout, TemplateFlyout, TestMoveBar, TextEditor, WallFlyout } from './drawTools';
 import { Dock, Rail, TokenTag } from './panels';
 import { InitPopup, InitStrip } from './initiative';
@@ -21,7 +22,7 @@ import { TokenEditorModal } from './tokenEditor';
 type ModalState =
   | null
   | { kind: 'addToken'; at: Vec; file?: File | null; art?: LibraryItem }
-  | { kind: 'newScene' }
+  | { kind: 'newScene'; file?: File | null }
   | { kind: 'scenes' }
   | { kind: 'newFolder' }
   | { kind: 'library' }
@@ -50,6 +51,13 @@ const ICONS = {
   wall: 'M3 5h18v14H3zM3 9.7h18M3 14.3h18M9 5v4.7M15 9.7v4.6M9 14.3V19',
   test: 'M6 20a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM18 9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM8 15l8-5',
 };
+
+/** A picture with an arrow coming down into it: "drop a picture here". */
+const DropIcon = (props: { size?: number }) => (
+  <svg class="drop-icon" width={props.size ?? 16} height={props.size ?? 16} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M12 3v9M8.5 8.5L12 12l3.5-3.5M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" />
+  </svg>
+);
 
 function ToolBtn(props: { icon: keyof typeof ICONS; label: string; hotkey?: string; on?: boolean; /** a plain on/off switch, not the active tool: shown more quietly */ toggle?: boolean; disabled?: boolean; onClick: () => void }) {
   return (
@@ -171,14 +179,39 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
   function viewCenter(): Vec { return boardRef.current?.viewCenterWorld() ?? { x: 500, y: 500 }; }
   function openAddToken(at?: Vec, file?: File | null) { setModal({ kind: 'addToken', at: at ?? viewCenter(), file }); }
 
-  // ---- drag & drop an image onto the board = new token
+  // ---- drag & drop a picture onto the page: the map of a first scene while the table is still empty, a new token after that
+  // (while the New scene window is open it takes the drop itself, see NewSceneModal)
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
+  const dropMakesScene = () => client.isDM && client.metaLoaded && client.sceneIndex.length === 0 && !client.viewSceneId;
+  // however a drag ends (dropped on a window that took it, or let go of outside), the "drop it here" veil goes away
+  useEffect(() => {
+    const end = () => { dragDepth.current = 0; setDragging(false); };
+    window.addEventListener('drop', end, true);
+    window.addEventListener('dragend', end, true);
+    return () => { window.removeEventListener('drop', end, true); window.removeEventListener('dragend', end, true); };
+  }, []);
+  function onDragEnter(e: DragEvent) {
+    if (!e.dataTransfer?.types.includes('Files') || modalRef.current) return;
+    dragDepth.current++;
+    setDragging(true);
+  }
+  function onDragLeave(e: DragEvent) {
+    if (!e.dataTransfer?.types.includes('Files') || !dragDepth.current) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (!dragDepth.current) setDragging(false);
+  }
   function onDrop(e: DragEvent) {
     e.preventDefault();
-    const f = [...(e.dataTransfer?.files ?? [])].find((x) => x.type.startsWith('image/'));
-    if (!f) return;
+    dragDepth.current = 0;
+    setDragging(false);
+    const got = droppedImage(e);
+    if (got === 'other') { toast('That file is not a picture.', 'error'); return; }
+    if (got === 'none' || !('file' in got)) return;
+    if (dropMakesScene()) { setModal({ kind: 'newScene', file: got.file }); return; }
     if (!client.canDo('create')) { toast('You are not allowed to add tokens.', 'error'); return; }
     const at = boardRef.current?.screenToWorld(e.clientX, e.clientY) ?? viewCenter();
-    openAddToken(at, f);
+    openAddToken(at, got.file);
   }
 
   async function useLibraryMap(item: LibraryItem) {
@@ -261,7 +294,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
   const gridOn = !!scene?.meta?.grid.visible;
 
   return (
-    <div class="table-root" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+    <div class="table-root" onDragEnter={onDragEnter} onDragLeave={onDragLeave} onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
       <div class="board-host" ref={hostRef} />
 
       {/* ---------------- left toolbar */}
@@ -363,6 +396,17 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
           <h2>Create your first scene</h2>
           <p>Upload a map, then set the grid and place tokens.</p>
           <button class="btn primary" onClick={() => setModal({ kind: 'newScene' })}>+ New scene</button>
+          <p class="drop-tip"><DropIcon /> or drag a map picture anywhere onto this page</p>
+        </div>
+      )}
+      {/* a picture is being dragged over the page: say what dropping it will do */}
+      {dragging && !modal && (dropMakesScene() || client.canDo('create')) && (
+        <div class="drop-veil">
+          <div class="drop-veil-box">
+            <DropIcon size={34} />
+            <strong>{dropMakesScene() ? 'Drop the picture to use it as your map' : 'Drop the picture to make a token from it'}</strong>
+            <span>{dropMakesScene() ? 'A new scene is made with it. You can name it before it is created.' : 'It is placed where you drop it.'}</span>
+          </div>
         </div>
       )}
       {client.metaLoaded && !client.isDM && !client.activeSceneId && <div class="empty-card"><h2>Waiting for the DM…</h2><p>No scene is being shown yet.</p></div>}
@@ -393,7 +437,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
 
       {/* ---------------- modals */}
       {modal?.kind === 'addToken' && <AddTokenModal client={client} at={modal.at} initialFile={modal.file} onClose={() => setModal(null)} onCreated={(id) => ui.select([id])} />}
-      {modal?.kind === 'newScene' && <NewSceneModal client={client} folder={['all', 'none'].includes(d.sceneFolder) ? null : d.sceneFolder} onClose={() => setModal(null)} onCreated={() => ui.set({ dockTab: 'scene' })} />}
+      {modal?.kind === 'newScene' && <NewSceneModal client={client} initialFile={modal.file} folder={['all', 'none'].includes(d.sceneFolder) ? null : d.sceneFolder} onClose={() => setModal(null)} onCreated={() => ui.set({ dockTab: 'scene' })} />}
       {modal?.kind === 'newFolder' && <NewFolderModal client={client} onClose={() => setModal(null)} onCreated={(id) => ui.set({ sceneFolder: id })} />}
       {modal?.kind === 'scenes' && <ScenesModal client={client} onClose={() => setModal(null)} onNew={() => setModal({ kind: 'newScene' })} onNewFolder={() => setModal({ kind: 'newFolder' })} />}
       {modal?.kind === 'library' && <LibraryModal client={client} onClose={() => setModal(null)} onUseMap={useLibraryMap} onAddToken={addLibraryToken} onAddSaved={(e) => { void addSavedToken(e); setModal(null); }} />}

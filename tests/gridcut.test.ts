@@ -43,8 +43,8 @@ const lineContrast = (img: PixelImage, p: number, ox: number, oy: number, t: num
 describe('finding a printed grid', () => {
   const img = mapWith(500, 400, 50, 13, 7, 2);
 
-  it('with an expected spacing close by, it finds the spacing, the offset and the thickness', () => {
-    const f = findGrid(img, 48)!;
+  it('finds the spacing, the offset and the thickness', () => {
+    const f = findGrid(img)!;
     expect(f).not.toBeNull();
     expect(f.cut.p).toBeGreaterThan(49.8);
     expect(f.cut.p).toBeLessThan(50.2);
@@ -55,7 +55,7 @@ describe('finding a printed grid', () => {
     expect(f.strength).toBeGreaterThan(5);
   });
 
-  it('without any hint it still finds the spacing (and not a multiple of it)', () => {
+  it('finds the spacing itself, not a multiple of it', () => {
     const f = findGrid(img)!;
     expect(f).not.toBeNull();
     expect(f.cut.p).toBeGreaterThan(49.7);
@@ -63,28 +63,32 @@ describe('finding a printed grid', () => {
   });
 
   it('light lines are found as well as dark ones', () => {
-    const f = findGrid(mapWith(500, 400, 40, 5, 22, 3, { light: true }), 41)!;
+    const f = findGrid(mapWith(500, 400, 40, 5, 22, 3, { light: true }))!;
     expect(f).not.toBeNull();
     expect(Math.abs(f.cut.p - 40)).toBeLessThan(0.25);
   });
 
   it('a picture with no grid gives nothing', () => {
-    expect(findGrid(mapWith(500, 400, 50, 0, 0, 2, { noGrid: true }), 50)).toBeNull();
     expect(findGrid(mapWith(500, 400, 50, 0, 0, 2, { noGrid: true }))).toBeNull();
   });
 
   it('very faint lines are not mistaken for a grid', () => {
-    expect(findGrid(mapWith(500, 400, 50, 13, 7, 2, { contrast: 1 }), 50)).toBeNull();
+    expect(findGrid(mapWith(500, 400, 50, 13, 7, 2, { contrast: 1 }))).toBeNull();
   });
 
-  it('an expected spacing that is half the real one still finds the real one', () => {
-    const f = findGrid(img, 25)!;
-    expect(f).not.toBeNull();
-    expect(Math.abs(f.cut.p - 50)).toBeLessThan(0.3);
-    expect(Math.abs(f.cut.x - 13.5)).toBeLessThan(1.6);
-    // a third of it too
-    const g = findGrid(mapWith(600, 450, 60, 8, 30, 2), 20)!;
+  it('the printed spacing is found with nothing to go on but the picture', () => {
+    const g = findGrid(mapWith(600, 450, 60, 8, 30, 2))!;
     expect(Math.abs(g.cut.p - 60)).toBeLessThan(0.3);
+    expect(Math.abs(g.cut.x - 8.5)).toBeLessThan(1.6);
+  });
+
+  it('says what the answer rests on', () => {
+    const f = findGrid(img)!;
+    expect(f.info!.linesX).toBeGreaterThanOrEqual(9);
+    expect(f.info!.linesY).toBeGreaterThanOrEqual(7);
+    expect(f.info!.present).toBeGreaterThan(0.9);
+    expect(f.info!.explained).toBeGreaterThan(0.9);
+    expect(f.strength).toBeLessThanOrEqual(10);
   });
 
   it('smooth texture on a big picture is not taken for a grid', () => {
@@ -96,13 +100,6 @@ describe('finding a printed grid', () => {
       const i = (y * W + x) * 4; data[i] = v; data[i + 1] = v * 0.93; data[i + 2] = v * 0.8; data[i + 3] = 255;
     }
     expect(findGrid({ data, width: W, height: H })).toBeNull();
-    expect(findGrid({ data, width: W, height: H }, 35)).toBeNull();
-  });
-
-  it('a spacing that is not quite right is corrected', () => {
-    const f = findGrid(img, 52)!;
-    expect(f).not.toBeNull();
-    expect(Math.abs(f.cut.p - 50)).toBeLessThan(0.3);
   });
 });
 
@@ -111,7 +108,7 @@ describe('hiding the grid', () => {
     const img = mapWith(500, 400, 50, 13, 7, 2);
     const before = lineContrast(img, 50, 13, 7, 2);
     expect(before).toBeGreaterThan(50);
-    const f = findGrid(img, 50)!;
+    const f = findGrid(img)!;
     hideGrid(img, f.cut);
     const after = lineContrast(img, 50, 13, 7, 2);
     expect(Math.abs(after)).toBeLessThan(before * 0.2);
@@ -120,7 +117,7 @@ describe('hiding the grid', () => {
   it('leaves pixels well away from the lines alone', () => {
     const img = mapWith(500, 400, 50, 13, 7, 2);
     const copy = new Uint8ClampedArray(img.data);
-    const f = findGrid(img, 50)!;
+    const f = findGrid(img)!;
     hideGrid(img, f.cut);
     let same = 0, total = 0;
     for (let y = 20; y < 380; y++) for (let x = 20; x < 480; x++) {
@@ -180,7 +177,7 @@ describe('hiding soft lines at odd spacings', () => {
   it('leaves almost nothing behind, on either side of where each line was', () => {
     const p = 47.37, ox = 20.4, oy = 11.7, t = 2.6;
     const { ground, img } = softMap(900, 700, p, ox, oy, t);
-    const f = findGrid(img, 47)!;
+    const f = findGrid(img)!;
     expect(f).not.toBeNull();
     hideGrid(img, f.cut);
     // average difference from the true ground, pixel by pixel along the line, across the line (away from where lines cross)

@@ -10,11 +10,18 @@ marked complete. The rules for keeping it are in `CLAUDE.md`.
 - [x] **#N Short title** (added YYYY-MM-DD, completed YYYY-MM-DD): what was asked. Done: what shipped.
 ```
 
-Numbers are given in the order issues arrive and are never reused. An issue being worked on right now gets
+Numbers are given in the order issues arrive and are never reused. More than one session can be working at once: fetch before
+taking a number, and if two sessions took the same one, the one that reached `main` second renumbers its own. An issue being worked on right now gets
 `(in progress)` after its title, and one that cannot move until the user does something gets `(waiting on user)`.
 An issue the user says is still broken moves back up to *Open* with a note on what is left.
 
 ## Open
+
+- [ ] **#11 General UI cleanup, one full hour of auditing** (in progress) (added 2026-11-22): "the UI is just a little bit
+  cluttered/wordy in some places. Can you go around and just do a general UI cleanup so the user is told what they
+  actually need to know, core/basic VTT features are easy access while advanced features are deeper down and phrasing
+  is always clear so its never unclear what something does. I want you to spend a full hour doing this and looking for
+  things. Do not stop looking until the hour is done." The hour starts once #9 and #10 are finished.
 
 Carried over from the old `TASKS.md` on 2026-11-22 (asked 2026-11-21, before this file existed):
 
@@ -65,3 +72,21 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
   hands the old token to the new browser and removes the old entry once offline (an entry still online is left alone);
   round 7i libraries are copied across once; the player-writable `users/$uid/tokenLib` rule is gone. Needs the rules
   republished (#3). Tests: `tests/rules.test.ts`, `tests/charlib.test.ts`, `tests/e2e/batchZ10.mjs`.
+- [x] **#9 Drag an image onto the board or the New scene box to upload it as a map** (added 2026-11-22, completed
+  2026-11-22): "if I drag an image onto this [the empty table] or this [the New scene box] it should treat it as a map
+  upload. UI should show this is possible." Done: on a table with no scenes a dropped picture opens New scene with it
+  as the map; the New scene box takes a picture dropped anywhere while it is open and shows a preview; the empty table
+  says "or drag a map picture anywhere onto this page"; while a picture is dragged over the page a panel says what
+  dropping it will do (a map on an empty table, a token once there are scenes). A picture dragged from another web
+  page fills in its link. Checked in the app with made-up drop events, not with a real drag from the desktop.
+- [x] **#10 Make the printed-grid auto detection (squares and hexes) good and robust** (added 2026-11-22, completed
+  2026-11-22): "make sure the auto detection code for grids and hexes and such is good and robust." Found: the old
+  finder got 36 of 43 lifelike test maps right, and was wrong on every dungeon with black or white around the rooms
+  and on maps with a border (walls and edges outvoted the grid, giving spacings like 1044 px), and on 35 px squares
+  (it trusted the default grid size). Done: the square finder was rewritten (thin lines only, each part of the picture
+  votes, spacing marked on what it explains and what it is missing, see the top of `src/core/gridcut.ts`); the hex
+  finder ignores edges and walls the same way, checks the sides in all three directions (a square grid can no longer
+  pass for hexes), and both mark their answer 0 to 10 so they can be compared; big pictures are searched on a small
+  copy first. 63 drawn maps are now permanent tests (`tests/helpers/gridcorpus.ts`): all pass, and the project's
+  browser tests for the feature pass. Not done: it has only been tried on maps drawn by the tests, not on real
+  published maps; and hiding still fills in a wall that lies exactly on a grid line.

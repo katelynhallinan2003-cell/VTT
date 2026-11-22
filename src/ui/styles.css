@@ -573,3 +573,21 @@ input[type=text], input[type=number], input[type=password], select { border-radi
 .scene-group { margin-bottom: 12px; }
 .scene-group-head { display: flex; align-items: center; gap: 6px; margin: 4px 0 4px; }
 .scene-group-head input { flex: 1; }
+
+/* ---------------- dropping a picture onto the page */
+.drop-icon { vertical-align: -3px; }
+.empty-card .drop-tip { margin: 14px 0 0; padding-top: 12px; border-top: 1px dashed var(--border-hi); color: var(--muted); font-size: 13px; }
+.drop-veil { position: absolute; inset: 0; z-index: 40; pointer-events: none; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.drop-veil::before { content: ''; position: absolute; inset: 12px; border: 3px dashed var(--accent); border-radius: 18px; }
+.drop-veil-box { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 22px 30px; background: var(--panel-solid); border: 1px solid var(--accent); border-radius: 16px; box-shadow: 0 12px 40px var(--shadow); color: var(--text); text-align: center; }
+.drop-veil-box .drop-icon { color: var(--accent); }
+.drop-veil-box strong { font-size: 17px; }
+.drop-veil-box span { color: var(--muted); font-size: 13px; }
+.dropzone { border: 2px dashed var(--border-hi); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; margin-bottom: 12px; transition: border-color .12s, background .12s; }
+.dropzone.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); padding: 30px 14px; }
+.dropzone.over .dropzone-text { color: var(--text); font-weight: 600; }
+.dropzone-text { color: var(--muted); }
+.dropzone-btns { justify-content: center; }
+.dropzone-file { display: flex; align-items: center; gap: 10px; max-width: 100%; align-self: stretch; background: var(--raise); border: 1px solid var(--border); border-radius: 10px; padding: 6px 8px; }
+.dropzone-file img { width: 72px; height: 54px; object-fit: cover; border-radius: 6px; background: var(--sunken); flex: none; }
+.dropzone-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }

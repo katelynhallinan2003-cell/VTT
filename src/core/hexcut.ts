@@ -13,7 +13,7 @@
 // Everything here works on plain pixel arrays so it can be tested without a browser.
 import type { GridSettings } from '../types';
 import { hexCentersIn, hexCorners, S3 } from './hex';
-import { FEATHER, exact, luma, medianAbs, round2, thickness, type Found, type GridCut, type PixelImage } from './gridcut';
+import { CLIP, FEATHER, WORK_SIDE, exact, luma, medianAbs, round2, scaleCut, shrink, thickness, type Found, type GridCut, type Lum, type PixelImage } from './gridcut';
 
 type HexShape = 'pointy' | 'flat';
 type Vec = { x: number; y: number };
@@ -46,50 +46,57 @@ export function hexSides(cut: Pick<GridCut, 'p' | 'x' | 'y'>, shape: HexShape, W
 }
 
 interface Profiles {
-  /** across each family, one number per pixel of distance (average of how much darker the pixels are than their neighbours either side) */
+  /** across each family, one number per pixel of distance: how much darker (or lighter) the pixels are than BOTH their neighbours either side, averaged along the line, with the picture's own level taken off */
   prof: Float32Array[];
   /** the whole-number distance each profile starts at */
   base: number[];
   noise: number[];
 }
 
-function profiles(img: PixelImage, L: Uint8Array, shape: HexShape, d: number, sign: number): Profiles {
-  const { width: W, height: H } = img;
+const clip = (v: number) => (v > CLIP ? CLIP : v < -CLIP ? -CLIP : v);
+
+/**
+ * The three families' profiles, for dark lines and for light ones. A pixel only counts when it differs from the pixels on BOTH sides of it
+ * (so the edge of a wall, a shadow or the border of the map counts for nothing), and never for more than a set amount (so one black wall is
+ * not worth ten grid lines).
+ */
+function profiles(L: Lum, W: number, H: number, shape: HexShape, d: number): { dark: Profiles; light: Profiles } {
   const ns = normals(shape);
-  const prof: Float32Array[] = [], base: number[] = [], noise: number[] = [];
+  const dark: Profiles = { prof: [], base: [], noise: [] }, light: Profiles = { prof: [], base: [], noise: [] };
   for (const n of ns) {
     const dx = Math.round(d * n.x), dy = Math.round(d * n.y);
     const corners = [0, W - 1].flatMap((x) => [0, H - 1].map((y) => x * n.x + y * n.y));
     const lo = Math.floor(Math.min(...corners)), hi = Math.ceil(Math.max(...corners));
     const len = hi - lo + 1;
-    const sum = new Float32Array(len), cnt = new Uint32Array(len);
+    const sd = new Float32Array(len), sl = new Float32Array(len), cnt = new Uint32Array(len);
     for (let y = 0; y < H; y++) {
       const ya = Math.max(0, Math.min(H - 1, y - dy)) * W, yb = Math.max(0, Math.min(H - 1, y + dy)) * W, yc = y * W;
       for (let x = 0; x < W; x++) {
         const xa = x - dx < 0 ? 0 : x - dx >= W ? W - 1 : x - dx;
         const xb = x + dx < 0 ? 0 : x + dx >= W ? W - 1 : x + dx;
-        const v = (L[ya + xa] + L[yb + xb]) / 2 - L[yc + x];
+        const a = L[ya + xa], b = L[yb + xb], c = L[yc + x];
         const bin = Math.round(x * n.x + y * n.y) - lo;
-        sum[bin] += v;
+        sd[bin] += clip((a < b ? a : b) - c);
+        sl[bin] += clip(c - (a > b ? a : b));
         cnt[bin]++;
       }
     }
-    const p = new Float32Array(len);
-    for (let i = 0; i < len; i++) p[i] = cnt[i] ? (sign * sum[i]) / cnt[i] : 0;
-    prof.push(p); base.push(lo); noise.push(medianAbs(p));
+    for (const [sum, out] of [[sd, dark], [sl, light]] as const) {
+      const p = new Float32Array(len);
+      for (let i = 0; i < len; i++) p[i] = cnt[i] ? sum[i] / cnt[i] : 0;
+      // ground that is not a line scores a little under zero (it is rarely darker than both sides): take that level off
+      const level = Float32Array.from(p).sort()[len >> 1];
+      for (let i = 0; i < len; i++) p[i] = cnt[i] ? p[i] - level : 0;
+      out.prof.push(p); out.base.push(lo); out.noise.push(medianAbs(p));
+    }
   }
-  return { prof, base, noise };
+  return { dark, light };
 }
 
 /** Whether the lines are darker (1) or lighter (-1) than the ground: the side with the bigger peaks. */
-function polarity(prof: Float32Array[]): number {
-  let pos = 0, neg = 0;
-  for (const p of prof) {
-    const v = Float32Array.from(p).sort();
-    pos += v[Math.floor(v.length * 0.99)];
-    neg += -v[Math.floor(v.length * 0.01)];
-  }
-  return pos >= neg ? 1 : -1;
+function polarity(P: { dark: Profiles; light: Profiles }): number {
+  const top = (prof: Float32Array[]) => prof.reduce((s, p) => { const v = Float32Array.from(p).sort(); return s + v[Math.floor(v.length * 0.99)]; }, 0);
+  return top(P.dark.prof) >= top(P.light.prof) ? 1 : -1;
 }
 
 /** Average strength of a profile at positions o, o+q, o+2q… (looking a bin either side to allow for rounding). */
@@ -155,36 +162,72 @@ function refineHex(P: Profiles, c: Cand): Cand {
   return best;
 }
 
-/** How much darker the pixels on a hex's sides are than the ground either side of them, averaged over a spread of sides across the picture. */
-function sidesScore(L: Uint8Array, W: number, H: number, cut: Pick<GridCut, 'p' | 'x' | 'y'>, shape: HexShape, d: number, sign: number): number {
+/** How strongly each side of each hex shows, for the three directions the sides run in. */
+interface SideStats {
+  /** one number per side looked at: how much darker (or lighter) the side is than the ground on BOTH sides of it */
+  values: number[][];
+  /** the average of those, over the three directions */
+  mean: number;
+}
+
+/** Look at a spread of hex sides across the picture (only sides that are wholly inside it), a handful of points along each. */
+function sideStats(L: Lum, W: number, H: number, cut: Pick<GridCut, 'p' | 'x' | 'y'>, shape: HexShape, d: number, sign: number): SideStats {
   const all = hexSides(cut, shape, W, H);
-  const stride = Math.max(1, Math.floor(all.length / 900));
-  let sum = 0, cnt = 0;
-  const px = (x: number, y: number) => L[Math.max(0, Math.min(H - 1, Math.round(y))) * W + Math.max(0, Math.min(W - 1, Math.round(x)))];
+  // sides come in threes (one of each direction per hex): step over whole hexes so each direction gets the same share
+  const stride = Math.max(1, Math.floor(all.length / 3 / 700)) * 3;
+  const values: number[][] = [[], [], []];
+  const px = (x: number, y: number) => L[Math.round(y) * W + Math.round(x)];
+  const m = d + 1;
   for (let i = 0; i < all.length; i += stride) {
-    const [a, b] = all[i];
-    const len = Math.hypot(b.x - a.x, b.y - a.y);
-    const nx = -(b.y - a.y) / len, ny = (b.x - a.x) / len;
-    for (const t of [0.25, 0.4, 0.5, 0.6, 0.75]) {
-      const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
-      if (x < d || y < d || x >= W - d || y >= H - d) continue;
-      sum += sign * ((px(x + nx * d, y + ny * d) + px(x - nx * d, y - ny * d)) / 2 - px(x, y));
-      cnt++;
+    for (let o = 0; o < 3 && i + o < all.length; o++) {
+      const [a, b] = all[i + o];
+      if (Math.min(a.x, b.x) < m || Math.min(a.y, b.y) < m || Math.max(a.x, b.x) >= W - m || Math.max(a.y, b.y) >= H - m) continue;
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      const nx = (-(b.y - a.y) / len) * d, ny = ((b.x - a.x) / len) * d;
+      let sum = 0;
+      for (const t of SIDE_POINTS) {
+        const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+        const u = px(x + nx, y + ny), v = px(x - nx, y - ny), c = px(x, y);
+        sum += clip(sign === 1 ? (u < v ? u : v) - c : c - (u > v ? u : v));
+      }
+      values[o].push(sum / SIDE_POINTS.length);
     }
   }
-  return cnt >= 10 ? sum / cnt : -Infinity;
+  const n = values[0].length + values[1].length + values[2].length;
+  return { values, mean: n ? values.reduce((s, v) => s + v.reduce((q, w) => q + w, 0), 0) / n : -Infinity };
+}
+const SIDE_POINTS = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+
+/**
+ * How sure we are that these hexes are printed on the picture, from 0 to 10 (the same scale the square finder uses).
+ * It is the part of the hexes' sides that really are drawn, in whichever of the three directions has the fewest, less the part that
+ * would pass for drawn anywhere in the picture by luck (found by looking at the same hexes moved off to where no line can be).
+ * A square grid has lines in one of the three directions only, so it scores nothing.
+ */
+function hexStrength(L: Lum, W: number, H: number, cut: Pick<GridCut, 'p' | 'x' | 'y'>, shape: HexShape, d: number, sign: number): { strength: number; contrast: number } {
+  const on = sideStats(L, W, H, cut, shape, d, sign);
+  const off = sideStats(L, W, H, { p: cut.p, x: cut.x + cut.p / 4, y: cut.y + cut.p / 4 }, shape, d, sign);
+  const flat = on.values.flat().sort((a, b) => a - b);
+  if (flat.length < 30) return { strength: 0, contrast: 0 };
+  // a side is "drawn" when it stands out at least 40% as much as a clearly drawn one does
+  const ref = flat[Math.floor(flat.length * 0.7)];
+  const thr = Math.max(MIN_CONTRAST_HEX * 1.5, ref * 0.4);
+  const part = (v: number[]) => (v.length ? v.filter((x) => x >= thr).length / v.length : 0);
+  let least = 1;
+  for (let o = 0; o < 3; o++) least = Math.min(least, part(on.values[o]) - part(off.values[o]));
+  const drawn = flat.filter((x) => x >= thr);
+  return { strength: Math.max(0, least) * 10, contrast: drawn.length ? drawn[drawn.length >> 1] : 0 };
 }
 
 /** Search one orientation. `hint` is the spacing you expect (pixels of this picture between hex centres), or none to try them all. */
-function findOne(img: PixelImage, L: Uint8Array, shape: HexShape, hint?: number): Found | null {
-  const { width: W, height: H } = img;
+function findOne(L: Lum, W: number, H: number, shape: HexShape, hint?: number, narrow = 0.07): Found | null {
   const d = hint ? Math.max(3, Math.min(8, Math.round(hint * 0.07))) : 5;
   // which way the lines go (dark or light) comes from a first look
-  const first = profiles(img, L, shape, d, 1);
-  const sign = polarity(first.prof);
-  const P = sign === 1 ? first : { ...first, prof: first.prof.map((p) => Float32Array.from(p, (v) => -v)), noise: first.noise };
-  const lo = hint ? hint * 0.93 : 24;
-  const hi = hint ? hint * 1.07 : Math.min(W, H) / 6;
+  const both = profiles(L, W, H, shape, d);
+  const sign = polarity(both);
+  const P = sign === 1 ? both.dark : both.light;
+  const lo = hint ? hint * (1 - narrow) : 24;
+  const hi = hint ? hint * (1 + narrow) : Math.min(W, H) / 6;
   if (hi <= lo) return null;
   const grow = 1 + (hint ? Math.max(0.0001, 0.5 / Math.max(W, H)) : 0.004);
   let best: Cand | null = null;
@@ -197,8 +240,9 @@ function findOne(img: PixelImage, L: Uint8Array, shape: HexShape, hint?: number)
   const fine = refineHex(P, best);
   const q = fine.p / 2;
   const ob = mod(fine.ub + P.base[1], q), oc = mod(fine.uc + P.base[2], q); // where lines of two of the families run, in picture pixels across them
-  const per = P.prof.map((pr, i) => exact(pr, q, [mod(fine.ub + fine.uc + P.base[1] + P.base[2] - P.base[0], q), fine.ub, fine.uc][i]) / P.noise[i]);
-  const raw = P.prof.map((pr, i) => exact(pr, q, [mod(fine.ub + fine.uc + P.base[1] + P.base[2] - P.base[0], q), fine.ub, fine.uc][i]));
+  const offs = [mod(fine.ub + fine.uc + P.base[1] + P.base[2] - P.base[0], q), fine.ub, fine.uc];
+  const per = P.prof.map((pr, i) => exact(pr, q, offs[i]) / P.noise[i]);
+  const raw = P.prof.map((pr, i) => exact(pr, q, offs[i]));
   if (Math.min(...per) < 1.8 || Math.min(...raw) < MIN_CONTRAST_HEX * 0.5) return null;
   // a point where lines of the three families cross: solve  Q.nb = ob,  Q.nc = oc
   const [, nb, nc] = normals(shape);
@@ -207,44 +251,53 @@ function findOne(img: PixelImage, L: Uint8Array, shape: HexShape, hint?: number)
   // the crossings are hex corners (two in three) and hex centres (one in three): walk along a line to find which, by seeing where the sides are drawn
   const s = fine.p / S3;
   const tb = { x: -nb.y, y: nb.x };
-  const t = Math.max(1, Math.min(12, (thickness(P.prof[0], q, mod(fine.ub + fine.uc + P.base[1] + P.base[2] - P.base[0], q)) + thickness(P.prof[1], q, fine.ub) + thickness(P.prof[2], q, fine.uc)) / 3));
+  const t = Math.max(1, Math.min(12, (thickness(P.prof[0], q, offs[0]) + thickness(P.prof[1], q, offs[1]) + thickness(P.prof[2], q, offs[2])) / 3));
+  const reach = Math.max(2, Math.round(t) + 2);
   let top: { cut: GridCut; score: number } | null = null;
   for (let j = 0; j < 3; j++) {
     const C = { x: Q.x + tb.x * s * j, y: Q.y + tb.y * s * j };
     const origin = shape === 'pointy' ? { x: C.x - fine.p / 2, y: C.y - fine.p / S3 } : { x: C.x - fine.p / S3, y: C.y - fine.p / 2 };
-    const per = shape === 'pointy' ? { x: fine.p, y: fine.p * S3 } : { x: fine.p * S3, y: fine.p };
-    const cut: GridCut = { on: true, p: round2(fine.p), x: round2(mod(origin.x, per.x)), y: round2(mod(origin.y, per.y)), t: round2(t), hex: shape };
-    const sc = sidesScore(L, W, H, cut, shape, Math.max(2, Math.round(t) + 2), sign);
+    const box = shape === 'pointy' ? { x: fine.p, y: fine.p * S3 } : { x: fine.p * S3, y: fine.p };
+    const cut: GridCut = { on: true, p: round2(fine.p), x: round2(mod(origin.x, box.x)), y: round2(mod(origin.y, box.y)), t: round2(t), hex: shape };
+    const sc = sideStats(L, W, H, cut, shape, reach, sign).mean;
     if (!top || sc > top.score) top = { cut, score: sc };
   }
-  if (!top || top.score < MIN_CONTRAST_HEX) return null;
-  const found: Found = { cut: top.cut, strength: top.score / ((P.noise[0] + P.noise[1] + P.noise[2]) / 3) };
-  // looking at every spacing, twice (or three times) the real one scores just as well on the lines alone: the real hexes are the smaller ones
-  // if their sides sit on drawn lines much better than the bigger ones' do
-  if (!hint) {
-    let best = found;
-    for (const k of [2, 3]) {
-      if (found.cut.p / k < 24) continue;
-      const sub = findOne(img, L, shape, found.cut.p / k);
-      if (sub && sub.strength > best.strength * 0.8) best = sub;
-    }
-    return best;
+  if (!top) return null;
+  const sure = hexStrength(L, W, H, top.cut, shape, reach, sign);
+  // the sides have to be there in all three directions, and stand out enough to be worth hiding
+  const found: Found | null = sure.strength < 1.5 || sure.contrast < MIN_CONTRAST_HEX * 1.5 ? null : { cut: top.cut, strength: round2(sure.strength) };
+  if (hint) return found;
+  // looking at every spacing, twice (or three times) the real one scores just as well on the lines alone, but hexes that size do not have
+  // their sides on drawn lines. So the half and third sizes are looked at too, and the smallest that fits nearly as well as the best is the answer.
+  let pick = found;
+  for (const k of [2, 3]) {
+    if (top.cut.p / k < 24) continue;
+    const sub = findOne(L, W, H, shape, top.cut.p / k);
+    if (sub && (!pick || sub.strength > pick.strength * 0.8)) pick = sub;
   }
-  return found;
+  return pick;
 }
 
 /**
  * Look for a hex grid printed on the picture. `shape` is the orientation to look for first; the other one is tried if nothing is found.
  * `hint` is the spacing you expect between hex centres in pixels of this picture. Returns null when nothing regular enough is there.
+ * `strength` runs from 0 to 10, like the square finder's.
  */
 export function findHexGrid(img: PixelImage, hint?: number, shape: HexShape = 'pointy'): Found | null {
-  if (img.width < 80 || img.height < 80) return null;
-  const L = luma(img);
+  const { width: W0, height: H0 } = img;
+  if (W0 < 80 || H0 < 80) return null;
+  const L0 = luma(img);
+  // the search is done on a copy of a sensible size (quicker, and thick lines on a huge map become ordinary ones) ...
+  const f = Math.max(1, Math.ceil(Math.max(W0, H0) / WORK_SIDE));
+  const small = f > 1 ? shrink(L0, W0, H0, f) : { L: L0 as Lum, W: W0, H: H0 };
   const other: HexShape = shape === 'pointy' ? 'flat' : 'pointy';
   // look both ways: lines that are not really hexes can still pass for them the wrong way round, so the better fit wins
-  const a = findOne(img, L, shape, hint);
-  const b = findOne(img, L, other, hint);
-  return a && b ? (b.strength > a.strength * 1.1 ? b : a) : a ?? b;
+  const a = findOne(small.L, small.W, small.H, shape, hint ? hint / f : undefined);
+  const b = findOne(small.L, small.W, small.H, other, hint ? hint / f : undefined);
+  const best = a && b ? (b.strength > a.strength * 1.1 ? b : a) : a ?? b;
+  if (!best || f === 1) return best;
+  // ... and then the lines are measured again on the picture itself, close to where the small copy put them
+  return findOne(L0, W0, H0, best.cut.hex!, best.cut.p * f, 0.02) ?? { cut: scaleCut(best.cut, f), strength: best.strength };
 }
 
 /**

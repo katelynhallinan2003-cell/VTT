@@ -9,9 +9,8 @@ import { altitudeOf, groundAt, heightChangeNote, heightNote, isRough, roughOf, s
 import { DEFAULT_CLIFF_FT, cliffSegs, rampCells, walkExtra, walkNote, type WalkExtra } from '../core/walk';
 import { EMPTY_TERRAIN, MAX_STROKE_CELLS, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, heightColor, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
-import { findGrid, scaleCut, type GridCut } from '../core/gridcut';
-import { AUTO_GRID_STRENGTH, impliedGrid } from '../core/mapgrid';
-import { findHexGrid } from '../core/hexcut';
+import { scaleCut, type GridCut } from '../core/gridcut';
+import { AUTO_GRID_STRENGTH, detectPrintedGrid, impliedGrid } from '../core/mapgrid';
 import { lightOf, viewerOf, type LightSrc, type Viewer } from '../core/light';
 import { LightLayer } from './LightLayer';
 import { DEFAULT_GRID, MAX_VIA } from '../core/model';
@@ -683,28 +682,8 @@ export class Board {
     // the grid you already set is a good guess at the spacing; if nothing is there, look at every spacing
     const hint = meta.grid.cell / (meta.mapScale * tex.scale);
     // a hex scene looks for hexes first, a square one for squares; either one still tries the other if nothing fits
-    const g = meta.grid;
-    const hexFirst = g.shape !== 'square';
-    // lines near the size of the grid you already have are looked for closely, but they only win when they are as clear as the best lines anywhere in the picture:
-    // a wrong guess can make a spacing that only touches some of the real lines (6 in 7, say) look like a grid
-    const squares = () => {
-      const near = hint >= 10 ? findGrid(px.img, hint) : null;
-      const all = findGrid(px.img);
-      return near && (!all || near.strength >= all.strength * 0.8) ? near : all ?? near;
-    };
-    const first = hexFirst ? (g.shape as 'pointy' | 'flat') : 'pointy';
-    // a grid size that is far off the printed one can make some other spacing look like hexes, so the hint only wins when it fits as well as looking at everything
-    const hexes = () => {
-      const a = hint >= 10 ? findHexGrid(px.img, hint, first) : null;
-      const b = findHexGrid(px.img, undefined, first);
-      return a && b ? (a.strength >= b.strength * 0.9 ? a : b) : a ?? b;
-    };
-    // `any`: no grid has been set up for this picture yet, so squares and hexes both get a look and the clearer one wins
-    const either = () => {
-      const s = squares(), h = hexes();
-      return s && h ? (h.strength > s.strength * 1.1 ? h : s) : s ?? h;
-    };
-    const f = opts.any ? either() : hexFirst ? hexes() ?? squares() : squares() ?? hexes();
+    // (`any`: no grid has been set up for this picture yet, so squares and hexes both get a look and the clearer one wins)
+    const f = detectPrintedGrid(px.img, { hint, shape: meta.grid.shape, any: opts.any });
     if (!f) return { error: 'I could not find evenly spaced grid lines in this picture. Some maps have none, or only faint ones.' };
     return { cut: { ...scaleCut(f.cut, tex.scale), on: true }, strength: f.strength };
   }

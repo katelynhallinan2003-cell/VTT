@@ -11,6 +11,12 @@ export type FogShape = 'rect' | 'poly' | 'brush';
 export type DockTab = 'scene' | 'tokens' | 'players';
 export type InitPos = 'top' | 'side';
 
+export function terrainBrushMode(u: UiData, gridless: boolean): UiData['heightMode'] {
+  if (u.heightMode === 'ramp' && (gridless || u.groundKind === 'rough')) return 'paint';
+  if (u.heightMode === 'move' && u.groundKind === 'rough') return 'paint';
+  return u.heightMode;
+}
+
 export interface UiData {
   tool: Tool;
   scaleStart: Vec | null;

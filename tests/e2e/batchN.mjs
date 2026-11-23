@@ -115,27 +115,23 @@ ts = await terrain();
 check('changing the height changes every stroke of the area', ts.filter((t) => t.hg === ar[0].id).every((t) => t.hz === 25) && (await ground(cx(11), cy(12))) === 25);
 check('the other area is untouched', (await ground(cx(13), cy(13))) === 20);
 
-// ---- an area can add to the ground under it
-await dm.locator('.ht-card .seg button', { hasText: 'Added on top' }).click();
-await sleep(300);
-ar = await areas();
-check('Adds to ground flips the area to additive', ar[0].add === true);
-check('with nothing under it, adding changes nothing: still 25', (await ground(cx(12), cy(12))) === 25);
-// areas stack in the order they were painted: a newer one that sets its height sits on top of an older one
-await drag([cx(12), cy(13)], [cx(13), cy(13)]);
-check('an older adding area painted over a newer 20 ft area is hidden by it (newer sits on top)', (await ground(cx(12), cy(13))) === 20, String(await ground(cx(12), cy(13))));
-// a new area made after both, set to add 5, stacks on whatever is under it
-await dm.keyboard.press('Escape');
+// ---- switching from a selected base to the additive brush leaves the base intact
 await dm.locator('.ht-card .seg button', { hasText: 'Added on top' }).click();
 await dm.locator('.ht-card .numf input').fill('5');
 await dm.locator('.ht-card .numf input').blur();
-await sleep(200);
+check('choosing +5 leaves the selected 25 ft base intact', !(await areas())[0].add && await ground(cx(12), cy(12)) === 25);
 await drag([cx(12), cy(12)], [cx(12), cy(13)]);
 check('a new area that adds 5 makes 25 ft over the 20 ft area', (await ground(cx(12), cy(13))) === 25, String(await ground(cx(12), cy(13))));
 check('and 30 ft over the 25 ft area', (await ground(cx(12), cy(12))) === 30, String(await ground(cx(12), cy(12))));
 await dm.screenshot({ path: '/tmp/shots/n2-stacked.png' });
+await click([cx(12), cy(13)]);
+check('a second +5 stroke stacks immediately without New area', await ground(cx(12), cy(13)) === 30 && await ground(cx(12), cy(12)) === 30);
+await dm.keyboard.press('Control+z');
+await sleep(300);
+check('undo removes only the last addition', await ground(cx(12), cy(13)) === 25);
 
 // ---- Sets height puts it back to an exact height
+await click([cx(12), cy(12)], { ctrl: true });
 await dm.locator('.ht-card .seg button', { hasText: 'Exact height' }).click();
 await sleep(300);
 check('Sets height: that ground is exactly 5 ft, whatever is under it', (await ground(cx(12), cy(13))) === 5 && (await ground(cx(12), cy(12))) === 5);
@@ -248,13 +244,42 @@ await dm.locator('.ht-card .numf input').fill('30');
 await dm.locator('.ht-card .numf input').blur();
 await sleep(350);
 check('its height can be changed', (await ground(cx(11), cy(4))) === 30);
-check('the Adds button is off for it (an old box cannot add)', await dm.locator('.ht-card .seg button', { hasText: 'Added on top' }).isDisabled());
+check('a new additive stroke can be started above an old box', await dm.locator('.ht-card .seg button', { hasText: 'Added on top' }).isEnabled());
 await dm.screenshot({ path: '/tmp/shots/n3-final.png' });
 
 // ---- clear all
 await dm.locator('.flyout .btn', { hasText: 'Clear all heights' }).click();
 await sleep(500);
 check('Clear all heights removes brush and box ground', (await areas()).length === 0 && (await terrain()).length === 0);
+
+// A gridless scene always uses a round brush, including after a gridded ramp or with Alt held.
+await dm.evaluate(async () => {
+  const { board, ui } = window.__vtt;
+  ui.set({ heightMode: 'ramp', heightSnap: true, heightFt: 15, heightAdds: false, heightBrush: 6 });
+  await board.chooseGridOverlay('none');
+});
+await dm.getByText('Brush diameter (ft)', { exact: true }).waitFor();
+check('gridless has a calibrated brush and no cell-fill or ramp controls', await dm.locator('.flyout .chips button.on').first().innerText() === String(6 * grid.ft) && await dm.getByText(/^Fill whole/).count() === 0 && await dm.locator('.flyout button', { hasText: /^Ramp$/ }).count() === 0);
+const gx = cx(12) + cell * 0.28, gy = cy(11) + cell * 0.23;
+await drag([gx, gy], [gx, gy], { alt: true });
+ts = await terrain();
+check('wide gridless dab is centred at the pointer and keeps its full diameter', ts.length === 1 && !ts[0].hc && Math.abs(ts[0].w - cell * 6) < 0.5 && Math.abs(pts(ts[0].p)[0][0] - gx) < 2);
+check('gridless brush has a round edge', await ground(gx + cell * 2.8, gy) === 15 && await ground(gx + 2.3 * cell, gy + 2.3 * cell) === 0);
+await dm.getByRole('button', { name: 'Added on top', exact: true }).click();
+await dm.locator('.ht-card .numf input').fill('-10');
+await dm.locator('.ht-card .numf input').blur();
+await click([gx, gy]);
+await click([gx, gy]);
+check('two gridless lowering strokes can dig below zero', await ground(gx, gy) === -5);
+await dm.getByRole('button', { name: 'Rub out', exact: true }).click();
+await dm.locator('.flyout .chips').first().getByRole('button', { name: String(grid.ft), exact: true }).click();
+await drag([gx, gy], [gx + cell * 0.7, gy]);
+check('gridless erasing follows the brush and leaves nearby ground intact', await ground(gx, gy) === 0 && await ground(gx, gy + cell) === -5 && !(await terrain()).at(-1).hc);
+await dm.getByRole('button', { name: 'Difficult', exact: true }).click();
+await dm.getByRole('button', { name: 'Paint', exact: true }).click();
+await drag([gx, gy], [gx + cell, gy], { alt: true });
+const difficult = await dm.evaluate(() => [...window.__vtt.client.scene.draws.values()].filter(d => d.dt));
+check('difficult ground uses a freehand path and preserves elevation', difficult.length === 1 && !difficult[0].hc && pts(difficult[0].p).length >= 2 && await ground(gx, gy) === 0);
 
 console.log(errors.length ? errors.join('\n') : 'no console problems');
 await browser.close();

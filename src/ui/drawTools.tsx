@@ -2,10 +2,11 @@ import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import type { Board } from '../board/Board';
 import { DRAW_COLORS, DRAW_NAME, FILL_LEVEL, FONTS, LINE_H, STROKE_CELLS, fillModeOf, fontStack, isTemplate, sizeFt, withSizeFt, type FillMode } from '../core/draw';
 import type { TableClient } from '../state/client';
-import type { DrawTool, StrokeSize, TemplateKind, UiState } from '../state/ui';
+import { terrainBrushMode, type DrawTool, type StrokeSize, type TemplateKind, type UiState } from '../state/ui';
 import { ZONE_PRESETS, roughOf, zoneColor, zonesOf } from '../core/height';
 import { areasSelected } from '../core/terrain';
 import { isHex } from '../core/hex';
+import { currentOverlay } from '../core/gridOverlay';
 import { WALL_KINDS, WALL_NAME, wallVisDefault, type WallKind } from '../core/walls';
 import type { Drawing } from '../types';
 import { Toggle, toast, useClient, useUi } from './common';
@@ -161,6 +162,8 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient }) {
   useClient(client);
   const grid = client.grid;
   const hex = isHex(grid);
+  const gridless = currentOverlay(grid) === 'none';
+  const mode = terrainBrushMode(d, gridless);
   const cellWord = hex ? 'hex' : 'square';
   const terrain = zonesOf(client.drawingsSorted(), grid);
   const sel = areasSelected(terrain, d.drawSel);
@@ -178,12 +181,15 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient }) {
   };
   const setAdds = (v: boolean) => {
     ui.set({ heightAdds: v });
+    if (v && mode === 'paint') {
+      ui.selectDrawings([]);
+      return;
+    }
     for (const a of paintable) void client.setArea(a, { ha: v });
   };
   const n = terrain.areas.length;
   const rough = d.groundKind === 'rough';
   const roughN = roughOf(client.drawingsSorted(), grid).areas.length;
-  const mode = rough && (d.heightMode === 'move' || d.heightMode === 'ramp') ? 'paint' : d.heightMode;
   const modes = rough ? ([['paint', 'Paint'], ['erase', 'Rub out']] as const) : ([['paint', 'Paint'], ['ramp', 'Ramp'], ['erase', 'Rub out'], ['move', 'Move']] as const);
   const cliff = client.scene?.meta?.cliff ?? 10;
   return (
@@ -195,19 +201,19 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient }) {
         ))}
       </div>
       <p class="hint">{rough
-        ? `Each ${cellWord} of difficult ground costs a walker one extra ${cellWord} of movement. Flyers are not slowed.`
+        ? 'Walking through difficult ground costs double movement. Flyers are not slowed.'
         : 'Paint high and low ground. A token that walks onto it stands at that height; flyers keep their own.'}</p>
       <div class="seg">
-        {modes.map(([k, label]) => (
+        {modes.filter(([k]) => !gridless || k !== 'ramp').map(([k, label]) => (
           <button key={k} class={mode === k ? 'on' : ''} onClick={() => ui.set({ heightMode: k })}>{label}</button>
         ))}
       </div>
       {mode !== 'move' && (
         <>
-          {mode !== 'ramp' && <Toggle checked={d.heightSnap} onChange={(v) => ui.set({ heightSnap: v })} label={`Fill whole ${cellWord}s`} hint="Hold Alt to flip this for one stroke." />}
-          <span class="field-label">{mode === 'ramp' ? `Ramp width (${cellWord}s)` : `Brush size (${d.heightSnap ? `${cellWord}s across` : 'cells wide'})`}</span>
+          {!gridless && mode !== 'ramp' && <Toggle checked={d.heightSnap} onChange={(v) => ui.set({ heightSnap: v })} label={`Fill whole ${cellWord}s`} hint="Hold Alt to flip this for one stroke." />}
+          <span class="field-label">{gridless ? 'Brush diameter (ft)' : mode === 'ramp' ? `Ramp width (${cellWord}s)` : `Brush size (${d.heightSnap ? `${cellWord}s across` : 'cells wide'})`}</span>
           <div class="chips">
-            {BRUSH_SIZES.map((x) => <button key={x} class={`chip ${d.heightBrush === x ? 'on' : ''}`} onClick={() => ui.set({ heightBrush: x })}>{x}</button>)}
+            {BRUSH_SIZES.map((x) => <button key={x} class={`chip ${d.heightBrush === x ? 'on' : ''}`} onClick={() => ui.set({ heightBrush: x })}>{gridless ? x * grid.ft : x}</button>)}
           </div>
         </>
       )}
@@ -243,20 +249,20 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient }) {
         </div>
         <div class="seg">
           <button class={!shownAdd ? 'on' : ''} disabled={editing && !paintable.length} title="This ground is exactly this high above the map base, whatever is under it" onClick={() => setAdds(false)}>Exact height</button>
-          <button class={shownAdd ? 'on' : ''} disabled={editing && !paintable.length} title="Raises (or lowers) whatever ground is already under it by this much, so overlapping areas stack: a 5 ft step on a 20 ft hill is 25 ft" onClick={() => setAdds(true)}>Added on top</button>
+          <button class={shownAdd ? 'on' : ''} disabled={mode !== 'paint' && editing && !paintable.length} title="Each new stroke adds its height to the ground beneath it" onClick={() => setAdds(true)}>Added on top</button>
         </div>
         {editing ? (
           <div class="row wrap">
             {paintable.length > 1 && <button class="btn small" title="Make these one area" onClick={() => void client.mergeAreas(paintable)}>Merge</button>}
             <button class="btn small danger" onClick={() => { void client.removeDrawings(mine.flatMap((a) => a.ids), 'Delete ground'); ui.selectDrawings([]); }}>Delete {one ? 'area' : 'areas'}</button>
           </div>
-        ) : <p class="hint">Strokes join into one area until you press New area or Esc.</p>}
+        ) : <p class="hint">{shownAdd ? 'Each separate stroke raises or lowers the ground once.' : 'Strokes join into one area until you press New area or Esc.'}</p>}
       </div>}
       {!rough && (
         <p class="hint">
           {mode === 'paint' && 'Paint or drag across the map. Ctrl-click an area to select it, then paint more onto it or change its height.'}
           {mode === 'erase' && (editing ? 'Rubs out of the selected area only.' : 'Rubs out of every area. Select an area first to rub out of just that one.')}
-          {mode === 'move' && `Click an area to select it, then drag it. Ground made of whole ${cellWord}s moves a ${cellWord} at a time (Alt moves it freely). Shift-click adds more.`}
+          {mode === 'move' && (gridless ? 'Drag an area to move it freely. Shift-click adds more.' : `Click an area to select it, then drag it. Ground made of whole ${cellWord}s moves a ${cellWord} at a time (Alt moves it freely). Shift-click adds more.`)}
         </p>
       )}
       {rough && <p class="hint">{mode === 'paint' ? 'Paint or drag across the map.' : 'Rubs out difficult ground wherever you drag.'}</p>}

@@ -198,7 +198,7 @@ export function normalizeDrawing(id: string, raw: any): Drawing | null {
     k: raw.k,
     p: raw.p,
     color: str(raw.color, '#e03131'),
-    w: Math.min(200, Math.max(0.5, num(raw.w, 4))),
+    w: raw.k === 'terrain' ? Math.max(1, num(raw.w, 4)) : Math.min(200, Math.max(0.5, num(raw.w, 4))),
     fill: Math.min(1, Math.max(0, num(raw.fill, 0))),
     fc: typeof raw.fc === 'string' && /^#[0-9a-fA-F]{6}$/.test(raw.fc) ? raw.fc : '',
     dash: bool(raw.dash, false),

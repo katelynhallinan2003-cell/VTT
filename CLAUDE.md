@@ -48,6 +48,8 @@ Read `CLAUDE.md` (this file) and `WIP.md` before doing anything else in a sessio
 
 ## Design precedents
 
+- **Terrain brushes.** In Paint, choosing Added on top starts a fresh stroke above existing ground. Each gesture adds its height once where it passes. Gridless scenes use round brushes sized in calibrated feet for height, difficult ground and erasing.
+
 - **Printed square grids.** Learn the ink's RGB shift from repeated strokes and nearby terrain. On dotted JPEGs, account for the recurring light and dark fringes around the dots. Check the rendered result at native-pixel zoom on both smooth ground and painted edges.
 
 - **Map scans and display resolution.** Detect printed grids on a bounded sample of the original picture. A device can shrink the displayed texture independently. Store the detected spacing in original picture pixels.

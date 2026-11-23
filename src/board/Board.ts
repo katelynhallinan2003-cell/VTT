@@ -16,7 +16,7 @@ import { LightLayer } from './LightLayer';
 import { DEFAULT_GRID, MAX_VIA } from '../core/model';
 import { pctOf, toPub, visionCircles, withoutLights } from '../core/combat';
 import type { DrawingPatch, TableClient } from '../state/client';
-import type { StrokeSize, UiState } from '../state/ui';
+import { terrainBrushMode, type StrokeSize, type UiState } from '../state/ui';
 import type { Ambient, Aura, DrawKind, Drawing, GridSettings, Ping, Rect, Token, Vec } from '../types';
 import { throttle } from '../core/throttle';
 import { TokenView, isLightMark, type TokenCtx } from './TokenView';
@@ -1931,7 +1931,10 @@ export class Board {
       this.plotLabel(li++, `${u.rampTo} ft`, d.b.x, d.b.y - Math.max(grid.cell * 0.7, 18 / z), 0xffffff);
     }
     if (d?.kind === 'terrain') li = this.paintBrush(g, z, d.last, d, li);
-    else if (!d && u.tool === 'height' && (u.heightMode === 'paint' || u.heightMode === 'erase' || u.groundKind === 'rough') && this.pointerW && this.client.isDM) li = this.paintBrush(g, z, this.pointerW, null, li);
+    else if (!d && u.tool === 'height' && this.pointerW && this.client.isDM) {
+      const mode = terrainBrushMode(u, currentOverlay(grid) === 'none');
+      if (mode === 'paint' || mode === 'erase') li = this.paintBrush(g, z, this.pointerW, null, li);
+    }
     if (d?.kind === 'drawmove' && d.moved) this.paintMoveGhost(g, d);
 
     // the Walls tool: the wall being drawn, the next point, a selection box
@@ -2405,8 +2408,8 @@ export class Board {
   private startHeight(w: Vec, e: PointerEvent) {
     const u = this.ui.data;
     const rough = u.groundKind === 'rough';
-    // difficult ground can only be painted and rubbed out
-    const mode = rough && (u.heightMode === 'move' || u.heightMode === 'ramp') ? 'paint' : u.heightMode;
+    const gridless = currentOverlay(this.client.grid) === 'none';
+    const mode = terrainBrushMode(u, gridless);
     if (mode === 'ramp') {
       const grid = this.client.grid;
       const free = e.altKey;
@@ -2428,16 +2431,19 @@ export class Board {
       const mine = this.selectedAreas();
       const ids = mine.flatMap((x) => x.ids).filter((id) => { const d = this.client.scene?.draws.get(id); return !!d && this.client.canEditDrawing(d); });
       if (!ids.length) return;
-      const snap = !e.altKey && mine.some((x) => x.paint.some((s) => s.kind === 'cells'));
+      const snap = !gridless && !e.altKey && mine.some((x) => x.paint.some((s) => s.kind === 'cells'));
       this.drag = { kind: 'drawmove', ids, start: w, dx: 0, dy: 0, moved: false, snap };
       return;
     }
     const erase = mode === 'erase';
     const cur = rough ? null : this.currentArea();
+    const add = !rough && !erase && (cur?.add ?? u.heightAdds);
+    // Each additive gesture goes above the ground already there, even if the previous area is selected.
+    const group = rough ? 'dt' : erase ? cur?.id ?? '' : add ? newAreaId() : cur?.id ?? newAreaId();
     const d: Extract<Drag, { kind: 'terrain' }> = {
-      kind: 'terrain', erase, group: rough ? 'dt' : cur?.id ?? (erase ? '' : newAreaId()), rough,
-      h: rough ? 1 : cur ? cur.h : u.heightFt, add: cur ? cur.add : u.heightAdds,
-      cells: u.heightSnap !== e.altKey ? new Map() : null, pts: [], last: w, size: u.heightBrush,
+      kind: 'terrain', erase, group, rough,
+      h: rough ? 1 : cur?.h ?? u.heightFt, add,
+      cells: !gridless && u.heightSnap !== e.altKey ? new Map() : null, pts: [], last: w, size: u.heightBrush,
     };
     this.drag = d;
     this.paintTerrainAt(d, w, true);
@@ -2453,6 +2459,7 @@ export class Board {
       }
     } else if (first) d.pts = [w];
     else if (Math.hypot(w.x - d.last.x, w.y - d.last.y) * this.cam.zoom > 2) d.pts.push(w);
+    else return; // accumulate slow pointer movement from the last recorded point
     d.last = w;
   }
 
@@ -2488,7 +2495,12 @@ export class Board {
     const keep = cur.length === 1 && cur[0].id === d.group ? cur[0].ids : [];
     void this.client.addDrawing(
       { k: 'terrain', p: joinPts(pts), color: col, w: wpx, fill: 0, fc: '', dash: false, txt: '', fs: 28, bw: 5, hz: d.erase ? null : d.h, hg: d.group, ha: !d.erase && d.add, he: d.erase, hc: !!d.cells, ...(d.rough ? { dt: true } : {}) },
-      { label: d.rough ? (d.erase ? 'Rub out difficult ground' : 'Paint difficult ground') : d.erase ? 'Rub out ground' : 'Paint ground', onId: (id) => { if (!d.erase && !d.rough) this.ui.selectDrawings([...keep, id]); } },
+      { label: d.rough ? (d.erase ? 'Rub out difficult ground' : 'Paint difficult ground') : d.erase ? 'Rub out ground' : 'Paint ground', onId: (id) => {
+        if (!d.erase && !d.rough) {
+          if (d.add) this.ui.set({ heightAdds: true, heightFt: d.h, drawSel: new Set() });
+          else this.ui.selectDrawings([...keep, id]);
+        }
+      } },
     ).catch((err: Error) => this.cb.onNotice(err.message, 'error'));
   }
 
@@ -2502,7 +2514,7 @@ export class Board {
     const h = d ? d.h : cur ? cur.h : u.heightFt;
     const add = d ? d.add : cur ? cur.add : u.heightAdds;
     const col = erase ? 0xff6b6b : rough ? 0xc8791b : num(heightColor(h));
-    const snap = d ? !!d.cells : u.heightSnap !== !!this.altDown;
+    const snap = d ? !!d.cells : currentOverlay(grid) !== 'none' && u.heightSnap !== !!this.altDown;
     const n = d ? d.size : u.heightBrush;
     if (snap) {
       const cells = d?.cells ? [...d.cells.values()] : cellsAlong(grid, at, at, n);

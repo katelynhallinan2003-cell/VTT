@@ -3,7 +3,7 @@ import { FONT_KEYS, type FillMode, type SphereSnap } from '../core/draw';
 import type { Effect, Vec } from '../types';
 import type { Side, WallKind, WallSnap } from '../core/walls';
 
-export type Tool = 'select' | 'grid' | 'scale' | 'fog' | 'draw' | 'template' | 'ruler' | 'height' | 'wall';
+export type Tool = 'select' | 'grid' | 'scale' | 'fog' | 'draw' | 'template' | 'ruler' | 'height' | 'wall' | 'light';
 export type DrawTool = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'erase';
 export type TemplateKind = 'cone' | 'cube' | 'sphere' | 'emanation' | 'beam';
 export type StrokeSize = 'thin' | 'medium' | 'thick';
@@ -12,8 +12,8 @@ export type DockTab = 'scene' | 'tokens' | 'players';
 export type InitPos = 'top' | 'side';
 
 export function terrainBrushMode(u: UiData, gridless: boolean): UiData['heightMode'] {
-  if (u.heightMode === 'ramp' && (gridless || u.groundKind !== 'height')) return 'paint';
-  if (u.heightMode === 'move' && u.groundKind !== 'height') return 'paint';
+  if (u.heightMode === 'ramp' && (gridless || u.groundKind === 'rough')) return 'paint';
+  if (u.heightMode === 'move' && u.groundKind === 'rough') return 'paint';
   return u.heightMode;
 }
 
@@ -88,7 +88,11 @@ export interface UiData {
   /** what the Heights brush does: paint ground, rub ground out, or select and move an area */
   heightMode: 'paint' | 'ramp' | 'erase' | 'move';
   /** what the Heights brush lays down: height, or difficult ground */
-  groundKind: 'height' | 'rough' | 'day';
+  groundKind: 'height' | 'rough';
+  /** what the Light tool paints: daylight, dim light, or erases both */
+  lightPaint: 'day' | 'dim' | 'erase';
+  /** the Light tool's brush, in feet across */
+  lightBrush: number;
   /** a ramp climbs (or falls) from this many feet at the end you press on to that many at the other end */
   rampFrom: number;
   rampTo: number;
@@ -181,7 +185,9 @@ export class UiState {
     fxJump: readFlag('vtt-fx-jump', true), fxDraft: null,
     heightFt: (() => { try { const n = Number(localStorage.getItem('vtt-height-ft')); return Number.isFinite(n) && localStorage.getItem('vtt-height-ft') !== null ? n : 10; } catch { return 10; } })(),
     heightMode: readStr('vtt-height-mode', 'paint', ['paint', 'ramp', 'erase', 'move'] as const),
-    groundKind: readStr('vtt-ground-kind', 'height', ['height', 'rough', 'day'] as const),
+    groundKind: readStr('vtt-ground-kind', 'height', ['height', 'rough'] as const),
+    lightPaint: readStr('vtt-light-paint', 'day', ['day', 'dim', 'erase'] as const),
+    lightBrush: (() => { try { const n = Number(localStorage.getItem('vtt-light-brush')); return Number.isFinite(n) && n >= 5 && n <= 200 ? n : 20; } catch { return 20; } })(),
     rampFrom: (() => { try { const n = Number(localStorage.getItem('vtt-ramp-from')); return Number.isFinite(n) && localStorage.getItem('vtt-ramp-from') !== null ? n : 0; } catch { return 0; } })(),
     rampTo: (() => { try { const n = Number(localStorage.getItem('vtt-ramp-to')); return Number.isFinite(n) && localStorage.getItem('vtt-ramp-to') !== null ? n : 20; } catch { return 20; } })(),
     heightSnap: readFlag('vtt-height-snap', true),
@@ -242,6 +248,8 @@ export class UiState {
       if (patch.heightFt !== undefined) localStorage.setItem('vtt-height-ft', String(patch.heightFt));
       if (patch.heightMode !== undefined) localStorage.setItem('vtt-height-mode', patch.heightMode);
       if (patch.groundKind !== undefined) localStorage.setItem('vtt-ground-kind', patch.groundKind);
+      if (patch.lightPaint !== undefined) localStorage.setItem('vtt-light-paint', patch.lightPaint);
+      if (patch.lightBrush !== undefined) localStorage.setItem('vtt-light-brush', String(patch.lightBrush));
       if (patch.rampFrom !== undefined) localStorage.setItem('vtt-ramp-from', String(patch.rampFrom));
       if (patch.rampTo !== undefined) localStorage.setItem('vtt-ramp-to', String(patch.rampTo));
       if (patch.heightSnap !== undefined) localStorage.setItem('vtt-height-snap', patch.heightSnap ? '1' : '0');

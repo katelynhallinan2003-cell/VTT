@@ -7,7 +7,7 @@ import { uploadImage } from './uploads';
 type View = { v: 'list' } | { v: 'edit'; id: string | null } | { v: 'show'; id: string } | { v: 'read'; id: string };
 
 /** Who a handout is being shown to, in words. */
-function shownTo(client: TableClient, h: Handout): string {
+export function shownTo(client: TableClient, h: Handout): string {
   if (!h.shown) return 'Not shown';
   if (!h.to) return 'Shown to everyone';
   const names = h.to.map((u) => client.players.get(u)?.name).filter((n): n is string => !!n);
@@ -34,19 +34,20 @@ function Reader(props: { h: Handout }) {
  * Handouts. The DM makes them, shows them to everyone or to some players, and takes them back. A player sees only what is being
  * shown to them, and a handout opens on their screen the moment the DM shows it.
  */
-export function HandoutsModal(props: { client: TableClient; openId?: string | null; onClose: () => void }) {
+export function HandoutsModal(props: { client: TableClient; openId?: string | null; /** open straight into changing this one */ editId?: string | null; onClose: () => void }) {
   const { client } = props;
   useClient(client);
-  const [view, setView] = useState<View>(props.openId ? { v: 'read', id: props.openId } : { v: 'list' });
+  const first = props.editId && client.isDM ? client.handouts.get(props.editId) ?? null : null;
+  const [view, setView] = useState<View>(first ? { v: 'edit', id: first.id } : props.openId ? { v: 'read', id: props.openId } : { v: 'list' });
   const list = client.handoutList();
   const dm = client.isDM;
   const players = [...client.players.values()].filter((p) => !p.dm);
 
   // ---- the form for making or changing one
   const editing = view.v === 'edit' ? (view.id ? client.handouts.get(view.id) ?? null : null) : null;
-  const [title, setTitle] = useState('');
-  const [text, setText] = useState('');
-  const [img, setImg] = useState<string | null>(null);
+  const [title, setTitle] = useState(first?.title ?? '');
+  const [text, setText] = useState(first?.text ?? '');
+  const [img, setImg] = useState<string | null>(first?.img ?? null);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const openEdit = (id: string | null) => {

@@ -1,5 +1,6 @@
 import type { Ambient, GridSettings, Token, TokenLight, Vec } from '../types';
 import { cellPoly } from './cells';
+import { liftField } from './paintedlight';
 import type { Terrain } from './terrain';
 import { visibilityPolygon, type Seg } from './walls';
 
@@ -180,25 +181,47 @@ export function eraseStops(b: number, r: number, ambient: Ambient): [number, num
   return stops;
 }
 
+/** A canvas to work on, sized for the job. */
+export interface Scratch {
+  canvas: HTMLCanvasElement | OffscreenCanvas;
+  ctx: Ctx;
+  size(w: number, h: number): void;
+}
+
+/** Painted light as it lies on the map: daylight, dim light, and how far each fades out beyond what was painted (world pixels). */
+export interface PaintedLight {
+  day: Terrain | null;
+  dim: Terrain | null;
+  edge: number;
+}
+export const hasPaintedLight = (p: PaintedLight | null | undefined): p is PaintedLight => !!p && (!!p.day?.areas.length || !!p.dim?.areas.length);
+
 /**
- * The shape of the daylight the DM painted: white where the sun shines, see-through elsewhere. Strokes go down in the order they
- * were made, and an erase stroke takes daylight away again. Free strokes are round brushes, cell strokes are whole squares or hexes.
+ * The strokes of one kind of painted light, in the order they were made (an erase stroke takes light away again): white on see-through.
+ * Free strokes are round brushes; strokes of whole squares or hexes are one shape, so there are no seams along the grid.
  */
-export function paintDayMask(ctx: Ctx, f: Frame, day: Terrain): void {
+export function paintStrokes(ctx: Ctx, f: Frame, t: Terrain): void {
   toScreen(ctx);
   ctx.globalCompositeOperation = 'source-over';
   ctx.clearRect(0, 0, f.w, f.h);
-  if (!day.areas.length) return;
+  if (!t.areas.length) return;
   toWorld(ctx, f);
   ctx.fillStyle = '#fff';
   ctx.strokeStyle = '#fff';
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  const strokes = day.areas.flatMap((a) => a.strokes).sort((a, b) => a.t - b.t || (a.id < b.id ? -1 : 1));
+  const strokes = t.areas.flatMap((a) => a.strokes).sort((a, b) => a.t - b.t || (a.id < b.id ? -1 : 1));
   for (const s of strokes) {
     ctx.globalCompositeOperation = s.erase ? 'destination-out' : 'source-over';
     if (s.kind === 'cells') {
-      for (const c of s.pts) { path(ctx, cellPoly(day.grid, c)); ctx.fill(); }
+      ctx.beginPath();
+      for (const c of s.pts) {
+        const poly = cellPoly(t.grid, c);
+        ctx.moveTo(poly[0].x, poly[0].y);
+        for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+        ctx.closePath();
+      }
+      ctx.fill();
     } else if (s.kind === 'free' && s.pts.length) {
       if (s.pts.length === 1) {
         ctx.beginPath();
@@ -218,11 +241,48 @@ export function paintDayMask(ctx: Ctx, f: Frame, day: Terrain): void {
 }
 
 /**
+ * How much of the dark the painted light lifts, as white on `ctx` (a canvas of frame `f`): see-through where it lifts nothing.
+ * Daylight lifts all of it and dim light half (and only in the dark: in twilight everything is dim already); out to the soft edge
+ * it fades to nothing. `graded` false gives a plain lit-or-not shape (for sight). The soft edge is worked out on a coarser grid, which also keeps it smooth.
+ */
+export function paintLift(ctx: Ctx, f: Frame, p: PaintedLight, ambient: Ambient, graded: boolean, work: { a: Scratch; c: Scratch }): void {
+  toScreen(ctx);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.clearRect(0, 0, f.w, f.h);
+  const kinds: [Terrain, number][] = [];
+  if (p.day?.areas.length) kinds.push([p.day, 1]);
+  if (p.dim?.areas.length && ambient === 'dark') kinds.push([p.dim, 0.5]);
+  if (!kinds.length) return;
+  const k = p.edge > 0 ? Math.max(1, Math.ceil(Math.max(f.w, f.h) / 400)) : 1;
+  const g: Frame = { origin: f.origin, scale: f.scale / k, w: Math.ceil(f.w / k), h: Math.ceil(f.h / k) };
+  work.a.size(g.w, g.h);
+  work.c.size(g.w, g.h);
+  const total = new Float32Array(g.w * g.h);
+  for (const [t, lift] of kinds) {
+    paintStrokes(work.a.ctx, g, t);
+    const px = work.a.ctx.getImageData(0, 0, g.w, g.h).data;
+    const cover = new Float32Array(g.w * g.h);
+    for (let i = 0; i < cover.length; i++) cover[i] = px[i * 4 + 3] / 255;
+    const one = liftField(cover, g.w, g.h, p.edge * g.scale, lift, graded);
+    for (let i = 0; i < total.length; i++) if (one[i] > total[i]) total[i] = one[i];
+  }
+  const img = work.c.ctx.createImageData(g.w, g.h);
+  for (let i = 0; i < total.length; i++) {
+    img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = 255;
+    img.data[i * 4 + 3] = Math.round(total[i] * 255);
+  }
+  work.c.ctx.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(work.c.canvas as CanvasImageSource, 0, 0, g.w, g.h, 0, 0, g.w * k, g.h * k);
+}
+
+/**
  * Paint the darkness of a scene onto a canvas: a night-coloured wash, with each light lifting it where it reaches
  * and each viewer's darkvision lifting it by half. The canvas ends up see-through where it is bright.
- * `day`: a canvas of the same size with the painted daylight on it (see `paintDayMask`), which clears the wash completely.
+ * `lift`: a canvas of the same size with how much the painted light lifts the dark (see `paintLift`).
  */
-export function paintShade(ctx: Ctx, f: Frame, ambient: Ambient, lights: LightSrc[], viewers: Viewer[], segs: Seg[], day: CanvasImageSource | null = null): void {
+export function paintShade(ctx: Ctx, f: Frame, ambient: Ambient, lights: LightSrc[], viewers: Viewer[], segs: Seg[], lift: CanvasImageSource | null = null): void {
   toScreen(ctx);
   ctx.globalCompositeOperation = 'source-over';
   ctx.clearRect(0, 0, f.w, f.h);
@@ -256,9 +316,9 @@ export function paintShade(ctx: Ctx, f: Frame, ambient: Ambient, lights: LightSr
       ctx.fill();
     }
   }
-  if (day) {
+  if (lift) {
     toScreen(ctx);
-    ctx.drawImage(day, 0, 0);
+    ctx.drawImage(lift, 0, 0);
   }
   ctx.globalCompositeOperation = 'source-over';
 }
@@ -294,9 +354,9 @@ const hexRgb = (c: string): string => {
 /**
  * What the party sees when it is dark, painted as an opaque shape on `seen`: each viewer's sight where a light reaches
  * (drawn on `lit` first), plus what its darkvision and its own touch give. `lit` is scratch space of the same size.
- * `day`: the painted daylight (see `paintDayMask`), which counts as lit wherever a viewer can see it.
+ * `lit`: the painted light (see `paintLift`), which counts as lit wherever a viewer can see it.
  */
-export function paintSeen(seen: Ctx, lit: Ctx, f: Frame, lights: LightSrc[], viewers: Viewer[], segs: Seg[], day: CanvasImageSource | null = null): void {
+export function paintSeen(seen: Ctx, lit: Ctx, f: Frame, lights: LightSrc[], viewers: Viewer[], segs: Seg[], paint: CanvasImageSource | null = null): void {
   toScreen(lit);
   lit.globalCompositeOperation = 'source-over';
   lit.clearRect(0, 0, f.w, f.h);
@@ -308,9 +368,9 @@ export function paintSeen(seen: Ctx, lit: Ctx, f: Frame, lights: LightSrc[], vie
     path(lit, poly);
     lit.fill();
   }
-  if (day) {
+  if (paint) {
     toScreen(lit);
-    lit.drawImage(day, 0, 0);
+    lit.drawImage(paint, 0, 0);
   }
   toScreen(seen);
   seen.globalCompositeOperation = 'source-over';

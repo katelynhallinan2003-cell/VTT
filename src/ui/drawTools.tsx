@@ -3,7 +3,7 @@ import type { Board } from '../board/Board';
 import { DRAW_COLORS, DRAW_NAME, FILL_LEVEL, FONTS, LINE_H, STROKE_CELLS, fillModeOf, fontStack, isTemplate, sizeFt, withSizeFt, type FillMode } from '../core/draw';
 import type { TableClient } from '../state/client';
 import { terrainBrushMode, type DrawTool, type StrokeSize, type TemplateKind, type UiState } from '../state/ui';
-import { ZONE_PRESETS, dayOf, roughOf, zoneColor, zonesOf } from '../core/height';
+import { ZONE_PRESETS, roughOf, zoneColor, zonesOf } from '../core/height';
 import { areasSelected } from '../core/terrain';
 import { isHex } from '../core/hex';
 import { currentOverlay } from '../core/gridOverlay';
@@ -189,29 +189,24 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
   };
   const n = terrain.areas.length;
   const rough = d.groundKind === 'rough';
-  const day = d.groundKind === 'day';
-  const layer = rough || day;
-  const dayN = dayOf(client.drawingsSorted(), grid).areas.length;
-  const ambient = client.scene?.meta?.light.ambient ?? 'bright';
   const roughN = roughOf(client.drawingsSorted(), grid).areas.length;
-  const modes = layer ? ([['paint', 'Paint'], ['erase', 'Erase']] as const) : ([['paint', 'Paint'], ['ramp', 'Ramp'], ['erase', 'Erase'], ['move', 'Select']] as const);
+  const modes = rough ? ([['paint', 'Paint'], ['erase', 'Erase']] as const) : ([['paint', 'Paint'], ['ramp', 'Ramp'], ['erase', 'Erase'], ['move', 'Select']] as const);
   const cliff = client.scene?.meta?.cliff ?? 10;
   return (
     <div class="flyout">
       <div class="flyout-title">Heights</div>
       <div class="seg">
-        {([['height', 'Heights'], ['rough', 'Difficult'], ['day', 'Daylight']] as const).map(([k, label]) => (
+        {([['height', 'Heights'], ['rough', 'Difficult']] as const).map(([k, label]) => (
           <button key={k} class={d.groundKind === k ? 'on' : ''} onClick={() => ui.set({ groundKind: k })}>{label}</button>
         ))}
       </div>
       {rough && <p class="hint">Walking through difficult ground costs double movement. Flyers are not slowed.</p>}
-      {day && <p class="hint">The sun lights this ground even when the scene is dim or dark.{ambient === 'bright' && ' Set the scene light to Dim or Dark to see it.'}</p>}
       <div class="seg">
         {modes.filter(([k]) => !gridless || k !== 'ramp').map(([k, label]) => (
           <button key={k} class={mode === k ? 'on' : ''} onClick={() => ui.set({ heightMode: k })}>{label}</button>
         ))}
       </div>
-      {!layer && mode === 'paint' && props.onFromColor && <button class="btn small" title="Pick a colour on the map picture (water, a pit) and paint every place with it at a height" onClick={props.onFromColor}>Paint height from a colour…</button>}
+      {!rough && mode === 'paint' && props.onFromColor && <button class="btn small" title="Pick a colour on the map picture (water, a pit) and paint every place with it at a height" onClick={props.onFromColor}>Paint height from a colour…</button>}
       {mode !== 'move' && (
         <>
           {!gridless && mode !== 'ramp' && <Toggle checked={d.heightSnap} onChange={(v) => ui.set({ heightSnap: v })} label={`Fill whole ${cellWord}s`} hint="Hold Alt to flip this for one stroke." />}
@@ -228,14 +223,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
           {roughN > 0 && <button class="btn small danger" onClick={async () => { const c = await client.clearDrawings((x) => !!x.dt, 'Clear difficult ground'); toast(c ? 'Cleared the difficult ground' : 'Nothing to clear', 'info', 1800); }}>Clear difficult ground</button>}
         </div>
       )}
-      {day && (
-        <div class="row wrap">
-          <span class="hint">{dayN ? 'Daylight is on this map' : 'No daylight yet'}</span>
-          <span class="grow" />
-          {dayN > 0 && <button class="btn small danger" onClick={async () => { const c = await client.clearDrawings((x) => !!x.dl, 'Clear daylight'); toast(c ? 'Cleared the daylight' : 'Nothing to clear', 'info', 1800); }}>Clear daylight</button>}
-        </div>
-      )}
-      {!layer && mode === 'ramp' && (
+      {!rough && mode === 'ramp' && (
         <div class="ht-card">
           <strong>Ramp</strong>
           <NumField label="Start" value={d.rampFrom} min={-1000} max={5000} step={5} unit="ft" title="How high the ground is where you press the mouse button" onCommit={(v) => ui.set({ rampFrom: Math.round(v) })} />
@@ -246,7 +234,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
           </div>
         </div>
       )}
-      {!layer && mode !== 'ramp' && <div class="ht-card">
+      {!rough && mode !== 'ramp' && <div class="ht-card">
         <div class="row">
           <strong>{editing ? (one ? 'Selected ground' : `${mine.length} areas selected`) : 'Next ground you paint'}</strong>
           <span class="grow" />
@@ -269,15 +257,15 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
           </div>
         ) : <p class="hint">{shownAdd ? 'Each separate stroke raises or lowers the ground once.' : 'Strokes join into one area until you press New area or Esc.'}</p>}
       </div>}
-      {!layer && (
+      {!rough && (
         <p class="hint">
           {mode === 'paint' && 'Paint or drag across the map. Ctrl-click an area to select it, then paint more onto it or change its height.'}
           {mode === 'erase' && (editing ? 'Erases from the selected area only.' : 'Erases from every area. Select an area first to erase from just that one.')}
           {mode === 'move' && (gridless ? 'Click an area to select it and change its height. Drag it to move it freely. Shift-click adds more.' : `Click an area to select it and change its height. Drag it to move it: ground made of whole ${cellWord}s moves a ${cellWord} at a time (Alt moves it freely). Shift-click adds more.`)}
         </p>
       )}
-      {layer && <p class="hint">{mode === 'paint' ? 'Paint or drag across the map.' : `Erases ${day ? 'daylight' : 'difficult ground'} wherever you drag.`}</p>}
-      {!layer && client.isDM && (
+      {rough && <p class="hint">{mode === 'paint' ? 'Paint or drag across the map.' : 'Erases difficult ground wherever you drag.'}</p>}
+      {!rough && client.isDM && (
         <div style={{ margin: '8px 0' }}>
           <NumField label="Steepest climb" value={cliff} min={0} max={1000} step={5} unit="ft" title="At 10 ft, ground that rises more than 10 ft within 10 horizontal feet is a cliff and stops a walker. This includes overlapping brushes. A single 5 ft step is walkable. The distance sideways scales with this number. Set to 0 to turn off automatic cliffs."
             onCommit={(v) => void client.updateScene({ cliff: Math.max(0, Math.round(v)) })} />

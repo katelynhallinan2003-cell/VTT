@@ -17,6 +17,8 @@ export const roughOf = (draws: Iterable<Drawing>, grid: GridSettings): Terrain =
 export const dayOf = (draws: Iterable<Drawing>, grid: GridSettings): Terrain => terrainOf(draws, grid, 'day');
 /** Is this point in daylight? */
 export const isDay = (day: Terrain, p: Vec): boolean => day.areas.length > 0 && groundAtTerrain(day, p) > 0;
+/** Dim light painted onto the ground (a layer of its own, like daylight). */
+export const dimOf = (draws: Iterable<Drawing>, grid: GridSettings): Terrain => terrainOf(draws, grid, 'dim');
 /** Is the ground at this point difficult? */
 export const isRough = (rough: Terrain, p: Vec): boolean => rough.areas.length > 0 && groundAtTerrain(rough, p) > 0;
 

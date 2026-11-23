@@ -2,6 +2,7 @@ import { isLightMark } from '../core/light';
 import { useMemo, useRef, useState } from 'preact/hooks';
 import { healthState, HEALTH_LABEL, pctOf } from '../core/combat';
 import { MAX_EXTRA_MAPS, TOKEN_SIZES, gridColorToSave } from '../core/model';
+import { MAX_BLANK_SQUARES, clampSquares, isBlankMap, isBlankPage } from '../core/blankgrid';
 import { gridPeriod, isHex } from '../core/hex';
 import { currentOverlay } from '../core/gridOverlay';
 import { GridChoices } from './GridChoices';
@@ -212,42 +213,52 @@ function HpControl(props: { client: TableClient; tokens: Token[] }) {
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Find the grid that is printed on the map picture, hide it on screen, and optionally line the app's own grid up with it. */
-/** More map pictures in the same scene: laid out beside or over the first, each moved, sized, locked, shown to players or hidden on its own. */
-function ExtraMaps(props: { client: TableClient; meta: SceneMeta; ui: UiState; board: Board | null }) {
-  const { client, meta, ui, board } = props;
+/** More maps in the same scene: laid out beside or over the first, each moved, sized, locked, shown to players or hidden on its own. */
+function ExtraMaps(props: { client: TableClient; meta: SceneMeta; ui: UiState; onAdd?: () => void }) {
+  const { client, meta, ui } = props;
   const d = useUi(ui);
-  const [busy, setBusy] = useState(false);
   const scaleT = useThrottled((a: { id: string; scale: number }) => { void client.updateExtraMap(a.id, { scale: a.scale }); });
-  async function add(f: File) {
-    setBusy(true);
-    try {
-      const up = await uploadImage(client, f, 'map', f.name);
-      const id = await client.addExtraMap(up.url, up.w, up.h, f.name.replace(/\.[^.]+$/, ''));
-      if (id) { ui.set({ extraSel: id, mapSelected: false, selection: new Set(), drawSel: new Set() }); setTimeout(() => board?.fitClearOfPanel(), 250); }
-      toast('Map added to the right of the first one. Drag it into place, then lock it.', 'ok', 5000);
-    } catch (e) { toast((e as Error).message, 'error'); } finally { setBusy(false); }
-  }
+  const cell = meta.grid.cell;
   return (
     <>
-      {meta.maps.map((m, i) => (
-        <div key={m.id} class={`extra-map ${d.extraSel === m.id ? 'on' : ''}`}>
-          <div class="row" style={{ marginBottom: '6px' }}>
-            <input type="text" value={m.name} placeholder={`Map ${i + 2}`} maxLength={60} aria-label="Map name" onChange={(e) => void client.updateExtraMap(m.id, { name: (e.target as HTMLInputElement).value })} />
-            <button class="btn small" title="Remove this map picture from the scene (the picture itself is not deleted)" onClick={() => { if (d.extraSel === m.id) ui.set({ extraSel: null }); void client.removeExtraMap(m.id); }}>Remove</button>
+      {meta.maps.map((m, i) => {
+        const blank = isBlankMap(m.url);
+        return (
+          <div key={m.id} class={`extra-map ${d.extraSel === m.id ? 'on' : ''}`}>
+            <div class="row" style={{ marginBottom: '6px' }}>
+              <input type="text" value={m.name} placeholder={blank ? 'Empty grid' : `Map ${i + 2}`} maxLength={60} aria-label="Map name" onChange={(e) => void client.updateExtraMap(m.id, { name: (e.target as HTMLInputElement).value })} />
+              <button class="btn small" title={blank ? 'Remove this empty grid from the scene' : 'Remove this map picture from the scene (the picture itself is not deleted)'} onClick={() => { if (d.extraSel === m.id) ui.set({ extraSel: null }); void client.removeExtraMap(m.id); }}>Remove</button>
+            </div>
+            <Toggle checked={m.show} onChange={(v) => void client.updateExtraMap(m.id, { show: v })} label="Players can see it" hint={m.show ? undefined : 'Only you see it, faded, until you turn this on.'} />
+            <Toggle checked={m.locked} onChange={(v) => { void client.updateExtraMap(m.id, { locked: v }); if (v && d.extraSel === m.id) ui.set({ extraSel: null }); else if (!v) ui.set({ extraSel: m.id }); }}
+              label="Locked in place" hint={m.locked ? undefined : 'Drag it on the board to move it.'} />
+            {blank
+              ? <GridSquares cols={Math.round(m.w / cell)} rows={Math.round(m.h / cell)} onChange={(cols, rows) => void client.updateExtraMap(m.id, { w: cols * cell, h: rows * cell })} />
+              : !m.locked && <SliderField label="Size" value={Math.round(m.scale * 100)} min={10} max={400} step={1} unit="%" onInput={(v) => scaleT({ id: m.id, scale: v / 100 })} />}
           </div>
-          <Toggle checked={m.show} onChange={(v) => void client.updateExtraMap(m.id, { show: v })} label="Players can see it" hint={m.show ? undefined : 'Only you see it, faded, until you turn this on.'} />
-          <Toggle checked={m.locked} onChange={(v) => { void client.updateExtraMap(m.id, { locked: v }); if (v && d.extraSel === m.id) ui.set({ extraSel: null }); else if (!v) ui.set({ extraSel: m.id }); }}
-            label="Locked in place" hint={m.locked ? undefined : 'Drag it on the board to move it.'} />
-          {!m.locked && <SliderField label="Size" value={Math.round(m.scale * 100)} min={10} max={400} step={1} unit="%" onInput={(v) => scaleT({ id: m.id, scale: v / 100 })} />}
-        </div>
-      ))}
+        );
+      })}
       {meta.maps.length < MAX_EXTRA_MAPS && (
         <div class="row wrap">
-          <FileButton label={busy ? 'Adding…' : meta.maps.length ? 'Add another map…' : 'Add a second map…'} onFile={(f) => void add(f)} />
+          <button class="btn" disabled={!props.onAdd} title="Another map picture from your library or a new upload, or an empty grid" onClick={props.onAdd}>{meta.maps.length ? 'Add another map…' : 'Add a second map…'}</button>
         </div>
       )}
-      {!meta.maps.length && <p class="hint">For another floor, the next room, or an overlay. It lands beside the first map; drag it into place.</p>}
+      {!meta.maps.length && <p class="hint">For another floor, the next room, an overlay, or an empty grid beside the map.</p>}
     </>
+  );
+}
+
+/** How many squares an empty grid is, across and down (changes when the box is left). */
+function GridSquares(props: { cols: number; rows: number; onChange: (cols: number, rows: number) => void }) {
+  const clampIt = (v: string) => clampSquares(Number(v));
+  return (
+    <Field label="Squares, across × down">
+      <div class="row" style={{ gap: '6px', alignItems: 'center' }}>
+        <input type="number" class="num" style={{ width: '64px' }} min={1} max={MAX_BLANK_SQUARES} value={props.cols} aria-label="Squares across" onChange={(e) => props.onChange(clampIt((e.target as HTMLInputElement).value), props.rows)} />
+        <span class="unit">×</span>
+        <input type="number" class="num" style={{ width: '64px' }} min={1} max={MAX_BLANK_SQUARES} value={props.rows} aria-label="Squares down" onChange={(e) => props.onChange(props.cols, clampIt((e.target as HTMLInputElement).value))} />
+      </div>
+    </Field>
   );
 }
 
@@ -311,7 +322,7 @@ function MapGridCut(props: { client: TableClient; board: Board | null; meta: Sce
   );
 }
 
-export function ScenePanel(props: { client: TableClient; ui: UiState; board: Board | null; onNewScene: () => void; onAutoLights?: () => void }) {
+export function ScenePanel(props: { client: TableClient; ui: UiState; board: Board | null; onNewScene: () => void; onAutoLights?: () => void; onAddMap?: () => void }) {
   const { client, ui, board } = props;
   useClient(client);
   const d = useUi(ui);
@@ -330,6 +341,7 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
     );
   }
   const g = meta.grid;
+  const blankPage = isBlankPage(meta);
   const setGrid = (p: Partial<GridSettings>) => { void client.updateScene({ grid: p }); };
   const hex = isHex(g);
   const per = gridPeriod(g);
@@ -347,15 +359,17 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
       <Section id="map" title="Map">
         <div class="row wrap">
           <FileButton label={meta.mapUrl ? 'Replace map…' : 'Add map…'} onFile={replaceMap} />
+          {!meta.mapUrl && !blankPage && <button class="btn small" title="No map picture: the scene is just squares" onClick={() => void client.makeBlankPage()}>Just a grid</button>}
           <button class="btn small" onClick={() => board?.fit()}>Fit view</button>
         </div>
+        {blankPage && <GridSquares cols={Math.round(meta.mapW / g.cell)} rows={Math.round(meta.mapH / g.cell)} onChange={(cols, rows) => void client.resizeBlankPage(cols, rows)} />}
         <Toggle checked={meta.mapLocked} onChange={(v) => { void client.updateScene({ mapLocked: v }); if (v) ui.set({ mapSelected: false }); }}
           label="Lock map" hint="Locked: clicking and box-selecting never touches the map." />
         {!meta.mapLocked && (
           <SliderField label="Map size" value={Math.round(meta.mapScale * 100)} min={10} max={400} step={1} unit="%"
             onInput={(v) => mapT({ mapScale: v / 100 })} hint="Drag the map on the board to move it." />
         )}
-        <ExtraMaps client={client} meta={meta} ui={ui} board={board} />
+        <ExtraMaps client={client} meta={meta} ui={ui} onAdd={props.onAddMap} />
         <Field label="Background colour" hint="Shown behind and around the map.">
           <input type="color" value={meta.bg} onInput={(e) => bgT((e.target as HTMLInputElement).value)} />
         </Field>
@@ -478,7 +492,55 @@ function LightingSection(props: { client: TableClient; ui: UiState; board: Board
         {props.onAutoLights && <button class="btn small" title="Work out where lights belong (lamps on the picture, unlit rooms) and add them all at once" onClick={props.onAutoLights}>Auto-add lights…</button>}
       </div>
       <p class="hint">Everyone sees a placed light unless you hide it. A token can carry a light too: Edit token, then Sight and lights.</p>
+      <PaintedLightCard client={client} ui={ui} meta={meta} />
     </>
+  );
+}
+
+const LIGHT_BRUSH_FT = [5, 10, 20, 40, 80];
+const SOFT_EDGE_FT = [0, 5, 10, 20, 40];
+
+/** Paint daylight and dim light straight onto the map, like a light with no source: a bright middle that fades out softly. */
+function PaintedLightCard(props: { client: TableClient; ui: UiState; meta: SceneMeta }) {
+  const { client, ui, meta } = props;
+  const d = useUi(ui);
+  useClient(client);
+  const painting = d.tool === 'light';
+  const amb = meta.light.ambient;
+  const painted = [...(client.scene?.draws.values() ?? [])].filter((x) => x.dl).length;
+  return (
+    <div class="card">
+      <div class="row wrap">
+        <span class="field-label" style={{ marginBottom: 0 }}>Painted light</span>
+        <button class={`btn small ${painting ? 'primary' : ''}`} aria-pressed={painting} title="Paint light onto the map with a round brush"
+          onClick={() => ui.set({ tool: painting ? 'select' : 'light', dmPreview: false })}>
+          {painting ? 'Done painting' : 'Paint light'}
+        </button>
+      </div>
+      {painting && (
+        <>
+          <div class="seg">
+            {([['day', 'Daylight'], ['dim', 'Dim light'], ['erase', 'Erase']] as const).map(([k, label]) => (
+              <button key={k} class={d.lightPaint === k ? 'on' : ''} style={{ whiteSpace: 'nowrap' }} onClick={() => ui.set({ lightPaint: k })}>{label}</button>
+            ))}
+          </div>
+          <Field label="Brush">
+            <div class="chips">
+              {LIGHT_BRUSH_FT.map((x) => <button key={x} class={`chip ${d.lightBrush === x ? 'on' : ''}`} onClick={() => ui.set({ lightBrush: x })}>{x} ft</button>)}
+            </div>
+          </Field>
+        </>
+      )}
+      <Field label="Soft edge">
+        <div class="chips">
+          {SOFT_EDGE_FT.map((x) => <button key={x} class={`chip ${meta.light.edge === x ? 'on' : ''}`} onClick={() => void client.updateScene({ light: { edge: x } })}>{x === 0 ? 'Hard' : `${x} ft`}</button>)}
+        </div>
+      </Field>
+      <p class="hint">{amb === 'bright' ? 'Painted light shows once the scene is Twilight or Dark.' : 'Daylight is full brightness; dim light is half as strong.'}</p>
+      {painted > 0 && (
+        <button class="btn small danger" onClick={async () => { const n = await client.clearDrawings((x) => !!x.dl, 'Clear painted light'); toast(n ? 'Cleared the painted light' : 'Nothing to clear', 'info', 1800); }}>Clear painted light</button>
+      )}
+    </div>
   );
 }
 
@@ -501,7 +563,7 @@ function SightAll(props: { client: TableClient }) {
 }
 
 /** The "Tokens" tab: everything on this scene in one list, including hidden tokens. */
-export function TokenList(props: { client: TableClient; ui: UiState; board: Board | null; onEdit: (ids: string[]) => void }) {
+export function TokenList(props: { client: TableClient; ui: UiState; board: Board | null; onEdit: (ids: string[]) => void; onPlayer?: (uid: string) => void }) {
   const { client, ui, board } = props;
   useClient(client);
   const d = useUi(ui);
@@ -535,8 +597,21 @@ export function TokenList(props: { client: TableClient; ui: UiState; board: Boar
   };
   // a search that matches a light opens the lights list so the match is not hidden
   const open = lightsOpen || (!!q.trim() && shownLights.length > 0);
+  const people = client.isDM ? [...client.players.values()].filter((p) => !p.dm).sort((a, b) => a.joinedAt - b.joinedAt) : [];
   return (
     <>
+      {people.length > 0 && props.onPlayer && (
+        <div class="tok-people">
+          <span class="field-label">Players: click one for their saved tokens and handouts</span>
+          <div class="row wrap" style={{ marginBottom: '8px' }}>
+            {people.map((p) => (
+              <button key={p.uid} class="chip" data-player={p.uid} title={`${p.name}: their saved tokens and handouts`} onClick={() => props.onPlayer?.(p.uid)}>
+                <span class="dot" style={{ background: p.color }} /> {p.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <input type="text" placeholder={`Search ${all.length} token${all.length === 1 ? '' : 's'}…`} value={q} onInput={(e) => setQ((e.target as HTMLInputElement).value)} style={{ marginBottom: '8px' }} />
       {shown.length === 0 && <p class="muted">{all.length ? 'No tokens match.' : 'No tokens on this scene yet. Press T to add one.'}</p>}
       <ul class="tok-list">{shown.map(row)}</ul>
@@ -577,7 +652,7 @@ export function Rail(props: { client: TableClient; ui: UiState }) {
 const DOCK_TITLES: Record<DockTab, string> = { scene: 'Scene', tokens: 'Tokens', players: 'Players' };
 
 /** The panel that opens beside the tabs. */
-export function Dock(props: { client: TableClient; ui: UiState; board: Board | null; onNewScene: () => void; onAutoLights?: () => void; onEdit: (ids: string[]) => void }) {
+export function Dock(props: { client: TableClient; ui: UiState; board: Board | null; onNewScene: () => void; onAutoLights?: () => void; onAddMap?: () => void; onPlayer?: (uid: string) => void; onEdit: (ids: string[]) => void }) {
   const { client, ui } = props;
   useClient(client);
   const d = useUi(ui);
@@ -590,9 +665,9 @@ export function Dock(props: { client: TableClient; ui: UiState; board: Board | n
         <h3>{DOCK_TITLES[tab]}{tab === 'scene' && sceneName ? <span class="muted"> · {sceneName}</span> : null}</h3>
         <button class="icon-btn" title="Fold this panel away" aria-label="Hide panel" onClick={() => ui.set({ dockTab: null })}>⟩</button>
       </div>
-      {tab === 'scene' && <ScenePanel client={client} ui={ui} board={props.board} onNewScene={props.onNewScene} onAutoLights={props.onAutoLights} />}
-      {tab === 'tokens' && <TokenList client={client} ui={ui} board={props.board} onEdit={props.onEdit} />}
-      {tab === 'players' && <PlayersPanel client={client} />}
+      {tab === 'scene' && <ScenePanel client={client} ui={ui} board={props.board} onNewScene={props.onNewScene} onAutoLights={props.onAutoLights} onAddMap={props.onAddMap} />}
+      {tab === 'tokens' && <TokenList client={client} ui={ui} board={props.board} onEdit={props.onEdit} onPlayer={props.onPlayer} />}
+      {tab === 'players' && <PlayersPanel client={client} ui={ui} />}
     </aside>
   );
 }

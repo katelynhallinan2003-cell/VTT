@@ -148,10 +148,14 @@ export function InitPopup(props: { client: TableClient; ui: UiState; board: Boar
     <div class="initpop" ref={root} onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label="Initiative">
       <div class="initpop-head">
         <h3>Initiative</h3>
-        <span class="init-round">{entries.length ? <>Round <strong>{Math.max(1, init.round)}</strong></> : <span class="muted">no combat yet</span>}</span>
+        {entries.length > 0 && <span class="init-round">Round <strong>{Math.max(1, init.round)}</strong></span>}
         <span class="spacer" />
-        <button class="btn small" disabled={!entries.length} title="Previous turn" onClick={() => void client.initStep(-1)}>◀</button>
-        <button class="btn small primary" disabled={!entries.length} title="Next turn" onClick={() => void client.initStep(1)}>Next turn ▶</button>
+        {entries.length > 0 && (
+          <>
+            <button class="btn small" title="Previous turn" onClick={() => void client.initStep(-1)}>◀</button>
+            <button class="btn small primary" title="Next turn" onClick={() => void client.initStep(1)}>Next turn ▶</button>
+          </>
+        )}
         <button class="icon-btn" title="Close (the order stays on screen)" aria-label="Close initiative" onClick={close}>✕</button>
       </div>
       <div class="seg initpop-tabs">
@@ -161,16 +165,12 @@ export function InitPopup(props: { client: TableClient; ui: UiState; board: Boar
 
       {tab === 'roll' && (
         <div class="initpop-body">
-          <p class="muted small" style={{ margin: '0 0 6px' }}>
-            Roll here, or type what a real d20 showed. Each token's bonus is added for you.
-          </p>
           <div class="row wrap" style={{ marginBottom: '6px' }}>
             <button class="btn small primary" onClick={rollEmpty} title="Roll a d20 for every ticked token that has no number yet">🎲 Roll all empty</button>
             <button class="btn small" onClick={() => tick(true)}>Tick all</button>
             <button class="btn small" onClick={() => tick(false)}>Tick none</button>
             {missing > 0 && <span class="muted small">{missing} ticked without a roll</span>}
           </div>
-          {tokens.length === 0 && <p class="muted">There are no tokens on this scene yet.</p>}
           {tokens.length > 0 && (
             <div class="roll-cols" aria-hidden="true"><span class="rc-name">Token</span><span class="rc-bonus">Bonus</span><span class="rc-die">d20</span><span class="rc-roll" /><span class="rc-total">Total</span></div>
           )}
@@ -202,7 +202,7 @@ export function InitPopup(props: { client: TableClient; ui: UiState; board: Boar
           </div>
           <div class="row" style={{ margin: '8px 0 12px' }}>
             <span class="spacer" />
-            <button class="btn primary" disabled={!ready.length} onClick={apply}>{ready.length ? `Add ${ready.length} to the order` : 'Roll or type some numbers'}</button>
+            {ready.length > 0 && <button class="btn primary" onClick={apply}>Add {ready.length} to the order</button>}
           </div>
 
           <h4>Add a turn that has no token</h4>

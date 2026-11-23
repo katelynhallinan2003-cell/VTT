@@ -121,7 +121,10 @@ export function normalizeSceneMeta(raw: any): SceneMeta {
       explore: bool(m.fog?.explore, false),
       dim: bool(m.fog?.dim, true),
     },
-    light: { ambient: m.light?.ambient === 'dim' || m.light?.ambient === 'dark' ? m.light.ambient : 'bright' },
+    light: {
+      ambient: m.light?.ambient === 'dim' || m.light?.ambient === 'dark' ? m.light.ambient : 'bright',
+      edge: Math.max(0, Math.min(60, Math.round(num(m.light?.edge, 10)))),
+    },
     createdAt: num(m.createdAt, 0),
   };
 }
@@ -225,7 +228,7 @@ export function normalizeDrawing(id: string, raw: any): Drawing | null {
     hz: typeof raw.hz === 'number' && Number.isFinite(raw.hz) && (raw.k === 'rect' || raw.k === 'ellipse' || raw.k === 'terrain') ? Math.min(5000, Math.max(-1000, Math.round(raw.hz))) : null,
     ...(raw.pv === true ? { pv: true } : {}),
     ...(raw.td === true && isTemplate(raw.k) ? { td: true } : {}),
-    ...(raw.k === 'terrain' ? { hg: typeof raw.hg === 'string' ? raw.hg.slice(0, 24) : '', ha: bool(raw.ha, false), he: bool(raw.he, false), hc: bool(raw.hc, false), ...(raw.dt === true ? { dt: true } : {}), ...(raw.dl === true ? { dl: true } : {}) } : {}),
+    ...(raw.k === 'terrain' ? { hg: typeof raw.hg === 'string' ? raw.hg.slice(0, 24) : '', ha: bool(raw.ha, false), he: bool(raw.he, false), hc: bool(raw.hc, false), ...(raw.dt === true ? { dt: true } : {}), ...(raw.dl === true ? { dl: true } : {}), ...(raw.dl === true && raw.dd === true ? { dd: true } : {}) } : {}),
     t: num(raw.t, 0),
   };
 }
@@ -239,7 +242,7 @@ export function drawingToWire(d: Omit<Drawing, 'id'> | Drawing): Record<string, 
     of: rest.of || undefined,
     pv: rest.pv || undefined,
     td: rest.td || undefined,
-    hg: rest.hg || undefined, ha: rest.ha || undefined, he: rest.he || undefined, hc: rest.hc || undefined, dt: rest.dt || undefined, dl: rest.dl || undefined,
+    hg: rest.hg || undefined, ha: rest.ha || undefined, he: rest.he || undefined, hc: rest.hc || undefined, dt: rest.dt || undefined, dl: rest.dl || undefined, dd: rest.dd || undefined,
   });
 }
 

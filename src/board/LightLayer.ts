@@ -1,5 +1,5 @@
 import { Container, Sprite, Texture } from 'pixi.js';
-import { paintDayMask, paintGlow, paintSeen, paintShade, type Frame, type LightSrc, type Viewer } from '../core/light';
+import { hasPaintedLight, paintGlow, paintLift, paintSeen, paintShade, paintStrokes, type Frame, type LightSrc, type PaintedLight, type Scratch, type Viewer } from '../core/light';
 import type { Terrain } from '../core/terrain';
 import type { Seg } from '../core/walls';
 import type { Ambient, Rect, Vec } from '../types';
@@ -43,10 +43,10 @@ class Paper {
   }
 }
 
-/** A plain canvas to draw the painted daylight on, one per frame size. */
-class Mask {
+/** A plain canvas to work on (read back now and then), one per job. */
+class Work implements Scratch {
   readonly canvas = document.createElement('canvas');
-  readonly ctx = this.canvas.getContext('2d')!;
+  readonly ctx = this.canvas.getContext('2d', { willReadFrequently: true })!;
   size(w: number, h: number) {
     if (this.canvas.width !== w) this.canvas.width = w;
     if (this.canvas.height !== h) this.canvas.height = h;
@@ -64,8 +64,15 @@ export class LightLayer {
   private seenPaper = new Paper(true);
   private seenFrame: Frame | null = null;
   private litPaper = new Paper();
-  private dayShade = new Mask();
-  private daySeen = new Mask();
+  private liftShade = new Work();
+  private liftSeen = new Work();
+  private workA = new Work();
+  private workC = new Work();
+  /** the painted light shown as a tint while the DM paints it */
+  readonly tint = new Container();
+  private tintDay = new Paper();
+  private tintDim = new Paper();
+  private tintKey = '';
   private shadeKey = '';
   private seenKey = '';
 
@@ -73,6 +80,11 @@ export class LightLayer {
     this.glow.sprite.blendMode = 'add';
     this.container.addChild(this.shade.sprite, this.glow.sprite);
     this.container.visible = false;
+    this.tintDay.sprite.tint = 0xf2c230;
+    this.tintDim.sprite.tint = 0x7aa2d8;
+    this.tintDay.sprite.alpha = this.tintDim.sprite.alpha = 0.42;
+    this.tint.addChild(this.tintDay.sprite, this.tintDim.sprite);
+    this.tint.visible = false;
   }
 
   /** Whatever shows the shape of what is seen; Board adds it where the fog is and uses it as a mask. */
@@ -81,7 +93,7 @@ export class LightLayer {
   hide() { this.container.visible = false; }
 
   /** Paint the dark and the glow for the scene (again only when something about it changed). `dm`: the DM's own view, which is see-through so the map can still be worked on. */
-  paint(o: { ambient: Ambient; rect: Rect; lights: LightSrc[]; viewers: Viewer[]; segs: Seg[]; day: Terrain | null; dm: boolean; key: string }) {
+  paint(o: { ambient: Ambient; rect: Rect; lights: LightSrc[]; viewers: Viewer[]; segs: Seg[]; painted: PaintedLight | null; dm: boolean; key: string }) {
     this.container.visible = true;
     this.shade.sprite.alpha = o.dm ? 0.62 : 1;
     const scale = Math.min(1, 1400 / Math.max(o.rect.w, o.rect.h, 1));
@@ -93,25 +105,43 @@ export class LightLayer {
     if (!remade && key === this.shadeKey) return;
     this.shadeKey = key;
     const f: Frame = { origin, scale, w, h };
-    const day = o.day?.areas.length ? o.day : null;
-    if (day) { this.dayShade.size(w, h); paintDayMask(this.dayShade.ctx, f, day); }
-    paintShade(this.shade.ctx, f, o.ambient, o.lights, o.viewers, o.segs, day ? this.dayShade.canvas : null);
+    const painted = hasPaintedLight(o.painted) ? o.painted : null;
+    if (painted) { this.liftShade.size(w, h); paintLift(this.liftShade.ctx, f, painted, o.ambient, true, { a: this.workA, c: this.workC }); }
+    paintShade(this.shade.ctx, f, o.ambient, o.lights, o.viewers, o.segs, painted ? this.liftShade.canvas : null);
     paintGlow(this.glow.ctx, f, o.ambient === 'bright' ? [] : o.lights, o.segs);
     this.shade.upload();
     this.glow.upload();
   }
 
+  /** Show where light is painted (gold for daylight, blue for dim light) while the DM paints it; hide it otherwise. */
+  paintTint(o: { show: boolean; rect: Rect; day: Terrain | null; dim: Terrain | null }) {
+    this.tint.visible = o.show;
+    if (!o.show) return;
+    const scale = Math.min(1, 1400 / Math.max(o.rect.w, o.rect.h, 1));
+    const w = Math.max(1, Math.ceil(o.rect.w * scale)), h = Math.max(1, Math.ceil(o.rect.h * scale));
+    const origin = { x: o.rect.x, y: o.rect.y };
+    const a = this.tintDay.fit(w, h, origin, scale), b = this.tintDim.fit(w, h, origin, scale);
+    const key = `${o.day?.sig ?? ''}|${o.dim?.sig ?? ''}|${w}x${h}|${origin.x},${origin.y}`;
+    if (!a && !b && key === this.tintKey) return;
+    this.tintKey = key;
+    const f: Frame = { origin, scale, w, h };
+    if (o.day) paintStrokes(this.tintDay.ctx, f, o.day); else this.tintDay.ctx.clearRect(0, 0, w, h);
+    if (o.dim) paintStrokes(this.tintDim.ctx, f, o.dim); else this.tintDim.ctx.clearRect(0, 0, w, h);
+    this.tintDay.upload();
+    this.tintDim.upload();
+  }
+
   /** Paint the shape of what the viewers can see in the dark, in the same frame as the fog's own canvas. */
-  paintSeen(f: Frame, lights: LightSrc[], viewers: Viewer[], segs: Seg[], day: Terrain | null, key: string) {
+  paintSeen(f: Frame, lights: LightSrc[], viewers: Viewer[], segs: Seg[], painted: PaintedLight | null, key: string) {
     const k = `${key}|${f.w}x${f.h}|${f.origin.x},${f.origin.y},${f.scale}`;
     const remade = this.seenPaper.fit(f.w, f.h, f.origin, f.scale);
     this.litPaper.fit(f.w, f.h, f.origin, f.scale);
     if (!remade && k === this.seenKey) return;
     this.seenKey = k;
     this.seenFrame = f;
-    const dayOn = day?.areas.length ? day : null;
-    if (dayOn) { this.daySeen.size(f.w, f.h); paintDayMask(this.daySeen.ctx, f, dayOn); }
-    paintSeen(this.seenPaper.ctx, this.litPaper.ctx, f, lights, viewers, segs, dayOn ? this.daySeen.canvas : null);
+    const on = hasPaintedLight(painted) ? painted : null;
+    if (on) { this.liftSeen.size(f.w, f.h); paintLift(this.liftSeen.ctx, f, on, 'dark', false, { a: this.workA, c: this.workC }); }
+    paintSeen(this.seenPaper.ctx, this.litPaper.ctx, f, lights, viewers, segs, on ? this.liftSeen.canvas : null);
     this.seenPaper.upload();
   }
 
@@ -134,6 +164,8 @@ export class LightLayer {
     this.glow.destroy();
     this.seenPaper.destroy();
     this.litPaper.destroy();
+    this.tintDay.destroy();
+    this.tintDim.destroy();
     this.container.destroy({ children: false });
   }
 }

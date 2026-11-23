@@ -20,10 +20,11 @@ function sizeNote(client: TableClient, size: number): string {
  * The full token editor: everything about a token lives here so the board stays clean.
  * Works on one token (with the picture cropper) or on several at once (shared settings only).
  */
-export function TokenEditorModal(props: { client: TableClient; ids: string[]; onClose: () => void }) {
+export function TokenEditorModal(props: { client: TableClient; ids: string[]; /** a token kept in a library, not one on the board: its changes go to `onSave` */ saved?: { token: Token; onSave: (patch: Partial<Token>) => Promise<void> }; onClose: () => void }) {
   const { client } = props;
   useClient(client);
-  const tokens = props.ids.map((id) => client.scene?.tokens.get(id)).filter((t): t is Token => !!t);
+  const kept = props.saved;
+  const tokens = kept ? [kept.token] : props.ids.map((id) => client.scene?.tokens.get(id)).filter((t): t is Token => !!t);
   const t0 = tokens[0];
   const multi = tokens.length > 1;
   const [draft, setDraft] = useState<Partial<Token>>({});
@@ -45,7 +46,7 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
     return () => URL.revokeObjectURL(u);
   }, [file]);
 
-  const editable = useMemo(() => tokens.length > 0 && tokens.every((t) => client.canDo('edit', t)), [client.rev, props.ids.join()]);
+  const editable = useMemo(() => tokens.length > 0 && (!!kept || tokens.every((t) => client.canDo('edit', t))), [client.rev, props.ids.join(), !!kept]);
   if (!t0) return null;
   // a light (a torch, a lantern, a light spell) is its own kind of token with its own short editor: no picture, ring, size, sight, initiative or aura
   const lightOnly = tokens.every((t) => isLightMark(t));
@@ -96,7 +97,7 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
         const up = await uploadImage(client, file, 'token', file.name);
         patch.img = up.url;
       }
-      if (Object.keys(patch).length) await client.updateTokens(props.ids, patch);
+      if (Object.keys(patch).length) await (kept ? kept.onSave(patch) : client.updateTokens(props.ids, patch));
       props.onClose();
     } catch (e) {
       toast((e as Error).message, 'error');
@@ -106,7 +107,7 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
 
   const players = [...client.players.values()];
   /** the parts a light shares with every other token */
-  const hideLockBlock = client.isDM ? (
+  const hideLockBlock = client.isDM && !kept ? (
     <>
       <Toggle checked={!!(val('hidden') ?? false)} onChange={(v) => set({ hidden: v })} label="Hidden from players" />
       <Toggle checked={!!(val('locked') ?? false)} onChange={(v) => set({ locked: v })} label="Locked in place" hint="Players can't move or edit it." />
@@ -117,18 +118,22 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
       <h4>Health</h4>
       {!multi && (
         <div class="row">
-          <Field label="Hit points now">
-            <input type="number" min={0} value={hpVal ?? ''} placeholder="Not tracked" disabled={!editable}
-              onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ hp: v === '' ? null : Number(v) }); }} />
-          </Field>
+          {!kept && (
+            <Field label="Hit points now">
+              <input type="number" min={0} value={hpVal ?? ''} placeholder="Not tracked" disabled={!editable}
+                onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ hp: v === '' ? null : Number(v) }); }} />
+            </Field>
+          )}
           <Field label="Maximum">
             <input type="number" min={1} value={maxHpVal ?? ''} placeholder="Max" disabled={!editable}
               onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ maxHp: v === '' ? null : Number(v) }); }} />
           </Field>
-          <Field label="Temp HP" hint="Soaks up damage first. Can go past the maximum.">
-            <input type="number" min={0} value={tempVal || ''} placeholder="0" disabled={!editable || hpVal == null}
-              onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ tempHp: v === '' ? 0 : Math.max(0, Number(v)) }); }} />
-          </Field>
+          {!kept && (
+            <Field label="Temp HP" hint="Soaks up damage first. Can go past the maximum.">
+              <input type="number" min={0} value={tempVal || ''} placeholder="0" disabled={!editable || hpVal == null}
+                onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ tempHp: v === '' ? 0 : Math.max(0, Number(v)) }); }} />
+            </Field>
+          )}
         </div>
       )}
       <Field label="What players see of its health">
@@ -194,7 +199,7 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
   const ownerVal = 'ownerUid' in draft ? (draft.ownerUid ?? '') : tokens.every((t) => t.ownerUid === t0.ownerUid) ? (t0.ownerUid ?? '') : '__mixed';
 
   return (
-    <Modal title={multi ? `Edit ${tokens.length} tokens` : `Edit token${t0.name ? ': ' + t0.name : ''}`} onClose={props.onClose} width={multi ? 480 : 760}
+    <Modal title={multi ? `Edit ${tokens.length} tokens` : `${kept ? 'Edit saved token' : 'Edit token'}${t0.name ? ': ' + t0.name : ''}`} onClose={props.onClose} width={multi ? 480 : 760}
       footer={<>
         <button class="btn" onClick={props.onClose}>Cancel</button>
         <button class="btn primary" disabled={!editable || !dirty || busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
@@ -262,7 +267,7 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
             </>
           )}
 
-          {client.isDM && (
+          {client.isDM && !kept && (
             <Field label="Controlled by">
               <select value={ownerVal} onChange={(e) => { const v = (e.target as HTMLSelectElement).value; if (v !== '__mixed') set({ ownerUid: v === '' ? null : v }); }}>
                 {ownerVal === '__mixed' && <option value="__mixed">Mixed</option>}
@@ -276,7 +281,7 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
 
           {labelBlock}
 
-          {heightBlock}
+          {!kept && heightBlock}
 
           {client.isDM && (
             <>

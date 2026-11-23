@@ -187,46 +187,115 @@ await dm.getByRole('button', { name: /^Clear/ }).first().click();
 await sleep(400);
 check('and Clear still takes them all away', (await tpl()).length === 0);
 
-// ---- #66: paint daylight
+// ---- #66, #71-#74: paint daylight and dim light (the Light tool, in the Scene panel)
 await dm.evaluate(() => window.__vtt.ui.set({ tool: 'select' }));
 await dm.evaluate(() => window.__vtt.client.updateScene({ light: { ambient: 'dark' } }));
 await sleep(500);
 const A = [gx(8.5), gy(8.5)], B = [gx(8.5), gy(15.5)];
 check('in the dark, the ground is black to start with', ((await shadeAt(...A)) ?? 0) > 0.8);
+// it is not in Heights any more
 await dm.keyboard.press('h');
 await dm.locator('.flyout-title', { hasText: /^Heights$/ }).waitFor();
-const dayBtn = dm.locator('.flyout .seg button', { hasText: /^Daylight$/ });
-check('the Heights panel offers Daylight beside Heights and Difficult', (await dayBtn.count()) === 1 && (await dm.locator('.flyout .seg button', { hasText: /^(Heights|Difficult)$/ }).count()) === 2);
-await dayBtn.click();
+check('the Heights panel no longer has Daylight', (await dm.locator('.flyout .seg button', { hasText: /^Daylight$/ }).count()) === 0 && (await dm.locator('.flyout .seg button', { hasText: /^(Heights|Difficult)$/ }).count()) === 2);
+await dm.keyboard.press('h');
+await dm.evaluate(() => window.__vtt.ui.set({ tool: 'select' }));
+// it is with the other light and darkness settings
+await dm.locator('.dock-tabs button, .tabs button', { hasText: /^Scene$/ }).first().click().catch(() => {});
+const paintBtn = dm.getByRole('button', { name: 'Paint light', exact: true });
+if (!(await paintBtn.isVisible().catch(() => false))) await dm.locator('.sect-head', { hasText: 'Light and darkness' }).click();
+await paintBtn.waitFor();
+check('Scene, Light and darkness has a Painted light card', (await dm.locator('.card', { hasText: 'Painted light' }).count()) >= 1);
+check('with a Soft edge choice', (await dm.locator('.card', { hasText: 'Soft edge' }).locator('.chip', { hasText: /^Hard$/ }).count()) === 1);
+await paintBtn.click();
 await sleep(200);
-check('with Paint and Erase only', (await dm.locator('.flyout .seg button', { hasText: /^(Paint|Erase)$/ }).count()) === 2 && (await dm.locator('.flyout .seg button', { hasText: /^(Ramp|Select)$/ }).count()) === 0);
-check('no height box for it', (await dm.locator('.flyout .ht-card').count()) === 0);
-await dm.evaluate(() => window.__vtt.ui.set({ heightSnap: true, heightBrush: 3 }));
+check('Paint light picks the Light tool', await dm.evaluate(() => window.__vtt.ui.data.tool === 'light'));
+check('and offers Daylight, Dim light and Erase', (await dm.locator('.card .seg button', { hasText: /^(Daylight|Dim light|Erase)$/ }).count()) === 3);
+check('and a brush size in feet', (await dm.locator('.card .chip', { hasText: /^80 ft$/ }).count()) === 1);
+await dm.evaluate(() => window.__vtt.ui.set({ lightPaint: 'day', lightBrush: 10 }));
 await drag([gx(6.5), gy(8.5)], [gx(10.5), gy(8.5)]);
 const day = (await draws()).filter((d) => d.dl);
-check('one stroke of daylight was made', day.length === 1 && day[0].k === 'terrain', JSON.stringify(day.map((d) => ({ k: d.k, dl: d.dl, hg: d.hg }))));
+check('one stroke of daylight was made', day.length === 1 && day[0].k === 'terrain' && !day[0].dd, JSON.stringify(day.map((d) => ({ k: d.k, dl: d.dl, dd: d.dd, hg: d.hg }))));
+check('it is a round brush, not squares', day.length === 1 && !day[0].hc && Math.abs(day[0].w - 2 * cell) < 1, JSON.stringify(day.map((d) => ({ hc: d.hc, w: d.w }))));
 check('it is not height and not difficult ground', await dm.evaluate(() => window.__vtt.board.zones.areas.length === 0 && window.__vtt.board.rough.areas.length === 0));
-check('it is tinted gold while painting', await dm.evaluate(() => window.__vtt.board.dayG.visible && window.__vtt.board.day.areas.length === 1));
+check('it is tinted while painting', await dm.evaluate(() => window.__vtt.board.lightLayer.tint.visible && window.__vtt.board.day.areas.length === 1));
 await sleep(300);
 const lit = await shadeAt(...A);
+const dark = (await shadeAt(...B)) ?? 0;
 check('painted ground is no longer dark', lit !== null && lit < 0.05, String(lit));
-check('ground beside it still is', ((await shadeAt(...B)) ?? 0) > 0.8 && ((await shadeAt(gx(8.5), gy(11.5))) ?? 0) > 0.8);
+check('ground far from it still is', dark > 0.8 && ((await shadeAt(gx(8.5), gy(13.5))) ?? 0) > 0.8, String(dark));
+// the edge fades out like a light, instead of stopping at a line
+const edge = [];
+for (const j of [9.5, 10, 10.5, 11, 11.5, 12]) edge.push(+((await shadeAt(gx(8.5), gy(j))) ?? -1).toFixed(3));
+check('past the painted edge it fades out step by step', edge.every((v, i) => i === 0 || v >= edge[i - 1] - 0.005) && edge[0] < edge[2] && edge[2] < edge[5] - 0.05 && edge[5] > 0.8, JSON.stringify(edge));
+check('and is at its darkest again after the soft edge', edge[5] > 0.8 && edge[4] < edge[5] + 0.01, JSON.stringify(edge));
+// no seams: no jump anywhere along a line through the fade, and no stripes where the squares of the grid are
+const across = await dm.evaluate(([x0, y0, y1]) => {
+  const L = window.__vtt.board.lightLayer;
+  const c = L.shade.canvas, sp = L.shade.sprite;
+  const ctx = c.getContext('2d');
+  const px = Math.round((x0 - sp.position.x) / sp.scale.x);
+  const out = [];
+  for (let wy = y0; wy <= y1; wy += 4) {
+    const py = Math.round((wy - sp.position.y) / sp.scale.y);
+    out.push(ctx.getImageData(px, py, 1, 1).data[3] / 255);
+  }
+  return out;
+}, [gx(8.5), gy(9.5), gy(12.5)]);
+const steps = across.slice(1).map((v, i) => Math.abs(v - across[i]));
+// the painted edge goes from bright to dim over a few pixels (as a torch does); after it the light fades out smoothly
+check('the bright part meets the dim part softly, not at a line', Math.max(...steps) < 0.25, `largest step ${Math.max(...steps).toFixed(3)}`);
+check('and the fade beyond it has no steps at all', Math.max(...steps.slice(Math.ceil(steps.length * 0.3))) < 0.06, `largest step ${Math.max(...steps.slice(Math.ceil(steps.length * 0.3))).toFixed(3)}`);
+const along = await dm.evaluate(([x0, x1, y]) => {
+  const L = window.__vtt.board.lightLayer;
+  const c = L.shade.canvas, sp = L.shade.sprite;
+  const ctx = c.getContext('2d');
+  const py = Math.round((y - sp.position.y) / sp.scale.y);
+  const out = [];
+  for (let wx = x0; wx <= x1; wx += 5) out.push(ctx.getImageData(Math.round((wx - sp.position.x) / sp.scale.x), py, 1, 1).data[3] / 255);
+  return out;
+}, [gx(7), gx(10), gy(8.5)]);
+check('and no stripes along the middle of what was painted', Math.max(...along) < 0.05, `largest ${Math.max(...along).toFixed(3)}`);
 await dm.screenshot({ path: '/tmp/shots/z16-daylight.png' });
 await dm.evaluate(() => window.__vtt.ui.set({ tool: 'select' }));
 await sleep(200);
-check('the gold tint goes when the tool is put down, the daylight stays', await dm.evaluate(() => !window.__vtt.board.dayG.visible) && ((await shadeAt(...A)) ?? 1) < 0.05);
+check('the tint goes when the tool is put down, the light stays', await dm.evaluate(() => !window.__vtt.board.lightLayer.tint.visible) && ((await shadeAt(...A)) ?? 1) < 0.05);
 
-// sight: a token in the dark sees daylight, and nothing else that is unlit
+// a wider soft edge reaches further, and Hard stops at the paint
+const farOut = [gx(8.5), gy(11.5)];
+const softMid = (await shadeAt(...farOut)) ?? 0;
+await dm.evaluate(() => window.__vtt.client.updateScene({ light: { edge: 40 } }));
+await sleep(500);
+const wide = (await shadeAt(...farOut)) ?? 1;
+check('a wider soft edge lights more of the ground beside it', wide < softMid - 0.05, JSON.stringify({ softMid, wide }));
+await dm.evaluate(() => window.__vtt.client.updateScene({ light: { edge: 0 } }));
+await sleep(500);
+check('Hard lights only what was painted', ((await shadeAt(gx(8.5), gy(10.5))) ?? 0) > 0.8 && ((await shadeAt(...A)) ?? 1) < 0.05);
+await dm.evaluate(() => window.__vtt.client.updateScene({ light: { edge: 10 } }));
+await sleep(500);
+
+// dim light: half as strong
+await dm.evaluate(() => window.__vtt.ui.set({ tool: 'light', lightPaint: 'dim', lightBrush: 10 }));
+await drag([gx(14.5), gy(8.5)], [gx(17.5), gy(8.5)]);
+const dimStrokes = (await draws()).filter((d) => d.dl && d.dd);
+check('dim light is a stroke of its own kind', dimStrokes.length === 1 && dimStrokes[0].k === 'terrain', JSON.stringify(dimStrokes.map((d) => ({ dl: d.dl, dd: d.dd }))));
+check('and does not count as daylight', await dm.evaluate(() => window.__vtt.board.day.areas.length === 1 && window.__vtt.board.dim.areas.length === 1));
+await sleep(300);
+const dimIn = (await shadeAt(gx(16), gy(8.5))) ?? 1;
+check('dim light is dimmer than daylight and brighter than the dark', dimIn > 0.15 && dimIn < dark - 0.15, JSON.stringify({ dimIn, dark }));
+await dm.screenshot({ path: '/tmp/shots/z16-dimlight.png' });
+await dm.evaluate(() => window.__vtt.ui.set({ tool: 'select' }));
+
+// sight: a token in the dark sees painted light, and nothing else that is unlit
 await dm.evaluate(() => window.__vtt.client.updateScene({ fog: { enabled: true, vision: true, base: 'hidden' } }));
-const elf = await dm.evaluate(([x, y]) => window.__vtt.client.addToken({ x, y, name: 'Elf', size: 1, sight: 120 }), [gx(13.5), gy(8.5)]);
+const elf = await dm.evaluate(([x, y]) => window.__vtt.client.addToken({ x, y, name: 'Elf', size: 1, sight: 120 }), [gx(13), gy(5.5)]);
 await sleep(900);
 check('a token with sight sees the daylight across the room', ((await seenAt(...A)) ?? 0) > 0.9, String(await seenAt(...A)));
-check('and not the dark ground beside it', ((await seenAt(gx(13.5), gy(13.5))) ?? 1) < 0.1 && ((await seenAt(...B)) ?? 1) < 0.1);
+check('and not the dark ground beside it', ((await seenAt(gx(13), gy(13.5))) ?? 1) < 0.1 && ((await seenAt(...B)) ?? 1) < 0.1);
 await dm.screenshot({ path: '/tmp/shots/z16-daylight-sight.png' });
 // a wall in between hides it
 await dm.evaluate((wx) => window.__vtt.client.addWalls([{ a: { x: wx, y: 0 }, b: { x: wx, y: 2000 }, k: 'wall', open: false, vis: false, one: 0, h: 0 }], 'Wall'), gx(11.5));
 await sleep(700);
-check('a wall between them hides the daylight, as it hides everything', ((await seenAt(...A)) ?? 1) < 0.1);
+check('a wall between them hides the light, as it hides everything', ((await seenAt(...A)) ?? 1) < 0.1);
 await dm.evaluate(() => { const c = window.__vtt.client; return c.removeWalls(c.wallsList().map((w) => w.id)); });
 await sleep(500);
 check('and taking the wall away shows it again', ((await seenAt(...A)) ?? 0) > 0.9);
@@ -241,37 +310,38 @@ check('in twilight, the daylight is fully bright and the rest is dim', dimLit !=
 await dm.evaluate(() => window.__vtt.client.updateScene({ light: { ambient: 'bright' } }));
 await sleep(400);
 check('in full daylight nothing is painted over the map', await dm.evaluate(() => !window.__vtt.board.lightLayer.container.visible));
+check('and the card says painted light needs Twilight or Dark', /Twilight or Dark/.test(await dm.locator('.card', { hasText: 'Painted light' }).innerText()));
 await dm.evaluate(() => window.__vtt.client.updateScene({ light: { ambient: 'dark' } }));
 await sleep(500);
 
 // erase takes it back, undo puts it back
-await dm.keyboard.press('h');
-await dm.locator('.flyout .seg button', { hasText: /^Erase$/ }).click();
-await drag([gx(7.5), gy(8.5)], [gx(9.5), gy(8.5)]);
+await dm.evaluate(() => window.__vtt.ui.set({ tool: 'light', lightPaint: 'erase', lightBrush: 10 }));
+await drag([gx(8), gy(8.5)], [gx(9), gy(8.5)]);
 await sleep(300);
-check('Erase takes daylight away where it passes, and no further', ((await shadeAt(...A)) ?? 0) > 0.8 && ((await shadeAt(gx(5.5), gy(8.5))) ?? 1) < 0.05);
+check('Erase takes painted light away where it passes, and no further', ((await shadeAt(...A)) ?? 0) > 0.6 && ((await shadeAt(gx(6), gy(8.5))) ?? 1) < 0.3, JSON.stringify([await shadeAt(...A), await shadeAt(gx(6), gy(8.5))]));
+check('an erase stroke was made for each kind of light', (await draws()).filter((d) => d.dl && d.he).length === 2);
 await dm.keyboard.press('Control+z');
 await sleep(500);
 check('and Ctrl+Z puts it back', ((await shadeAt(...A)) ?? 1) < 0.05);
-await dm.locator('.flyout .seg button', { hasText: /^Paint$/ }).click();
+await dm.evaluate(() => window.__vtt.ui.set({ lightPaint: 'day' }));
 
-// the other buttons leave daylight alone
-await dm.locator('.flyout .seg button', { hasText: /^Heights$/ }).click();
-await sleep(200);
+// the other buttons leave painted light alone
+await dm.keyboard.press('h');
+await dm.locator('.flyout-title', { hasText: /^Heights$/ }).waitFor();
+await dm.evaluate(() => window.__vtt.ui.set({ heightSnap: true, heightBrush: 3 }));
 await drag([gx(15.5), gy(2.5)], [gx(17.5), gy(2.5)]);
 check('a height area can be painted next to it', await dm.evaluate(() => window.__vtt.board.zones.areas.length === 1));
 await dm.getByRole('button', { name: 'Clear all heights' }).click();
 await sleep(400);
-check('"Clear all heights" leaves the daylight', (await draws()).filter((d) => d.dl).length === 1 && ((await shadeAt(...A)) ?? 1) < 0.05);
-await dayBtn.click();
-await sleep(200);
-check('and Clear daylight takes only the daylight', (await dm.getByRole('button', { name: 'Clear daylight' }).count()) === 1);
-await dm.getByRole('button', { name: 'Clear daylight' }).click();
+check('"Clear all heights" leaves the painted light', (await draws()).filter((d) => d.dl).length >= 2 && ((await shadeAt(...A)) ?? 1) < 0.05);
+await dm.keyboard.press('h');
+await dm.evaluate(() => window.__vtt.ui.set({ tool: 'select' }));
+await dm.locator('.dock-tabs button, .tabs button', { hasText: /^Scene$/ }).first().click().catch(() => {});
+const clearBtn = dm.getByRole('button', { name: 'Clear painted light' });
+await clearBtn.waitFor();
+await clearBtn.click();
 await sleep(500);
-check('it is dark again', (await draws()).filter((d) => d.dl).length === 0 && ((await shadeAt(...A)) ?? 0) > 0.8);
-await dm.evaluate(() => window.__vtt.client.updateScene({ light: { ambient: 'bright' } }));
-await sleep(300);
-check('on a bright scene the panel says what Daylight needs', /Set the scene light to Dim or Dark/.test(await dm.locator('.flyout').innerText()));
+check('Clear painted light takes all of it and nothing else', (await draws()).filter((d) => d.dl).length === 0 && ((await shadeAt(...A)) ?? 0) > 0.8);
 await dm.screenshot({ path: '/tmp/shots/z16-day-panel.png' });
 
 const real = errors.filter((e) => !/GPU stall|ReadPixels|willReadFrequently/.test(e));

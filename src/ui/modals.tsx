@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { loadImage } from '../core/images';
+import { BLANK_BG, BLANK_COLS, BLANK_ROWS, MAX_BLANK_SQUARES, clampSquares } from '../core/blankgrid';
+import type { Board } from '../board/Board';
 import { testImgbb } from '../core/imgbb';
 import { snapTokenCenter } from '../core/geometry';
-import { PLAYER_COLORS, TOKEN_SIZES } from '../core/model';
+import { DEFAULT_GRID, PLAYER_COLORS, TOKEN_SIZES } from '../core/model';
 import { PERM_LABELS, PRESETS, detectPreset } from '../core/permissions';
 import { makeSampleMap } from '../core/sample';
 import { addLibraryItem, watchLibrary } from '../state/account';
@@ -198,11 +200,97 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
   );
 }
 
-// ================================================================== new scene
-/** How many library pictures New scene shows before "Show all". */
+// ================================================================== pieces shared by New scene and Add a map
+/** How many library pictures are shown before "Show all". */
 const LIB_COLLAPSED = 12;
+
+/**
+ * While a window is open, a picture dropped anywhere on the page goes to it (never to the board behind).
+ * Returns true while one is being dragged over the page.
+ */
+function usePageDrop(on: (got: { file: File } | { url: string }) => void): boolean {
+  const [over, setOver] = useState(false);
+  const handler = useRef(on);
+  handler.current = on;
+  useEffect(() => {
+    let depth = 0;
+    const enter = (e: DragEvent) => { if (!dragHasImage(e)) return; depth++; setOver(true); };
+    const leave = (e: DragEvent) => { if (!dragHasImage(e)) return; depth = Math.max(0, depth - 1); if (!depth) setOver(false); };
+    const hover = (e: DragEvent) => { if (!dragHasImage(e)) return; e.preventDefault(); e.stopPropagation(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; };
+    const drop = (e: DragEvent) => {
+      if (!dragHasImage(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      depth = 0;
+      setOver(false);
+      const got = droppedImage(e);
+      if (got === 'other') { toast('That file is not a picture. Maps can be PNG, JPG or WebP.', 'error'); return; }
+      if (got === 'none') return;
+      handler.current(got);
+    };
+    window.addEventListener('dragenter', enter, true);
+    window.addEventListener('dragleave', leave, true);
+    window.addEventListener('dragover', hover, true);
+    window.addEventListener('drop', drop, true);
+    return () => {
+      window.removeEventListener('dragenter', enter, true);
+      window.removeEventListener('dragleave', leave, true);
+      window.removeEventListener('dragover', hover, true);
+      window.removeEventListener('drop', drop, true);
+    };
+  }, []);
+  return over;
+}
+
+/** The maps in the DM's library as pictures to pick from: the newest dozen, a search box once there are many, Show all to open the rest. */
+function MapLibraryGrid(props: { client: TableClient; lib: LibraryItem[]; pickedId: string | null; onPick: (it: LibraryItem) => void; expanded: boolean; onExpand: (v: boolean) => void; busy?: boolean }) {
+  const { client, lib, expanded } = props;
+  const [query, setQuery] = useState('');
+  const hover = useHoverPreview();
+  if (!lib.length) return null;
+  const found = filterLibrary(lib, query);
+  const shown = expanded || query.trim() ? found : found.slice(0, LIB_COLLAPSED);
+  return (
+    <>
+      <div class="row between lib-head">
+        <div class="field-label">From your library ({lib.length})</div>
+        {lib.length > LIB_COLLAPSED && (
+          <button class="btn small" aria-expanded={expanded} onClick={() => props.onExpand(!expanded)}>{expanded ? 'Show fewer' : `Show all ${lib.length}`}</button>
+        )}
+      </div>
+      {lib.length > 6 && <LibrarySearch value={query} onChange={setQuery} shown={found.length} total={lib.length} />}
+      <div class={`thumbs ${expanded ? 'big lib-scroll' : ''}`}>
+        {shown.map((l) => (
+          <div key={l.id} class="picture-tile" {...hover.bind(l)}>
+            <button class={`thumb ${props.pickedId === l.id ? 'on' : ''}`} title={l.name} disabled={props.busy} onClick={() => props.onPick(l)}>
+              <img src={l.thumb ?? l.url} alt={l.name} loading="lazy" />
+            </button>
+            {expanded && <div class="lib-name" title={l.name}>{l.name}</div>}
+            <PictureTrash client={client} kind="maps" item={l} disabled={props.busy} />
+          </div>
+        ))}
+        {!shown.length && <p class="muted">Nothing in your library matches “{query}”.</p>}
+      </div>
+      {hover.node}
+    </>
+  );
+}
+
+/** How many squares an empty grid has, across and down. */
+function SquaresInputs(props: { cols: number; rows: number; onChange: (cols: number, rows: number) => void }) {
+  return (
+    <span class="row" style={{ gap: '6px', alignItems: 'center' }}>
+      <input type="number" class="num" style={{ width: '64px' }} min={1} max={MAX_BLANK_SQUARES} value={props.cols} aria-label="Squares across" onChange={(e) => props.onChange(clampSquares(Number((e.target as HTMLInputElement).value)), props.rows)} />
+      <span class="unit">×</span>
+      <input type="number" class="num" style={{ width: '64px' }} min={1} max={MAX_BLANK_SQUARES} value={props.rows} aria-label="Squares down" onChange={(e) => props.onChange(props.cols, clampSquares(Number((e.target as HTMLInputElement).value)))} />
+      <span class="unit">squares</span>
+    </span>
+  );
+}
+
+// ================================================================== new scene
 const linkHost = (u: string) => { try { return new URL(u.trim()).hostname; } catch { return 'a link'; } };
-export function NewSceneModal(props: { client: TableClient; onClose: () => void; onCreated?: () => void; /** the folder to start in */ folder?: string | null; /** a picture that was dropped on the page: it starts as the map */ initialFile?: File | null }) {
+export function NewSceneModal(props: { client: TableClient; onClose: () => void; onCreated?: () => void; /** the folder to start in */ folder?: string | null; /** a picture that was dropped on the page: it starts as the map */ initialFile?: File | null; /** start with "Just a grid" chosen */ startBlank?: boolean }) {
   const { client } = props;
   useClient(client);
   const [folderId, setFolderId] = useState<string | null>(props.folder ?? null);
@@ -218,17 +306,15 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
   const [busy, setBusy] = useState(false);
   /** the demo's sample map is drawn on request, so Create waits for it */
   const [preparing, setPreparing] = useState(false);
-  /** a picture is being dragged over the page right now */
-  const [dragOver, setDragOver] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
-  /** the library list: what is typed in the search box, and whether it is opened out to every picture */
-  const [query, setQuery] = useState('');
+  /** the library list is opened out to every picture */
   const [expanded, setExpanded] = useState(false);
-  const hover = useHoverPreview();
+  /** an empty grid instead of a picture (null: a picture, or nothing yet) */
+  const [blank, setBlank] = useState<{ cols: number; rows: number } | null>(props.startBlank ? { cols: BLANK_COLS, rows: BLANK_ROWS } : null);
   /** nobody but the DM has joined yet (a first table has no players until the link is shared), so there is no one to summon */
   const anyPlayers = [...client.players.values()].some((p) => !p.dm);
 
-  const useFile = (f: File | Blob, n: string) => { setFile(f); setFileName(n); setPicked(null); setUrl(''); };
+  const useFile = (f: File | Blob, n: string) => { setFile(f); setFileName(n); setPicked(null); setUrl(''); setBlank(null); };
 
   // a small look at the chosen picture, so it is clear which one will be used
   useEffect(() => {
@@ -239,41 +325,20 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
   }, [file]);
 
   // a picture dropped anywhere on the page while this window is open becomes the map (it never falls through to the board behind)
-  useEffect(() => {
-    let depth = 0;
-    const enter = (e: DragEvent) => { if (!dragHasImage(e)) return; depth++; setDragOver(true); };
-    const leave = (e: DragEvent) => { if (!dragHasImage(e)) return; depth = Math.max(0, depth - 1); if (!depth) setDragOver(false); };
-    const over = (e: DragEvent) => { if (!dragHasImage(e)) return; e.preventDefault(); e.stopPropagation(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; };
-    const drop = (e: DragEvent) => {
-      if (!dragHasImage(e)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      depth = 0;
-      setDragOver(false);
-      const got = droppedImage(e);
-      if (got === 'other') { toast('That file is not a picture. Maps can be PNG, JPG or WebP.', 'error'); return; }
-      if (got === 'none') return;
-      if ('file' in got) useFile(got.file, got.file.name);
-      else { setUrl(got.url); setFile(null); setFileName(''); setPicked(null); }
-    };
-    window.addEventListener('dragenter', enter, true);
-    window.addEventListener('dragleave', leave, true);
-    window.addEventListener('dragover', over, true);
-    window.addEventListener('drop', drop, true);
-    return () => {
-      window.removeEventListener('dragenter', enter, true);
-      window.removeEventListener('dragleave', leave, true);
-      window.removeEventListener('dragover', over, true);
-      window.removeEventListener('drop', drop, true);
-    };
-  }, []);
+  const dragOver = usePageDrop((got) => {
+    if ('file' in got) useFile(got.file, got.file.name);
+    else { setUrl(got.url); setFile(null); setFileName(''); setPicked(null); setBlank(null); }
+  });
 
   async function create() {
     setBusy(true);
     try {
       let mapUrl: string | null = null;
       let w = 0, h = 0;
-      if (file) {
+      if (blank) {
+        // an empty grid: no picture, a page of squares
+        w = clampSquares(blank.cols) * DEFAULT_GRID.cell; h = clampSquares(blank.rows) * DEFAULT_GRID.cell;
+      } else if (file) {
         const up = await uploadImage(client, file, 'map', fileName || name);
         mapUrl = up.url; w = up.w; h = up.h;
         if (saveLib && client.backend.kind !== 'mock') await addLibraryItem(client.backend, client.uid, 'maps', { name: name || fileName || 'Map', ...up });
@@ -283,7 +348,7 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
         const img = await loadImage(url.trim(), true).catch(() => { throw new Error('That picture link could not be loaded.'); });
         mapUrl = url.trim(); w = img.naturalWidth; h = img.naturalHeight;
       }
-      await client.createScene({ name: name || fileName.replace(/\.\w+$/, '') || picked?.name || 'New scene', mapUrl, mapW: w, mapH: h, makeActive, folder: folderId, /* the demo map is made by the app and its grid is known */ gridTried: fileName === 'Sample dungeon.png' });
+      await client.createScene({ name: name || fileName.replace(/\.\w+$/, '') || picked?.name || (blank ? 'Empty grid' : 'New scene'), mapUrl, mapW: w, mapH: h, ...(blank ? { bg: BLANK_BG } : {}), makeActive, folder: folderId, /* the demo map is made by the app and its grid is known */ gridTried: fileName === 'Sample dungeon.png' });
       props.onCreated?.();
       props.onClose();
     } catch (e) {
@@ -295,7 +360,7 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
   return (
     <Modal title="New scene" onClose={props.onClose} width={expanded ? 840 : 560}
       footer={<><button class="btn" onClick={props.onClose}>Cancel</button><button class="btn primary" disabled={busy || preparing} onClick={create}>{busy ? 'Uploading…' : 'Create scene'}</button></>}>
-      <Field label="Scene name"><input type="text" value={name} autoFocus onInput={(e) => setName((e.target as HTMLInputElement).value)} placeholder={fileName.replace(/\.\w+$/, '') || 'Goblin cave'} /></Field>
+      <Field label="Scene name"><input type="text" value={name} autoFocus onInput={(e) => setName((e.target as HTMLInputElement).value)} placeholder={fileName.replace(/\.\w+$/, '') || (blank ? 'Empty grid' : 'Goblin cave')} /></Field>
       {client.sceneFolders.length > 0 && (
         <Field label="Folder">
           <select value={folderId ?? ''} onChange={(e) => setFolderId((e.target as HTMLSelectElement).value || null)}>
@@ -305,8 +370,8 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
         </Field>
       )}
       <h3>Map picture</h3>
-      <p class="muted">Optional: you can add a map later. Maps keep their full resolution.</p>
-      <div class={`dropzone ${dragOver ? 'over' : ''} ${file ? 'has' : ''}`}>
+      <p class="muted">Optional: you can add a map later, or just have a grid. Maps keep their full resolution.</p>
+      <div class={`dropzone ${dragOver ? 'over' : ''} ${file || blank ? 'has' : ''}`}>
         {file && preview && !dragOver && (
           <div class="dropzone-file">
             <img src={preview} alt="" />
@@ -314,10 +379,19 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
             <button class="icon-btn" aria-label="Remove this picture" title="Remove this picture" onClick={() => { setFile(null); setFileName(''); }}>✕</button>
           </div>
         )}
-        <div class="dropzone-text">{dragOver ? 'Drop the picture to use it as the map' : file ? 'Drag another picture here to swap it' : 'Drag a map picture here'}</div>
+        {blank && !dragOver && (
+          <div class="dropzone-file">
+            <span class="dropzone-name grow">An empty grid, no picture</span>
+            <SquaresInputs cols={blank.cols} rows={blank.rows} onChange={(cols, rows) => setBlank({ cols, rows })} />
+            <button class="icon-btn" aria-label="Use a picture instead" title="Use a picture instead" onClick={() => setBlank(null)}>✕</button>
+          </div>
+        )}
+        <div class="dropzone-text">{dragOver ? 'Drop the picture to use it as the map' : file ? 'Drag another picture here to swap it' : blank ? 'Or drag a map picture here instead' : 'Drag a map picture here'}</div>
         {!dragOver && (
           <div class="row wrap dropzone-btns">
             <FilePick label={file ? 'Choose another…' : 'Upload map…'} onFile={(f) => useFile(f, f.name)} />
+            <button class={`btn ${blank ? 'primary' : ''}`} aria-pressed={!!blank} title="No map picture: the scene is just squares"
+              onClick={() => { if (blank) { setBlank(null); return; } setBlank({ cols: BLANK_COLS, rows: BLANK_ROWS }); setFile(null); setFileName(''); setPicked(null); setUrl(''); }}>Just a grid</button>
             {client.backend.kind === 'mock' && (
               <button class="btn" disabled={preparing} onClick={async () => { setPreparing(true); try { const s = await makeSampleMap(); useFile(s.blob, 'Sample dungeon.png'); if (!name) setName('Sample dungeon'); } finally { setPreparing(false); } }}>Use sample dungeon</button>
             )}
@@ -331,37 +405,91 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
           <button class="icon-btn" aria-label="Remove this picture" title="Remove this picture" onClick={() => setUrl('')}>✕</button>
         </div>
       )}
-      {lib.length > 0 && (() => {
-        const found = filterLibrary(lib, query);
-        const shown = expanded || query.trim() ? found : found.slice(0, LIB_COLLAPSED);
-        return (
-          <>
-            <div class="row between lib-head">
-              <div class="field-label">From your library ({lib.length})</div>
-              {lib.length > LIB_COLLAPSED && (
-                <button class="btn small" aria-expanded={expanded} onClick={() => setExpanded((v) => !v)}>{expanded ? 'Show fewer' : `Show all ${lib.length}`}</button>
-              )}
-            </div>
-            {lib.length > 6 && <LibrarySearch value={query} onChange={setQuery} shown={found.length} total={lib.length} />}
-            <div class={`thumbs ${expanded ? 'big lib-scroll' : ''}`}>
-              {shown.map((l) => (
-                <div key={l.id} class="picture-tile" {...hover.bind(l)}>
-                  <button class={`thumb ${picked?.id === l.id ? 'on' : ''}`} title={l.name} onClick={() => { setPicked(l.id); setFile(null); setUrl(''); }}>
-                    <img src={l.thumb ?? l.url} alt={l.name} loading="lazy" />
-                  </button>
-                  {expanded && <div class="lib-name" title={l.name}>{l.name}</div>}
-                  <PictureTrash client={client} kind="maps" item={l} disabled={busy} />
-                </div>
-              ))}
-              {!shown.length && <p class="muted">Nothing in your library matches “{query}”.</p>}
-            </div>
-          </>
-        );
-      })()}
-      {hover.node}
+      <MapLibraryGrid client={client} lib={lib} pickedId={picked?.id ?? null} expanded={expanded} onExpand={setExpanded} busy={busy}
+        onPick={(l) => { setPicked(l.id); setFile(null); setUrl(''); setBlank(null); }} />
       <div class="stack">
         {file && client.backend.kind !== 'mock' && <Toggle checked={saveLib} onChange={setSaveLib} label="Save this map to my library" />}
         {anyPlayers && <Toggle checked={makeActive} onChange={setMakeActive} label="Summon players to it as soon as it is made" hint="On: everyone is moved onto this scene straight away. Off: it stays private until you press Summon players." />}
+      </div>
+    </Modal>
+  );
+}
+
+// ================================================================== add a map to a scene
+/**
+ * Another map in the same scene: a picture from the library (instant, it is already uploaded), a new upload, or an empty grid.
+ * It lands beside what is there, and is left unlocked and selected so it can be dragged into place.
+ */
+export function AddMapModal(props: { client: TableClient; ui: UiState; board: Board | null; onClose: () => void }) {
+  const { client, ui, board } = props;
+  useClient(client);
+  const lib = useLibrary(client, 'maps');
+  const [expanded, setExpanded] = useState(false);
+  const [saveLib, setSaveLib] = useState(true);
+  /** what is being done right now (nothing else can be started meanwhile) */
+  const [doing, setDoing] = useState<string | null>(null);
+  const [grid, setGrid] = useState({ cols: BLANK_COLS, rows: BLANK_ROWS });
+  const [pickedId, setPickedId] = useState<string | null>(null);
+
+  function finish(id: string | null, what: string) {
+    if (id) {
+      ui.set({ extraSel: id, mapSelected: false, selection: new Set(), drawSel: new Set() });
+      setTimeout(() => board?.fitClearOfPanel(), 250);
+    }
+    toast(`${what} added to the right of the first map. Drag it into place, then lock it.`, 'ok', 5000);
+    props.onClose();
+  }
+  async function run(label: string, job: () => Promise<{ id: string | null; what: string }>) {
+    if (doing) return;
+    setDoing(label);
+    try {
+      const r = await job();
+      finish(r.id, r.what);
+    } catch (e) {
+      toast(asErr(e), 'error');
+      setDoing(null);
+    }
+  }
+  const fromLibrary = (it: LibraryItem) => {
+    setPickedId(it.id);
+    void run('Adding…', async () => {
+      let w = it.w ?? 0, h = it.h ?? 0;
+      if (!w || !h) { const img = await loadImage(it.url, true).catch(() => { throw new Error('That picture could not be loaded.'); }); w = img.naturalWidth; h = img.naturalHeight; }
+      return { id: await client.addExtraMap(it.url, w, h, it.name), what: 'Map' };
+    });
+  };
+  const fromFile = (f: File) => run('Uploading the picture… a big map can take a minute', async () => {
+    const up = await uploadImage(client, f, 'map', f.name);
+    const name = f.name.replace(/\.[^.]+$/, '');
+    if (saveLib && client.backend.kind !== 'mock') await addLibraryItem(client.backend, client.uid, 'maps', { name, ...up });
+    return { id: await client.addExtraMap(up.url, up.w, up.h, name), what: 'Map' };
+  });
+  const fromLink = (url: string) => run('Adding…', async () => {
+    const img = await loadImage(url, true).catch(() => { throw new Error('That picture link could not be loaded.'); });
+    return { id: await client.addExtraMap(url, img.naturalWidth, img.naturalHeight, 'Map'), what: 'Map' };
+  });
+  const dragOver = usePageDrop((got) => { if ('file' in got) void fromFile(got.file); else void fromLink(got.url); });
+
+  return (
+    <Modal title="Add a map" onClose={() => { if (!doing) props.onClose(); }} width={expanded ? 840 : 560}
+      footer={<button class="btn" disabled={!!doing} onClick={props.onClose}>Cancel</button>}>
+      <p class="muted">For another floor, the next room, or an overlay. It lands beside the first map; drag it into place.</p>
+      {doing && <p class="hint" role="status">{doing}</p>}
+      <div class={`dropzone ${dragOver ? 'over' : ''}`}>
+        <div class="dropzone-text">{dragOver ? 'Drop the picture to add it as a map' : 'Drag a map picture here'}</div>
+        {!dragOver && (
+          <div class="row wrap dropzone-btns">
+            <FilePick label="Upload map…" onFile={(f) => void fromFile(f)} />
+          </div>
+        )}
+      </div>
+      {client.backend.kind !== 'mock' && <Toggle checked={saveLib} onChange={setSaveLib} label="Save an uploaded map to my library" hint="Then next time it is one click, with no upload." />}
+      <MapLibraryGrid client={client} lib={lib} pickedId={pickedId} expanded={expanded} onExpand={setExpanded} busy={!!doing} onPick={fromLibrary} />
+      <h3>Or just a grid</h3>
+      <p class="muted">An empty piece of squares beside the map, with no picture.</p>
+      <div class="row wrap">
+        <SquaresInputs cols={grid.cols} rows={grid.rows} onChange={(cols, rows) => setGrid({ cols, rows })} />
+        <button class="btn" disabled={!!doing} onClick={() => void run('Adding…', async () => ({ id: await client.addBlankGrid(grid.cols, grid.rows), what: 'The empty grid' }))}>Add an empty grid</button>
       </div>
     </Modal>
   );
@@ -840,13 +968,17 @@ export function MyProfile(props: { client: TableClient }) {
 }
 
 /** Who is at the table, plus your own name and colour. Lives in the right-hand Players tab. */
-export function PlayersPanel(props: { client: TableClient }) {
-  const { client } = props;
+export function PlayersPanel(props: { client: TableClient; ui: UiState }) {
+  const { client, ui } = props;
   useClient(client);
+  const d = useUi(ui);
   const list = [...client.players.values()].sort((a, b) => Number(b.dm) - Number(a.dm) || a.joinedAt - b.joinedAt);
   return (
     <>
-      <h4 style={{ marginTop: 0 }}>At this table</h4>
+      {client.isDM && (
+        <Toggle checked={d.dmPreview} onChange={(v) => ui.set({ dmPreview: v })} label="Player view" hint="See the map the way your players do." />
+      )}
+      <h4 style={client.isDM ? undefined : { marginTop: 0 }}>At this table</h4>
       {list.map((p) => (
         <div key={p.uid} class={`player-row ${p.online ? '' : 'off'}`}>
           <span class="dot" style={{ background: p.color }} />

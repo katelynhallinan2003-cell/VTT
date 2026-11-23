@@ -35,7 +35,8 @@ const png = await dm.evaluate(async () => {
   return c.toDataURL('image/png').split(',')[1];
 });
 check('the Map section offers to add a second map', (await dm.getByText('Add a second map…').count()) === 1);
-await dm.locator('.sect input[type=file]').nth(1).setInputFiles({ name: 'upstairs.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') });
+await dm.getByText('Add a second map…').click();
+await dm.locator('.modal input[type=file]').setInputFiles({ name: 'upstairs.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') });
 await dm.waitForFunction(() => window.__vtt.client.scene.meta.maps.length === 1, null, { timeout: 20000 });
 await dm.waitForFunction(() => { const e = [...window.__vtt.board.extras.values()][0]; return e && e.sprite.natScale; }, null, { timeout: 20000 });
 await sleep(400);

@@ -2,8 +2,9 @@ import type { Backend, Unsub } from '../backend/types';
 import { SERVER_TS } from '../backend/types';
 import {
   drawingToWire, handoutToWire, initPubToWire, initToWire, normalizeDrawing, normalizeFogOp, normalizeHandout, normalizeInit, normalizeInitPub, normalizeLive, normalizeMeta, tokenCoordinate,
-  normalizeLibraryItem, normalizePlayer, normalizeSceneMeta, normalizeSettings, normalizeToken, stripUndefined, tokenToWire, viaToWire, DEFAULT_GRID, DM_COLOR, MAX_EXTRA_MAPS, mapsToWire,
+  normalizeLibraryItem, normalizePlayer, normalizeSceneMeta, normalizeSettings, normalizeToken, stripUndefined, tokenToWire, viaToWire, DEFAULT_GRID, DEFAULT_BG, DM_COLOR, MAX_EXTRA_MAPS, mapsToWire,
 } from '../core/model';
+import { BLANK_BG, BLANK_COLS, BLANK_MAP, BLANK_ROWS, blankSpot, clampSquares, isBlankMap, isBlankPage } from '../core/blankgrid';
 import {
   applyDamage, cleanHp, withoutLights, EXPLORE_MIN_CELLS, EXPLORE_JUMP_CELLS, EXPLORE_TELEPORT_CELLS, EXPLORE_TELEPORT_MS, emptyInit, moveEntry, nextTurn, orderOf, pctOf, prevTurn, publicHp, sightRadiusPx, sortByInit, toPub,
 } from '../core/combat';
@@ -55,7 +56,7 @@ export interface SceneState {
 }
 
 /** A drawing as the caller describes it; the text styling and the fill colour are optional. */
-export type NewDrawing = Omit<Drawing, 'id' | 'uid' | 't' | 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc' | 'dt' | 'dl'> & Partial<Pick<Drawing, 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc' | 'dt' | 'dl'>>;
+export type NewDrawing = Omit<Drawing, 'id' | 'uid' | 't' | 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc' | 'dt' | 'dl' | 'dd'> & Partial<Pick<Drawing, 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc' | 'dt' | 'dl' | 'dd'>>;
 export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'hg' | 'ha' | 'he' | 'hc' | 'td'>>;
 
 export type ScenePatch = Partial<Omit<SceneMeta, 'grid' | 'fog' | 'light'>> & {
@@ -386,8 +387,10 @@ export class TableClient {
   private setIndex(id: string, v: any) {
     const entry: SceneIndexEntry = { id, name: typeof v?.name === 'string' ? v.name : 'Scene', order: Number(v?.order) || 0, folder: typeof v?.folder === 'string' && v.folder ? v.folder : null };
     this.sceneIndex = [...this.sceneIndex.filter((s) => s.id !== id), entry].sort((a, b) => a.order - b.order);
-    // DM with nothing open yet: open the active scene, or the first scene
+    // DM with nothing open yet: open the scene they were on, or the active scene, or the first scene
     if (this.role === 'dm' && !this.viewSceneId && this.metaLoaded) this.followActiveScene();
+    // the scene they were on before a reload may arrive after the first one did: move to it, as long as they have not chosen anything since
+    else if (this.role === 'dm' && this.autoOpened && id === this.lastScene() && this.viewSceneId !== id) this.openScene(id);
     this.bump();
   }
 
@@ -404,18 +407,31 @@ export class TableClient {
       return;
     }
     if (!this.viewSceneId) {
-      const target = active ?? this.sceneIndex[0]?.id ?? null;
-      if (target) this.openScene(target);
+      const back = this.lastScene();
+      const gotBack = !!back && this.sceneIndex.some((x) => x.id === back);
+      const target = gotBack ? back : active ?? this.sceneIndex[0]?.id ?? null;
+      // a guess made while the scene they were on may still be on its way is not remembered as their choice
+      if (target) this.openScene(target, !gotBack && !!back);
     }
   }
 
-  openScene(sid: string | null) {
+  /** Whether the open scene was picked for the DM on arrival (so a better guess may still replace it), not chosen by them. */
+  private autoOpened = false;
+  private lastSceneKey() { return `vtt-view-scene:${this.tableId}`; }
+  /** The scene the DM was looking at before the page was reloaded. */
+  private lastScene(): string | null {
+    try { return localStorage.getItem(this.lastSceneKey()); } catch { return null; }
+  }
+
+  openScene(sid: string | null, auto = false) {
     for (const u of this.sceneUnsubs) u();
     this.sceneUnsubs = [];
     this.seenPings.clear();
     this.history.clear();
     this.clearLive();
     this.viewSceneId = sid;
+    this.autoOpened = auto;
+    if (this.role === 'dm' && sid && !auto) { try { localStorage.setItem(this.lastSceneKey(), sid); } catch { /* private window */ } }
     if (!sid) { this.scene = null; this.bump(); return; }
 
     const s: SceneState = {
@@ -1465,7 +1481,7 @@ export class TableClient {
   }
 
   // ---------------------------------------------------------------- scenes (DM)
-  async createScene(opts: { name: string; mapUrl?: string | null; mapW?: number; mapH?: number; grid?: Partial<GridSettings>; makeActive?: boolean; /** do not look for a printed grid in the map */ gridTried?: boolean; /** the folder to put it in */ folder?: string | null }): Promise<string> {
+  async createScene(opts: { name: string; mapUrl?: string | null; mapW?: number; mapH?: number; /** the colour behind the map (an empty grid wants a dark one) */ bg?: string; grid?: Partial<GridSettings>; makeActive?: boolean; /** do not look for a printed grid in the map */ gridTried?: boolean; /** the folder to put it in */ folder?: string | null }): Promise<string> {
     const tid = this.tableId;
     const sid = this.backend.newKey();
     const order = Math.max(0, ...this.sceneIndex.map((s) => s.order)) + 1;
@@ -1476,6 +1492,7 @@ export class TableClient {
       gridTried: opts.gridTried ?? !opts.mapUrl,
       mapW: opts.mapW ?? 0,
       mapH: opts.mapH ?? 0,
+      ...(opts.bg ? { bg: opts.bg } : {}),
       grid: { ...DEFAULT_GRID, ...opts.grid },
       createdAt: Date.now(),
     };
@@ -1874,16 +1891,44 @@ export class TableClient {
     if (meta.maps.length >= MAX_EXTRA_MAPS) throw new Error(`A scene can have the main map and ${MAX_EXTRA_MAPS} more.`);
     const here = sceneRect(meta);
     const id = this.backend.newKey();
-    const map: ExtraMap = { id, url, w, h, x: here ? here.x + here.w : 0, y: here ? here.y : 0, scale: 1, name: name.slice(0, 60), show: true, locked: false };
+    // an empty grid lines up with the squares already there; a picture just goes beside the others
+    const at = isBlankMap(url) ? blankSpot(meta.grid, here) : { x: here ? here.x + here.w : 0, y: here ? here.y : 0 };
+    const map: ExtraMap = { id, url, w, h, x: at.x, y: at.y, scale: 1, name: name.slice(0, 60), show: true, locked: false };
     await this.updateScene({ maps: [...meta.maps, map] });
     return id;
   }
 
+  /** Put an empty grid beside what is there: a piece of the scene that is only squares. Returns its id. */
+  async addBlankGrid(cols = BLANK_COLS, rows = BLANK_ROWS): Promise<string | null> {
+    const cell = this.scene?.meta?.grid.cell ?? DEFAULT_GRID.cell;
+    return this.addExtraMap(BLANK_MAP, clampSquares(cols) * cell, clampSquares(rows) * cell, 'Empty grid');
+  }
+
+  /** Make a scene that has no map into an empty grid of this many squares (and give it a background that shows the lines, unless it has one already). */
+  async makeBlankPage(cols = BLANK_COLS, rows = BLANK_ROWS): Promise<void> {
+    const meta = this.scene?.meta;
+    if (!this.isDM || !meta || meta.mapUrl) return;
+    const cell = meta.grid.cell;
+    await this.updateScene({ mapW: clampSquares(cols) * cell, mapH: clampSquares(rows) * cell, mapX: 0, mapY: 0, mapScale: 1, mapLocked: true, ...(meta.bg === DEFAULT_BG ? { bg: BLANK_BG } : {}) });
+  }
+
+  /** Change how many squares an empty-grid scene has, or take the grid away again (0) so the scene has no map. */
+  async resizeBlankPage(cols: number, rows: number): Promise<void> {
+    const meta = this.scene?.meta;
+    if (!this.isDM || !meta || !isBlankPage(meta)) return;
+    await this.updateScene({ mapW: clampSquares(cols) * meta.grid.cell, mapH: clampSquares(rows) * meta.grid.cell });
+  }
+
   /** Move, resize, rename, show or hide one of the extra maps. */
-  async updateExtraMap(id: string, patch: Partial<Omit<ExtraMap, 'id' | 'url' | 'w' | 'h'>>): Promise<void> {
+  async updateExtraMap(id: string, patch: Partial<Omit<ExtraMap, 'id' | 'url'>>): Promise<void> {
     const meta = this.scene?.meta;
     if (!this.isDM || !meta || !meta.maps.some((m) => m.id === id)) return;
-    await this.updateScene({ maps: meta.maps.map((m) => (m.id === id ? { ...m, ...patch } : m)) });
+    // a picture has the size it was made with; only an empty grid is told how many squares it has
+    await this.updateScene({ maps: meta.maps.map((m) => {
+      if (m.id !== id) return m;
+      const { w, h, ...rest } = patch;
+      return { ...m, ...rest, ...(isBlankMap(m.url) ? { ...(w != null ? { w: clampSquares(w / meta.grid.cell) * meta.grid.cell } : {}), ...(h != null ? { h: clampSquares(h / meta.grid.cell) * meta.grid.cell } : {}) } : {}) };
+    }) });
   }
 
   async removeExtraMap(id: string): Promise<void> {

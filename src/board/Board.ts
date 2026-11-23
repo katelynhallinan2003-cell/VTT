@@ -6,19 +6,20 @@ import { FILL_LEVEL, STROKE_CELLS, beamWidthPx, dashSegments, fitPenPoints, hand
 import { templateRoughDraws } from '../core/templaterough';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
-import { altitudeOf, dayOf, groundAt, heightNote, isDay, isRough, roughOf, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
+import { altitudeOf, dayOf, dimOf, groundAt, heightNote, isRough, roughOf, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
 import { DEFAULT_CLIFF_FT, cliffSegs, rampCells, walkExtra, walkNote, type WalkExtra } from '../core/walk';
 import { paintedCliffBlocks } from '../core/terrainMovement';
 import { EMPTY_TERRAIN, MAX_STROKE_CELLS, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, heightColor, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
 import { scaleCut, type GridCut, type PixelImage } from '../core/gridcut';
 import { AUTO_GRID_STRENGTH, detectPrintedGrid, impliedGrid } from '../core/mapgrid';
-import { lightOf, viewerOf, type LightSrc, type Viewer } from '../core/light';
+import { hasPaintedLight, lightOf, viewerOf, type LightSrc, type PaintedLight, type Viewer } from '../core/light';
 import { LightLayer } from './LightLayer';
 import { colorNum } from '../core/colornum';
 import { DEFAULT_GRID, MAX_VIA, tokenCoordinate } from '../core/model';
+import { isBlankMap, isBlankPage, paperColour } from '../core/blankgrid';
 import { pctOf, toPub, visionCircles, withoutLights } from '../core/combat';
-import type { DrawingPatch, TableClient } from '../state/client';
+import type { DrawingPatch, NewDrawing, TableClient } from '../state/client';
 import { terrainBrushMode, type StrokeSize, type UiState } from '../state/ui';
 import type { Ambient, Aura, DrawKind, Drawing, GridSettings, Ping, Rect, Token, Vec } from '../types';
 import { throttle } from '../core/throttle';
@@ -58,7 +59,8 @@ type Drag =
   /** painting (or rubbing out) ground with the Heights brush */
   /** a ramp being dragged out from its low (or high) end to the other */
   | { kind: 'ramp'; a: Vec; b: Vec }
-  | { kind: 'terrain'; /** painting difficult ground instead of height */ rough?: boolean; /** painting daylight instead of height */ day?: boolean; erase: boolean; /** the area it paints into (empty: erase from every area) */ group: string; h: number; add: boolean; /** the cells covered so far (null for a free brush) */ cells: Map<string, Vec> | null; pts: Vec[]; last: Vec; size: number }
+  | { kind: 'lightpaint'; /** taking painted light away instead of adding it */ erase: boolean; /** dim light (half as strong) instead of daylight */ dim: boolean; pts: Vec[]; last: Vec; /** brush width in pixels */ size: number }
+  | { kind: 'terrain'; /** painting difficult ground instead of height */ rough?: boolean; erase: boolean; /** the area it paints into (empty: erase from every area) */ group: string; h: number; add: boolean; /** the cells covered so far (null for a free brush) */ cells: Map<string, Vec> | null; pts: Vec[]; last: Vec; size: number }
   | { kind: 'ruler'; /** another leg added to a measurement that is already there */ extend?: boolean }
   /** drawing a wall (or a box of walls) with the Walls tool; `cont` when it carries on from the last wall */
   | { kind: 'wall'; a: Vec; b: Vec; down: Vec; moved: boolean; cont: boolean; shape: 'line' | 'box' | 'free' | 'circle'; /** the pointer's path (freehand walls) */ pts: Vec[] }
@@ -103,10 +105,9 @@ export class Board {
   /** difficult ground: a layer of its own, hatched on the map */
   private rough: Terrain = EMPTY_TERRAIN({ ...DEFAULT_GRID });
   private roughG = new Graphics();
-  /** daylight the DM painted: it lights the ground when the scene is dim or dark (shown tinted while the Heights tool paints it) */
+  /** daylight and dim light the DM painted: they light the ground when the scene is dim or dark */
   private day: Terrain = EMPTY_TERRAIN({ ...DEFAULT_GRID });
-  private dayG = new Graphics();
-  private dayShown = false;
+  private dim: Terrain = EMPTY_TERRAIN({ ...DEFAULT_GRID });
   /** 0 (hidden) to 1 (fully shown): the ground fades in and out */
   private heightFade = 0;
   /** until when the ground stays on show without a drag (a keyboard step, say) */
@@ -157,6 +158,8 @@ export class Board {
   private seenGridKey = '';
 
   private mapSprite: Sprite | null = null;
+  /** the paper of a scene that is only an empty grid */
+  private pageSprite: Sprite | null = null;
   /** Undefined until the scene's first metadata arrives. Null is a scene with no map. */
   private mapUrl: string | null | undefined;
   private mapLoadSeq = 0;
@@ -259,7 +262,7 @@ export class Board {
     this.distText.anchor.set(0.5, 1);
     this.distText.visible = false;
     this.ghostLayer.sortableChildren = true;
-    this.world.addChild(this.mapLayer, this.extraLayer, this.gridG, this.terrainLayer.container, this.roughG, this.dayG, this.drawLayer.container, this.wallLayer.container, this.auraG, this.tokenLayer, this.ghostLayer, this.lightLayer.container, this.fogLayer, this.overlayG, this.fxLayer, this.distText);
+    this.world.addChild(this.mapLayer, this.extraLayer, this.gridG, this.terrainLayer.container, this.roughG, this.lightLayer.tint, this.drawLayer.container, this.wallLayer.container, this.auraG, this.tokenLayer, this.ghostLayer, this.lightLayer.container, this.fogLayer, this.overlayG, this.fxLayer, this.distText);
     app.stage.addChild(this.world);
 
     this.bindInput(app.canvas);
@@ -478,6 +481,7 @@ export class Board {
     this.syncWalls();
     this.syncExtras();
     this.drawVision();
+    this.drawLightTint();
     this.drawAuras();
     this.drawOverlay();
     this.app.render();
@@ -567,6 +571,7 @@ export class Board {
     this.drawPreview = null;
     this.ui.set({ drawSel: new Set(), testCount: 0, textEdit: null });
     if (this.mapSprite) { this.mapSprite.destroy(); this.mapSprite = null; }
+    if (this.pageSprite) { this.pageSprite.destroy(); this.pageSprite = null; }
     this.clearExtras();
     this.resetCut();
     if (this.mapUrl) releaseTexture(this.mapUrl, 'map');
@@ -578,7 +583,7 @@ export class Board {
     this.rough = EMPTY_TERRAIN(this.client.grid);
     this.roughG.clear();
     this.day = EMPTY_TERRAIN(this.client.grid);
-    this.dayG.clear();
+    this.dim = EMPTY_TERRAIN(this.client.grid);
     this.seenGridKey = '';
     if (this.fogSprite) this.fogSprite.visible = false;
     this.fitPending = true;
@@ -614,6 +619,7 @@ export class Board {
       this.mapSprite.scale.set(meta.mapScale * this.mapScaleToWorld);
       this.applyMapCut();
     }
+    this.syncPage(meta);
     if (this.fitPending && (!meta.mapUrl || (meta.mapW > 0 && meta.mapH > 0))) {
       this.fit();
       this.fitPending = false;
@@ -621,9 +627,22 @@ export class Board {
     this.updateFog();
   }
 
+  /** The paper under an empty-grid scene (a scene with a size but no picture). */
+  private syncPage(meta: NonNullable<TableClient['scene']>['meta']) {
+    if (!meta || !isBlankPage(meta)) {
+      if (this.pageSprite) { this.pageSprite.destroy(); this.pageSprite = null; }
+      return;
+    }
+    if (!this.pageSprite) { this.pageSprite = new Sprite(Texture.WHITE); this.mapLayer.addChild(this.pageSprite); }
+    this.pageSprite.position.set(meta.mapX, meta.mapY);
+    this.pageSprite.width = meta.mapW * meta.mapScale;
+    this.pageSprite.height = meta.mapH * meta.mapScale;
+    this.pageSprite.tint = paperColour(meta.grid.color);
+  }
+
   // ------------------------------------------------------------------ extra maps
   private clearExtras() {
-    for (const e of this.extras.values()) { e.sprite.destroy(); releaseTexture(e.url, 'map'); }
+    for (const e of this.extras.values()) { e.sprite.destroy(); if (!isBlankMap(e.url)) releaseTexture(e.url, 'map'); }
     this.extras.clear();
     this.extrasKey = '';
   }
@@ -633,13 +652,13 @@ export class Board {
     const meta = this.client.scene?.meta;
     const maps = meta?.maps ?? [];
     const dmView = this.client.isDM && !this.ui.data.dmPreview;
-    const key = `${this.client.scene?.id}|${dmView}|${maps.map((m) => `${m.id},${m.url},${m.x},${m.y},${m.scale},${m.show}`).join(';')}`;
+    const key = `${this.client.scene?.id}|${dmView}|${meta?.grid.color}|${maps.map((m) => `${m.id},${m.url},${m.w},${m.h},${m.x},${m.y},${m.scale},${m.show}`).join(';')}`;
     if (key === this.extrasKey) return;
     this.extrasKey = key;
     const want = new Map(maps.map((m) => [m.id, m]));
     for (const [id, e] of [...this.extras]) {
       const m = want.get(id);
-      if (!m || m.url !== e.url) { e.sprite.destroy(); releaseTexture(e.url, 'map'); this.extras.delete(id); }
+      if (!m || m.url !== e.url) { e.sprite.destroy(); if (!isBlankMap(e.url)) releaseTexture(e.url, 'map'); this.extras.delete(id); }
     }
     maps.forEach((m, i) => {
       let e = this.extras.get(m.id);
@@ -650,7 +669,8 @@ export class Board {
         e = { url: m.url, sprite };
         this.extras.set(m.id, e);
         const entry = e, sid = this.client.scene?.id;
-        void loadTexture(m.url, 'map').then((t) => {
+        if (isBlankMap(m.url)) sprite.texture = Texture.WHITE; // an empty grid has no picture to load
+        else void loadTexture(m.url, 'map').then((t) => {
           if (!t) return;
           if (this.destroyed || this.extras.get(m.id) !== entry || this.client.scene?.id !== sid) { releaseTexture(m.url, 'map'); return; }
           sprite.texture = t.texture;
@@ -661,7 +681,11 @@ export class Board {
       }
       const nat = (e.sprite as Sprite & { natScale?: number }).natScale;
       e.sprite.position.set(m.x, m.y);
-      if (nat) { e.sprite.scale.set(m.scale * nat); e.sprite.visible = m.show || dmView; }
+      if (isBlankMap(m.url)) {
+        e.sprite.width = m.w * m.scale; e.sprite.height = m.h * m.scale;
+        e.sprite.tint = paperColour(meta?.grid.color ?? '#ffffff');
+        e.sprite.visible = m.show || dmView;
+      } else if (nat) { e.sprite.scale.set(m.scale * nat); e.sprite.visible = m.show || dmView; }
       e.sprite.alpha = m.show ? 1 : 0.45;
       e.sprite.zIndex = i;
     });
@@ -997,35 +1021,32 @@ export class Board {
     this.invalidate();
   }
 
-  // ------------------------------------------------------------------ daylight
+  // ------------------------------------------------------------------ painted light
   private refreshDay() {
     const scene = this.client.scene;
     if (!scene) return;
-    const next = dayOf(scene.draws.values(), this.client.grid);
-    if (next.sig === this.day.sig) return;
-    this.day = next;
-    this.paintDay();
+    const draws = [...scene.draws.values()].filter((d) => d.dl);
+    const day = dayOf(draws, this.client.grid), dim = dimOf(draws, this.client.grid);
+    if (day.sig === this.day.sig && dim.sig === this.dim.sig) return;
+    this.day = day;
+    this.dim = dim;
     this.invalidate();
   }
 
-  private dayWanted(): boolean {
-    const u = this.ui.data;
-    return this.client.isDM && !u.dmPreview && u.tool === 'height' && u.groundKind === 'day';
+  /** What is painted, with how far it fades out (in world pixels), or null when nothing is. */
+  private paintedLight(): PaintedLight | null {
+    const meta = this.client.scene?.meta;
+    if (!meta) return null;
+    const grid = meta.grid;
+    const p = { day: this.day.areas.length ? this.day : null, dim: this.dim.areas.length ? this.dim : null, edge: Math.max(0, meta.light.edge) * grid.cell / grid.ft };
+    return hasPaintedLight(p) ? p : null;
   }
 
-  /** Tint the daylight gold so the DM can see what they are painting (only while the Heights tool is on Daylight). */
-  private paintDay() {
-    const g = this.dayG;
-    g.clear();
-    const u = this.ui.data;
-    g.visible = this.dayShown = this.dayWanted();
-    if (!g.visible) return;
-    const box = terrainBounds(this.day);
-    if (!box) return;
-    const grid = this.client.grid;
-    const cells = cellCentersIn(grid, box).filter((p) => isDay(this.day, p)).slice(0, 8000);
-    for (const c of cells) g.poly(cellPoly(grid, c).flatMap((p) => [p.x, p.y]));
-    g.fill({ color: 0xf2c230, alpha: 0.3 });
+  /** Tint the painted light so the DM can see what they are painting (only while the Light tool is on). */
+  private drawLightTint() {
+    const meta = this.client.scene?.meta;
+    const show = !!meta && this.client.isDM && !this.ui.data.dmPreview && this.ui.data.tool === 'light';
+    this.lightLayer.paintTint({ show, rect: (meta && sceneRect(meta)) || { x: 0, y: 0, w: 2000, h: 1500 }, day: this.day.areas.length ? this.day : null, dim: this.dim.areas.length ? this.dim : null });
   }
 
   /** Is the ground at this spot difficult? */
@@ -1476,7 +1497,7 @@ export class Board {
   }
 
   /** What shines and who sees, for a scene that is not in full daylight (null in daylight). Positions are where the tokens are drawn now. */
-  private lighting(): { ambient: Ambient; lights: LightSrc[]; viewers: Viewer[]; day: Terrain | null; key: string } | null {
+  private lighting(): { ambient: Ambient; lights: LightSrc[]; viewers: Viewer[]; painted: PaintedLight | null; key: string } | null {
     const scene = this.client.scene;
     const meta = scene?.meta;
     if (!scene || !meta) return null;
@@ -1496,9 +1517,9 @@ export class Board {
       if (w) viewers.push(w);
     }
     const r = (n: number) => Math.round(n * 2) / 2;
-    const day = this.day.areas.length ? this.day : null;
-    const key = `${scene.id}|${ambient}|${scene.wallRev}:${this.zones.sig}|${day?.sig ?? ''}|${lights.map((l) => `${r(l.x)},${r(l.y)},${r(l.b)},${r(l.r)},${l.c},${l.alt ?? ''}`).join(';')}|${viewers.map((w) => `${r(w.x)},${r(w.y)},${r(w.r)},${r(w.dv)},${r(w.touch)},${w.alt ?? ''}`).join(';')}`;
-    return { ambient, lights, viewers, day, key };
+    const painted = this.paintedLight();
+    const key = `${scene.id}|${ambient}|${scene.wallRev}:${this.zones.sig}|${painted ? `${painted.day?.sig ?? ''}~${painted.dim?.sig ?? ''}~${Math.round(painted.edge)}` : ''}|${lights.map((l) => `${r(l.x)},${r(l.y)},${r(l.b)},${r(l.r)},${l.c},${l.alt ?? ''}`).join(';')}|${viewers.map((w) => `${r(w.x)},${r(w.y)},${r(w.r)},${r(w.dv)},${r(w.touch)},${w.alt ?? ''}`).join(';')}`;
+    return { ambient, lights, viewers, painted, key };
   }
 
   /** The dark wash and the glow of the lights over the map. */
@@ -1506,7 +1527,7 @@ export class Board {
     const meta = this.client.scene?.meta;
     if (!L || !meta) { this.lightLayer.hide(); return; }
     const rect = sceneRect(meta) ?? { x: 0, y: 0, w: 2000, h: 1500 };
-    this.lightLayer.paint({ ambient: L.ambient, rect, lights: L.lights, viewers: L.viewers, segs: this.wallSegs().sight, day: L.day, dm: this.client.isDM && !this.ui.data.dmPreview, key: L.key });
+    this.lightLayer.paint({ ambient: L.ambient, rect, lights: L.lights, viewers: L.viewers, segs: this.wallSegs().sight, painted: L.painted, dm: this.client.isDM && !this.ui.data.dmPreview, key: L.key });
   }
 
   /** Tokens standing on remembered (grey) ground that nobody can see right now: out of sight for the players until someone looks again. */
@@ -1552,7 +1573,7 @@ export class Board {
         return () => false;
       }
       const m = this.fogMask;
-      this.lightLayer.paintSeen({ origin: m.origin, scale: m.scale, w: m.canvas.width, h: m.canvas.height }, L.lights, L.viewers, this.wallSegs().sight, L.day, L.key);
+      this.lightLayer.paintSeen({ origin: m.origin, scale: m.scale, w: m.canvas.width, h: m.canvas.height }, L.lights, L.viewers, this.wallSegs().sight, L.painted, L.key);
       if (this.fogMaskKind !== 's') { sprite.setMask({ mask: this.lightLayer.seenSprite, inverse: true }); this.fogMaskKind = 's'; }
       return (p) => this.lightLayer.seenAt(p);
     }
@@ -1649,7 +1670,6 @@ export class Board {
     const prev = this.prevUi;
     this.prevUi = { testMove: u.testMove, sharePlot: u.sharePlot, tool: u.tool, rulerColor: u.rulerColor, cover: u.tplCover, heights: u.heightView, draft: u.fxDraft, sel: u.drawSel };
     if (u.drawSel !== prev.sel && this.client.scene) this.refreshDraws();
-    if (this.dayWanted() !== this.dayShown) { this.paintDay(); this.invalidate(); }
     if (u.fxDraft !== prev.draft && this.client.scene) this.reconcileTokens();
     if (prev.testMove && !u.testMove && this.testMoves.size) this.resetTestMoves();
     if (u.sharePlot !== prev.sharePlot) this.publishLive(true);
@@ -1657,6 +1677,7 @@ export class Board {
     if (u.tplCover !== prev.cover || u.heightView !== prev.heights || (prev.tool === 'height') !== (u.tool === 'height')) this.refreshDraws();
     if (prev.tool !== u.tool) {
       this.cancelPress();
+      this.invalidate();
       if (prev.tool === 'height' && this.selectedAreas().length) this.ui.selectDrawings([]);
       if (prev.tool === 'wall') { this.wallStart = null; this.wallHover = null; this.wallPreview = null; if (u.wallSel.size) this.ui.set({ wallSel: new Set() }); }
       if (this.ruler && u.tool !== 'ruler') { this.ruler = null; this.publishLive(); }
@@ -2032,7 +2053,9 @@ export class Board {
       this.plotLabel(li++, `${u.rampTo} ft`, d.b.x, d.b.y - Math.max(grid.cell * 0.7, 18 / z), 0xffffff);
     }
     const brushLabelIndex = li;
-    if (d?.kind === 'terrain') li = this.paintBrush(g, z, d.last, d, li);
+    if (d?.kind === 'lightpaint') this.paintLightBrush(g, z, d.last, d);
+    else if (!d && u.tool === 'light' && this.pointerW && this.client.isDM) this.paintLightBrush(g, z, this.pointerW, null);
+    else if (d?.kind === 'terrain') li = this.paintBrush(g, z, d.last, d, li);
     else if (!d && u.tool === 'height' && this.pointerW && this.client.isDM) {
       const mode = terrainBrushMode(u, currentOverlay(grid) === 'none');
       if (mode === 'paint' || mode === 'erase') li = this.paintBrush(g, z, this.pointerW, null, li);
@@ -2226,6 +2249,7 @@ export class Board {
     if (tool === 'fog' && this.client.isDM) { this.startFog(w, e); return; }
     if (tool === 'draw') { this.startDraw(w, e); return; }
     if (tool === 'height' && this.client.isDM) { this.startHeight(w, e); return; }
+    if (tool === 'light' && this.client.isDM) { this.startLightPaint(w); return; }
     if (tool === 'wall' && this.client.isDM) { this.startWall(w, e); return; }
     if (tool === 'template') { if (this.ui.data.tplMode === 'select') this.startTemplateSelect(w, e); else this.startTemplate(w, e); return; }
     if (tool === 'ruler') { this.startRuler(w, e); return; }
@@ -2528,9 +2552,7 @@ export class Board {
    */
   private startHeight(w: Vec, e: PointerEvent) {
     const u = this.ui.data;
-    const kind = u.groundKind;
-    const rough = kind === 'rough', day = kind === 'day';
-    const layer = rough || day;
+    const rough = u.groundKind === 'rough';
     const gridless = currentOverlay(this.client.grid) === 'none';
     const mode = terrainBrushMode(u, gridless);
     if (mode === 'ramp') {
@@ -2540,7 +2562,7 @@ export class Board {
       this.drag = { kind: 'ramp', a: p, b: p };
       return;
     }
-    if (!layer && (mode === 'move' || e.ctrlKey || e.metaKey)) {
+    if (!rough && (mode === 'move' || e.ctrlKey || e.metaKey)) {
       const a = areaAt(this.zones, w);
       if (!a) { if (!e.shiftKey) this.ui.selectDrawings([]); return; }
       const sel = new Set(u.drawSel);
@@ -2559,13 +2581,13 @@ export class Board {
       return;
     }
     const erase = mode === 'erase';
-    const cur = layer ? null : this.currentArea();
-    const add = !layer && !erase && (cur?.add ?? u.heightAdds);
+    const cur = rough ? null : this.currentArea();
+    const add = !rough && !erase && (cur?.add ?? u.heightAdds);
     // Each additive gesture goes above the ground already there, even if the previous area is selected.
-    const group = rough ? 'dt' : day ? 'dl' : erase ? cur?.id ?? '' : add ? newAreaId() : cur?.id ?? newAreaId();
+    const group = rough ? 'dt' : erase ? cur?.id ?? '' : add ? newAreaId() : cur?.id ?? newAreaId();
     const d: Extract<Drag, { kind: 'terrain' }> = {
-      kind: 'terrain', erase, group, rough, day,
-      h: layer ? 1 : cur?.h ?? u.heightFt, add,
+      kind: 'terrain', erase, group, rough,
+      h: rough ? 1 : cur?.h ?? u.heightFt, add,
       cells: !gridless && u.heightSnap !== e.altKey ? new Map() : null, pts: [], last: w, size: u.heightBrush,
     };
     this.drag = d;
@@ -2614,14 +2636,13 @@ export class Board {
       pts = d.pts.length > 2 ? fitPenPoints(d.pts, Math.max(0.5, wpx * 0.06)) : d.pts;
     }
     if (!pts.length) return;
-    const col = d.rough ? '#c8791b' : d.day ? '#f2c230' : heightColor(d.h);
-    const layer = d.rough || d.day;
+    const col = d.rough ? '#c8791b' : heightColor(d.h);
     const cur = this.selectedAreas();
     const keep = cur.length === 1 && cur[0].id === d.group ? cur[0].ids : [];
     void this.client.addDrawing(
-      { k: 'terrain', p: joinPts(pts), color: col, w: wpx, fill: 0, fc: '', dash: false, txt: '', fs: 28, bw: 5, hz: d.erase ? null : d.h, hg: d.group, ha: !d.erase && d.add, he: d.erase, hc: !!d.cells, ...(d.rough ? { dt: true } : d.day ? { dl: true } : {}) },
-      { label: d.rough ? (d.erase ? 'Erase difficult ground' : 'Paint difficult ground') : d.day ? (d.erase ? 'Erase daylight' : 'Paint daylight') : d.erase ? 'Erase ground' : 'Paint ground', onId: (id) => {
-        if (!d.erase && !layer) {
+      { k: 'terrain', p: joinPts(pts), color: col, w: wpx, fill: 0, fc: '', dash: false, txt: '', fs: 28, bw: 5, hz: d.erase ? null : d.h, hg: d.group, ha: !d.erase && d.add, he: d.erase, hc: !!d.cells, ...(d.rough ? { dt: true } : {}) },
+      { label: d.rough ? (d.erase ? 'Erase difficult ground' : 'Paint difficult ground') : d.erase ? 'Erase ground' : 'Paint ground', onId: (id) => {
+        if (!d.erase && !d.rough) {
           if (d.add) this.ui.set({ heightAdds: true, heightFt: d.h, drawSel: new Set() });
           else this.ui.selectDrawings([...keep, id]);
         }
@@ -2635,11 +2656,10 @@ export class Board {
     const grid = this.client.grid;
     const erase = d ? d.erase : u.heightMode === 'erase';
     const rough = d ? !!d.rough : u.groundKind === 'rough';
-    const day = d ? !!d.day : u.groundKind === 'day';
-    const cur = rough || day ? null : this.currentArea();
+    const cur = rough ? null : this.currentArea();
     const h = d ? d.h : cur ? cur.h : u.heightFt;
     const add = d ? d.add : cur ? cur.add : u.heightAdds;
-    const col = erase ? 0xff6b6b : rough ? 0xc8791b : day ? 0xf2c230 : num(heightColor(h));
+    const col = erase ? 0xff6b6b : rough ? 0xc8791b : num(heightColor(h));
     const snap = d ? !!d.cells : currentOverlay(grid) !== 'none' && u.heightSnap !== !!this.altDown;
     const n = d ? d.size : u.heightBrush;
     if (snap) {
@@ -2657,8 +2677,52 @@ export class Board {
       } else if (d) g.circle(d.pts[0].x, d.pts[0].y, r).fill({ color: col, alpha: 0.45 });
       g.circle(at.x, at.y, r).stroke({ width: 1.5 / z, color: col, alpha: 0.9 });
     }
-    if (d && !erase && !rough && !day) this.plotLabel(li++, areaLabelAt(add ? groundAt(this.zones, at) + h : h), at.x, at.y - Math.max(grid.cell * 0.7, 18 / z), col);
+    if (d && !erase && !rough) this.plotLabel(li++, areaLabelAt(add ? groundAt(this.zones, at) + h : h), at.x, at.y - Math.max(grid.cell * 0.7, 18 / z), col);
     return li;
+  }
+
+  /**
+   * The Light tool: a round brush that paints daylight or dim light (or takes either away). It is always a free brush, never whole squares,
+   * so the light has no grid lines in it; the soft edge comes from the scene's "Soft edge" setting when it is drawn.
+   */
+  private startLightPaint(w: Vec) {
+    const u = this.ui.data;
+    const grid = this.client.grid;
+    this.drag = { kind: 'lightpaint', erase: u.lightPaint === 'erase', dim: u.lightPaint === 'dim', pts: [w], last: w, size: Math.max(1, u.lightBrush * grid.cell / grid.ft) };
+    this.invalidate();
+  }
+
+  private paintLightAt(d: Extract<Drag, { kind: 'lightpaint' }>, w: Vec) {
+    if (Math.hypot(w.x - d.last.x, w.y - d.last.y) * this.cam.zoom <= 2) return; // slow movement is gathered from the last recorded point
+    d.pts.push(w);
+    d.last = w;
+  }
+
+  private commitLightPaint(d: Extract<Drag, { kind: 'lightpaint' }>) {
+    const pts = d.pts.length > 2 ? fitPenPoints(d.pts, Math.max(0.5, d.size * 0.06)) : d.pts;
+    if (!pts.length) return;
+    const base = { k: 'terrain' as const, p: joinPts(pts), w: d.size, fill: 0, fc: '', dash: false, txt: '', fs: 28, bw: 5, hc: false, dl: true };
+    const list: NewDrawing[] = d.erase
+      // one eraser for each kind, because daylight and dim light are separate layers
+      ? [{ ...base, color: '#f2c230', hz: null, hg: '', ha: false, he: true }, { ...base, color: '#7aa2d8', hz: null, hg: '', ha: false, he: true, dd: true }]
+      : [{ ...base, color: d.dim ? '#7aa2d8' : '#f2c230', hz: 1, hg: d.dim ? 'dd' : 'dl', ha: false, he: false, ...(d.dim ? { dd: true } : {}) }];
+    void this.client.addDrawings(list, d.erase ? 'Erase painted light' : d.dim ? 'Paint dim light' : 'Paint daylight').catch((err: Error) => this.cb.onNotice(err.message, 'error'));
+  }
+
+  /** The round brush for the Light tool: where it would paint, and the stroke so far. */
+  private paintLightBrush(g: Graphics, z: number, at: Vec, d: Extract<Drag, { kind: 'lightpaint' }> | null) {
+    const u = this.ui.data;
+    const grid = this.client.grid;
+    const erase = d ? d.erase : u.lightPaint === 'erase';
+    const dim = d ? d.dim : u.lightPaint === 'dim';
+    const col = erase ? 0xff6b6b : dim ? 0x7aa2d8 : 0xf2c230;
+    const r = (d ? d.size : Math.max(1, u.lightBrush * grid.cell / grid.ft)) / 2;
+    if (d && d.pts.length > 1) {
+      g.moveTo(d.pts[0].x, d.pts[0].y);
+      for (const p of d.pts.slice(1)) g.lineTo(p.x, p.y);
+      g.stroke({ width: r * 2, color: col, alpha: 0.4, cap: 'round', join: 'round' });
+    } else if (d) g.circle(d.pts[0].x, d.pts[0].y, r).fill({ color: col, alpha: 0.4 });
+    g.circle(at.x, at.y, r).stroke({ width: 1.5 / z, color: col, alpha: 0.9 });
   }
 
   /** A faint copy of the areas being moved, where they would land. */
@@ -2972,6 +3036,7 @@ export class Board {
         break;
       }
       case 'terrain': this.paintTerrainAt(d, w); break;
+      case 'lightpaint': this.paintLightAt(d, w); break;
       case 'ramp': {
         const grid = this.client.grid;
         const n = this.ui.data.heightBrush;
@@ -3113,6 +3178,7 @@ export class Board {
         break;
       case 'shape': this.commitShape(d); break;
       case 'terrain': this.commitTerrain(d); break;
+      case 'lightpaint': this.commitLightPaint(d); break;
       case 'ramp': this.commitRamp(d); break;
       case 'wall': this.commitWall(d); break;
       case 'wallend': case 'wallmove': this.finishWallDrag(d); break;

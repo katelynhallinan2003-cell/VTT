@@ -1,3 +1,4 @@
+import { isBlankPage } from '../core/blankgrid';
 import { isLightMark } from '../core/light';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { Board } from '../board/Board';
@@ -9,9 +10,10 @@ import type { TableClient } from '../state/client';
 import { UiState } from '../state/ui';
 import type { SavedToken } from '../core/tokenlib';
 import type { AuthUser, LibraryItem, Rect, Token, Vec } from '../types';
+import { PlayerCardModal } from './playerCard';
 import { HandoutsModal } from './handouts';
 import { Toasts, copyText, toast, useClient, useTheme, useUi } from './common';
-import { AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewFolderModal, NewSceneModal, ScenesModal, SettingsModal, type SettingsTab } from './modals';
+import { AddMapModal, AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewFolderModal, NewSceneModal, ScenesModal, SettingsModal, type SettingsTab } from './modals';
 import { SceneBar } from './sceneBar';
 import { saveTokensToLibrary } from './tokenLib';
 import { droppedImage } from './uploads';
@@ -27,11 +29,13 @@ import { TokenEditorModal } from './tokenEditor';
 type ModalState =
   | null
   | { kind: 'addToken'; at: Vec; file?: File | null; art?: LibraryItem }
-  | { kind: 'newScene'; file?: File | null }
+  | { kind: 'newScene'; file?: File | null; blank?: boolean }
   | { kind: 'scenes' }
   | { kind: 'newFolder' }
   | { kind: 'detectWalls' }
   | { kind: 'autoLights' }
+  | { kind: 'addMap' }
+  | { kind: 'player'; uid: string }
   | { kind: 'colorHeights' }
   | { kind: 'library' }
   | { kind: 'settings'; tab?: SettingsTab }
@@ -439,7 +443,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
 
       {/* ---------------- right side: little tabs, and the panel that opens beside them */}
       <Rail client={client} ui={ui} />
-      <Dock client={client} ui={ui} board={board} onNewScene={() => setModal({ kind: 'newScene' })} onAutoLights={() => setModal({ kind: 'autoLights' })} onEdit={(ids) => setModal({ kind: 'editToken', ids })} />
+      <Dock client={client} ui={ui} board={board} onNewScene={() => setModal({ kind: 'newScene' })} onAutoLights={() => setModal({ kind: 'autoLights' })} onAddMap={() => setModal({ kind: 'addMap' })} onPlayer={(uid) => setModal({ kind: 'player', uid })} onEdit={(ids) => setModal({ kind: 'editToken', ids })} />
       <InitStrip client={client} ui={ui} board={board} />
       <InitPopup client={client} ui={ui} board={board} onEdit={(ids) => setModal({ kind: 'editToken', ids })} onEffects={(ids) => setFxWin(ids)} />
       {mySel && <TokenTag client={client} ui={ui} onEdit={(ids) => setModal({ kind: 'editToken', ids })} onEffects={(ids) => setFxWin(ids)} />}
@@ -451,8 +455,11 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {showEmpty && client.isDM && (
         <div class="empty-card">
           <h2>Create your first scene</h2>
-          <p>Start with a map picture, then place your tokens.</p>
-          <button class="btn primary" onClick={() => setModal({ kind: 'newScene' })}>+ New scene</button>
+          <p>Start with a map picture, or just a grid, then place your tokens.</p>
+          <div class="row wrap" style={{ justifyContent: 'center' }}>
+            <button class="btn primary" onClick={() => setModal({ kind: 'newScene' })}>+ New scene</button>
+            <button class="btn" title="No map picture: the scene is just squares" onClick={() => setModal({ kind: 'newScene', blank: true })}>Start with a grid</button>
+          </div>
           <p class="drop-tip"><DropIcon /> or drag a map picture anywhere onto this page</p>
         </div>
       )}
@@ -467,7 +474,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
         </div>
       )}
       {client.metaLoaded && !client.isDM && !client.activeSceneId && <div class="empty-card"><h2>Waiting for the DM…</h2><p>No scene is being shown yet.</p></div>}
-      {scene?.meta && !scene.meta.mapUrl && client.isDM && <div class="hint-chip">This scene has no map yet. <button class="link" onClick={() => ui.set({ dockTab: 'scene' })}>Add one in the Scene tab</button>.</div>}
+      {scene?.meta && !scene.meta.mapUrl && !isBlankPage(scene.meta) && client.isDM && <div class="hint-chip">This scene has no map yet. <button class="link" onClick={() => ui.set({ dockTab: 'scene' })}>Add one in the Scene tab</button>.</div>}
       {/* lower left: the note that this scene is private, under the toolbar and clear of the tool panels */}
       {client.isDM && !live && client.viewSceneId && <div class="corner-chip warn" title="Players can't see this scene until you summon them or move the table onto it.">Hidden from players</div>}
       {/* ---------------- top middle: things that hang from the top edge, one under the other so none covers another */}
@@ -499,9 +506,11 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
 
       {/* ---------------- modals */}
       {modal?.kind === 'addToken' && <AddTokenModal client={client} at={modal.at} initialFile={modal.file} onClose={() => setModal(null)} onCreated={(id) => ui.select([id])} />}
-      {modal?.kind === 'newScene' && <NewSceneModal client={client} initialFile={modal.file} folder={['all', 'none'].includes(d.sceneFolder) ? null : d.sceneFolder} onClose={() => setModal(null)} onCreated={() => ui.set({ dockTab: 'scene' })} />}
+      {modal?.kind === 'newScene' && <NewSceneModal client={client} initialFile={modal.file} startBlank={modal.blank} folder={['all', 'none'].includes(d.sceneFolder) ? null : d.sceneFolder} onClose={() => setModal(null)} onCreated={() => ui.set({ dockTab: 'scene' })} />}
       {modal?.kind === 'newFolder' && <NewFolderModal client={client} onClose={() => setModal(null)} onCreated={(id) => ui.set({ sceneFolder: id })} />}
       {modal?.kind === 'autoLights' && <AutoLightsModal client={client} board={board} onClose={() => setModal(null)} />}
+      {modal?.kind === 'player' && <PlayerCardModal client={client} uid={modal.uid} onClose={() => setModal(null)} />}
+      {modal?.kind === 'addMap' && <AddMapModal client={client} ui={ui} board={board} onClose={() => setModal(null)} />}
       {modal?.kind === 'detectWalls' && <DetectWallsModal client={client} board={board} onClose={() => setModal(null)} />}
       {modal?.kind === 'colorHeights' && <ColorHeightsModal client={client} board={board} onClose={() => setModal(null)} />}
       {modal?.kind === 'scenes' && <ScenesModal client={client} onClose={() => setModal(null)} onNew={() => setModal({ kind: 'newScene' })} onNewFolder={() => setModal({ kind: 'newFolder' })} />}

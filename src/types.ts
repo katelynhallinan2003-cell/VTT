@@ -56,6 +56,8 @@ export type Ambient = 'bright' | 'dim' | 'dark';
 
 export interface LightSettings {
   ambient: Ambient;
+  /** how far (in feet) painted light fades out beyond what was painted: the dim edge of daylight and dim light */
+  edge: number;
 }
 
 /** Another map picture in the same scene, laid over the first (a second floor next door, an overlay, the next stretch of road). */
@@ -261,8 +263,10 @@ export interface Drawing {
   hc?: boolean;
   /** a stroke of difficult ground (costs extra to walk through), not of height */
   dt?: boolean;
-  /** a stroke of daylight: the ground it covers is lit by the sun when the rest of the scene is dim or dark */
+  /** a stroke of painted light: the ground it covers is lit (daylight, or dim light with `dd`) when the rest of the scene is dim or dark */
   dl?: boolean;
+  /** with `dl`: dim light, which lifts the dark by half, instead of daylight, which lifts all of it */
+  dd?: boolean;
   /** a spell template: the ground it covers counts as difficult while it is on the map */
   td?: boolean;
   /** private: only the person who made it (and the DM) can see it */

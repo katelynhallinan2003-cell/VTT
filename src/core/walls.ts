@@ -1,6 +1,7 @@
 // Walls: lines you draw on the map that block what a token can see, where it can walk, and where a spell can spread.
 //
-// A wall is a straight segment. Doors are walls that can be opened, windows are walls you can see through but not walk through.
+// A wall is a straight segment. Doors and windows are walls that can be opened (both start shut). A shut window can be seen and cast through
+// but not walked through; an open one can be walked through too.
 // Every wall can also be left undrawn for the players ("invisible"); it still does its job. A wall can be ONE-WAY (a cliff edge: it
 // stops what is on one side of it and lets what is on the other side through) and can have a HEIGHT (what is higher than the top of it
 // sees and moves over it). All geometry here is plain numbers, so it can be tested without a browser.
@@ -18,7 +19,7 @@ export interface Wall {
   a: Vec;
   b: Vec;
   k: WallKind;
-  /** doors only: standing open, so nothing is blocked */
+  /** doors and windows only: standing open (a plain wall never opens) */
   open: boolean;
   /** drawn for the players too (the DM always sees every wall) */
   vis: boolean;
@@ -44,10 +45,12 @@ export const WALL_NAME: Record<WallKind, string> = { wall: 'Wall', door: 'Door',
 /** Players see doors and windows by default, but not plain walls: the map picture already shows those. */
 export const wallVisDefault = (k: WallKind): boolean => k !== 'wall';
 
-/** A wall (or a closed door) stops anyone seeing past it. A window does not. */
+/** Doors and windows are the kinds that open and close. */
+export const canOpen = (w: Pick<Wall, 'k'>): boolean => w.k !== 'wall';
+/** A wall (or a closed door) stops anyone seeing past it. A window never does, open or shut. */
 export const blocksSight = (w: Pick<Wall, 'k' | 'open'>): boolean => w.k === 'wall' || (w.k === 'door' && !w.open);
-/** Walls, windows and closed doors stop anyone walking through. */
-export const blocksMove = (w: Pick<Wall, 'k' | 'open'>): boolean => w.k !== 'door' || !w.open;
+/** Walls, shut windows and closed doors stop anyone walking through. */
+export const blocksMove = (w: Pick<Wall, 'k' | 'open'>): boolean => w.k === 'wall' || !w.open;
 /** Spells spread through windows and open doors but not through a wall or a closed door. */
 export const blocksSpell = blocksSight;
 
@@ -60,7 +63,7 @@ export function wallToWire(w: Pick<Wall, 'a' | 'b' | 'k' | 'open' | 'vis'> & Par
   return {
     p: `${r1(w.a.x)},${r1(w.a.y)},${r1(w.b.x)},${r1(w.b.y)}`,
     k: KIND_CODE[w.k],
-    ...(w.k === 'door' && w.open ? { o: 1 } : {}),
+    ...(w.k !== 'wall' && w.open ? { o: 1 } : {}),
     ...(w.vis ? { v: 1 } : {}),
     ...(w.one ? { s: w.one } : {}),
     ...(w.h && w.h > 0 ? { h: Math.round(w.h) } : {}),
@@ -74,7 +77,7 @@ export function normalizeWall(id: string, raw: any): Wall | null {
   const k = CODE_KIND[raw.k as string] ?? 'wall';
   const one: Side = raw.s === 1 ? 1 : raw.s === -1 ? -1 : 0;
   const h = Number(raw.h);
-  return { id, a: { x: n[0], y: n[1] }, b: { x: n[2], y: n[3] }, k, open: k === 'door' && !!raw.o, vis: !!raw.v, one, h: Number.isFinite(h) && h > 0 ? Math.min(1000, Math.round(h)) : 0 };
+  return { id, a: { x: n[0], y: n[1] }, b: { x: n[2], y: n[3] }, k, open: k !== 'wall' && !!raw.o, vis: !!raw.v, one, h: Number.isFinite(h) && h > 0 ? Math.min(1000, Math.round(h)) : 0 };
 }
 
 /** The pieces of wall that block something, with what it takes to get past each. `topOf` says how high a wall's top is (feet above the map's base). */

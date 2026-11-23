@@ -70,7 +70,7 @@ export class WallLayer {
       const col = COLOR[s.k];
       const hidden = !s.vis; // only the DM gets to see these
       const a = s.a, b = s.b;
-      if (s.k === 'door' && s.open) {
+      if (s.k !== 'wall' && s.open) {
         dashed(g, a, b, 6 * px, 5 * px);
         g.stroke({ width: w * 0.7, color: col, alpha: 0.55, cap: 'butt' });
       } else if (hidden) {
@@ -91,13 +91,14 @@ export class WallLayer {
       g.stroke({ width: Math.max(1.6 * px, o.cell * 0.026), color: COLOR[s.k], alpha: s.vis ? 0.95 : 0.8, cap: 'round' });
     }
 
-    // door handles: a diamond in the middle (hollow when the door stands open)
+    // door handles: a diamond in the middle (hollow when the door stands open); windows get a small square the same way
     for (const s of list) {
-      if (s.k !== 'door') continue;
+      if (s.k === 'wall') continue;
       const m = wallMid(s);
-      const r = Math.min(wallLength(s) * 0.3, Math.max(5 * px, o.cell * 0.14));
-      g.poly([m.x, m.y - r, m.x + r, m.y, m.x, m.y + r, m.x - r, m.y]);
-      if (s.open) g.stroke({ width: 2 * px, color: COLOR.door });
+      const r = Math.min(wallLength(s) * 0.3, Math.max(5 * px, o.cell * (s.k === 'door' ? 0.14 : 0.1)));
+      if (s.k === 'door') g.poly([m.x, m.y - r, m.x + r, m.y, m.x, m.y + r, m.x - r, m.y]);
+      else g.roundRect(m.x - r, m.y - r, 2 * r, 2 * r, r * 0.3);
+      if (s.open) g.stroke({ width: 2 * px, color: COLOR[s.k] });
       else { g.fill({ color: 0xffffff }); g.stroke({ width: 1.5 * px, color: 0x000000, alpha: 0.7 }); }
     }
 

@@ -41,6 +41,18 @@ export function colorRegion(img: PixelImage, color: Rgb, sensitivity: number, on
   return out;
 }
 
+export interface ColorPick { color: Rgb; /** where it was clicked on the picture, for "only that patch" (null: the colour wherever it is) */ spot: Vec | null }
+
+/** The union of several picked colours: each one's patch (`onlyPatch`) or every pixel of that colour. */
+export function colorsRegion(img: PixelImage, picks: ColorPick[], sensitivity: number, onlyPatch: boolean): Uint8Array {
+  const out = new Uint8Array(img.width * img.height);
+  for (const p of picks) {
+    const m = colorRegion(img, p.color, sensitivity, onlyPatch ? p.spot : null);
+    for (let i = 0; i < m.length; i++) if (m[i]) out[i] = 1;
+  }
+  return out;
+}
+
 /** Centres of the grid cells (squares or hexes) whose centre lies inside the box. */
 export function cellCentersIn(grid: GridSettings, r: Rect): Vec[] {
   if (isHex(grid)) return hexCentersIn(grid, r);

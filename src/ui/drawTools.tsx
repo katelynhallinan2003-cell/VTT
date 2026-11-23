@@ -291,7 +291,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
 const WALL_HINT: Record<WallKind, string> = {
   wall: 'Stops sight, movement and spells.',
   door: 'Blocks everything while it is closed. Click its diamond to open it.',
-  window: 'You can see and cast through it, but not walk through.',
+  window: 'You can see and cast through it. Shut, nobody walks through; click its square to open it.',
 };
 
 const SHAPE_HINT = { line: 'One wall at a time, run on from point to point', box: 'A room: four walls at once', free: 'Draw a line by hand', circle: 'A round room' } as const;
@@ -304,7 +304,8 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
   const walls = client.wallsList();
   const sel = [...d.wallSel].map((id) => client.scene?.walls.get(id)).filter((w): w is NonNullable<typeof w> => !!w);
   const ids = sel.map((w) => w.id);
-  const doors = sel.filter((w) => w.k === 'door');
+  const doors = sel.filter((w) => w.k !== 'wall');
+  const openWord = doors.length && doors.every((w) => w.k === 'window') ? 'window' : doors.every((w) => w.k === 'door') ? 'door' : 'door or window';
   const canOne = sel.filter((w) => w.k !== 'door');
   const kinds = new Set(sel.map((w) => w.k));
   const allVis = sel.length > 0 && sel.every((w) => w.vis);
@@ -393,22 +394,29 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
               </div>
               {doors.length > 0 && (
                 <div class="seg">
-                  <button class={doors.every((w) => !w.open) ? 'on' : ''} onClick={() => void client.updateWalls(doors.map((w) => w.id), { open: false }, 'Close door')}>Closed</button>
-                  <button class={doors.every((w) => w.open) ? 'on' : ''} onClick={() => void client.updateWalls(doors.map((w) => w.id), { open: true }, 'Open door')}>Open</button>
+                  <button class={doors.every((w) => !w.open) ? 'on' : ''} onClick={() => void client.updateWalls(doors.map((w) => w.id), { open: false }, `Close ${openWord}`)}>Closed</button>
+                  <button class={doors.every((w) => w.open) ? 'on' : ''} onClick={() => void client.updateWalls(doors.map((w) => w.id), { open: true }, `Open ${openWord}`)}>Open</button>
                 </div>
               )}
               <div class="row wrap">
                 <button class="btn small danger" onClick={() => { void client.removeWalls(ids); ui.set({ wallSel: new Set() }); }}>Delete {sel.length > 1 ? 'walls' : WALL_NAME[sel[0].k].toLowerCase()}</button>
               </div>
             </>
-          ) : <p class="hint">Click a wall, or drag a box round several (Shift-click adds more). Drag a dot to move a corner, or the wall to move it. Double-click a wall to add a corner, a corner to remove it, a door to open it.</p>}
+          ) : <p class="hint">Click a wall, or drag a box round several (Shift-click adds more). Drag a dot to move a corner, or the wall to move it. Double-click a wall to add a corner, a corner to remove it, a door or window to open it.</p>}
         </div>
       )}
       <div class="ht-card">
-        <strong>On this map</strong>
-        <Toggle checked={!!meta?.wallStop} onChange={(v) => void client.updateScene({ wallStop: v })} label="Walls stop the players' tokens" hint="Off: walls only block sight and spells." />
-        <Toggle checked={d.wallIgnore} onChange={(v) => ui.set({ wallIgnore: v })} label="DM can move tokens through walls" hint="Holding Q while you drag does it once." />
-        <Toggle checked={d.showWalls} onChange={(v) => ui.set({ showWalls: v })} label="Show walls when this tool is closed" hint="Only on your screen." />
+        <button type="button" class="fold-head" aria-expanded={d.wallMapOpen} onClick={() => ui.set({ wallMapOpen: !d.wallMapOpen })}>
+          <span class="fold-caret" aria-hidden="true">{d.wallMapOpen ? '▾' : '▸'}</span>
+          <strong>On this map</strong>
+        </button>
+        {d.wallMapOpen && (
+          <>
+            <Toggle checked={!!meta?.wallStop} onChange={(v) => void client.updateScene({ wallStop: v })} label="Walls stop the players' tokens" hint="Off: walls only block sight and spells." />
+            <Toggle checked={d.wallIgnore} onChange={(v) => ui.set({ wallIgnore: v })} label="DM can move tokens through walls" hint="Holding Q while you drag does it once." />
+            <Toggle checked={d.showWalls} onChange={(v) => ui.set({ showWalls: v })} label="Show walls when this tool is closed" hint="Only on your screen." />
+          </>
+        )}
         {!sightOn && (
           <button class="btn small" onClick={() => void client.updateScene({ fog: { enabled: true, vision: true } })}>Turn on fog and token sight</button>
         )}

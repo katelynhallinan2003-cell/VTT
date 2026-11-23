@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Board } from '../board/Board';
 import { cellPoly } from '../core/cells';
-import { cellCentersIn, cellsCovered, colorRegion } from '../core/colorcells';
+import { cellCentersIn, cellsCovered, colorsRegion, type ColorPick } from '../core/colorcells';
 import { joinPts } from '../core/draw';
 import type { PixelImage } from '../core/gridcut';
 import { MAX_STROKE_CELLS, heightColor, newAreaId } from '../core/terrain';
-import { colorAt, guessWallColor, type Rgb } from '../core/walltrace';
+import { colorAt, guessWallColor } from '../core/walltrace';
 import type { TableClient } from '../state/client';
 import type { Vec } from '../types';
 import { Modal, SliderField, Toggle, toast, useClient } from './common';
@@ -27,17 +27,20 @@ export function ColorHeightsModal(props: { client: TableClient; board: Board | n
   const grid = client.grid;
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [error, setError] = useState('');
-  const [color, setColor] = useState<Rgb | null>(null);
-  const [spot, setSpot] = useState<Vec | null>(null);
+  // the colours of this one height: a slot per colour (null while it waits for a click on the picture), and the slot a click fills
+  const [slots, setSlots] = useState<(ColorPick | null)[]>([null]);
+  const [active, setActive] = useState(0);
   const [sens, setSens] = useState(18);
   const [frac, setFrac] = useState(50);
-  const [patch, setPatch] = useState(false);
+  // only the patch that was clicked, unless the DM asks for the colour everywhere
+  const [patch, setPatch] = useState(true);
   const [height, setHeight] = useState(-10);
   // the answer for one set of choices; it is stale (and shows "Working…") until it matches the choices on screen
   const [result, setResult] = useState<{ key: string; cells: Vec[] }>({ key: '', cells: [] });
-  const key = JSON.stringify([color, spot, sens, frac, patch]);
-  const busy = !!color && !!loaded && result.key !== key;
-  const cells = busy || !color ? [] : result.cells;
+  const picks = slots.filter((x): x is ColorPick => !!x);
+  const key = JSON.stringify([picks, sens, frac, patch]);
+  const busy = picks.length > 0 && !!loaded && result.key !== key;
+  const cells = busy || !picks.length ? [] : result.cells;
   const base = useRef<HTMLCanvasElement>(null);
   const over = useRef<HTMLCanvasElement>(null);
   const run = useRef(0);
@@ -61,18 +64,18 @@ export function ColorHeightsModal(props: { client: TableClient; board: Board | n
   }, [loaded]);
 
   useEffect(() => {
-    if (!loaded || !color) return;
+    if (!loaded || !picks.length) return;
     const id = ++run.current;
     const t = setTimeout(() => {
       const { width: w, height: h } = loaded.img;
-      const mask = colorRegion(loaded.img, color, sens, patch ? spot : null);
+      const mask = colorsRegion(loaded.img, picks, sens, patch);
       const a = loaded.toScene({ x: 0, y: 0 }), b = loaded.toScene({ x: w, y: h });
       const centers = cellCentersIn(grid, { x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y });
       const got = cellsCovered(mask, w, h, centers, grid.cell, loaded.fromScene, frac / 100);
       if (id === run.current) setResult({ key, cells: got });
     }, 120);
     return () => clearTimeout(t);
-  }, [loaded, color, spot, sens, frac, patch]);
+  }, [loaded, key]);
 
   // the cells it would paint, laid over the picture
   useEffect(() => {
@@ -97,8 +100,15 @@ export function ColorHeightsModal(props: { client: TableClient; board: Board | n
     if (!c || !loaded) return;
     const r = c.getBoundingClientRect();
     const px = { x: ((e.clientX - r.left) / r.width) * c.width, y: ((e.clientY - r.top) / r.height) * c.height };
-    setColor(colorAt(loaded.img, px.x, px.y, 2));
-    setSpot(px);
+    fill({ color: colorAt(loaded.img, px.x, px.y, 2), spot: px });
+  };
+  /** puts a colour in the slot being filled */
+  const fill = (pk: ColorPick) => setSlots((cur) => cur.map((x, i) => (i === active ? pk : x)));
+  const addSlot = () => { setSlots((cur) => [...cur, null]); setActive(slots.length); };
+  const dropSlot = (i: number) => {
+    const next = slots.length > 1 ? slots.filter((_, j) => j !== i) : [null];
+    setSlots(next);
+    setActive(Math.min(next.length - 1, active > i ? active - 1 : active));
   };
 
   const add = async () => {
@@ -120,23 +130,32 @@ export function ColorHeightsModal(props: { client: TableClient; board: Board | n
     <Modal title="Paint height from colour" onClose={props.onClose} width={820}
       footer={(
         <>
-          <span class="muted grow">{error ? '' : !color ? 'Click the colour on the picture.' : busy ? 'Working…' : tooMany ? `${cells.length} cells: too many. Try a closer colour.` : `${cells.length} ${word}${cells.length === 1 ? '' : 's'} would be painted.`}</span>
+          <span class="muted grow">{error ? '' : !picks.length ? 'Click the colour on the picture.' : busy ? 'Working…' : tooMany ? `${cells.length} cells: too many. Try a closer colour.` : `${cells.length} ${word}${cells.length === 1 ? '' : 's'} would be painted.`}</span>
           <button class="btn" onClick={props.onClose}>Cancel</button>
           <button class="btn primary" disabled={busy || !cells.length || tooMany} onClick={() => void add()}>Paint {cells.length || ''} {word}{cells.length === 1 ? '' : 's'}</button>
         </>
       )}>
       {error ? <p class="muted">{error}</p> : (
         <>
-          <p class="hint">Click the colour of the ground you want to raise or lower (water, a pit, a platform). Everything that colour is painted as one area. Run it again for another colour.</p>
+          <p class="hint">Click the colour of the ground you want to raise or lower (water, a pit, a platform). Press + if the same height has another colour. Different heights are separate runs.</p>
           <div class="dw-view"><div class="dw-stage">
             <canvas ref={base} class="dw-canvas" onClick={(e) => pick(e as unknown as MouseEvent)} title="Click the ground colour" />
             <canvas ref={over} class="dw-over" />
           </div></div>
           <div class="dw-controls">
-            <div class="row">
-              <span class="field-label">Colour</span>
-              {color ? <span class="dw-swatch" style={{ background: `rgb(${color[0]},${color[1]},${color[2]})` }} /> : <span class="muted">none picked yet</span>}
-              {loaded && color && <button class="btn small" onClick={() => { setColor(guessWallColor(loaded.img)); setSpot(null); }} title="Pick the darkest main colour">Darkest colour</button>}
+            <div class="row wrap">
+              <span class="field-label">{slots.length > 1 ? 'Colours' : 'Colour'}</span>
+              {slots.map((pk, i) => (
+                <span key={i} class={'dw-slot' + (i === active ? ' on' : '')}>
+                  <button type="button" class="dw-slot-pick" aria-pressed={i === active} aria-label={pk ? `Colour ${i + 1}` : `Colour ${i + 1}: waiting for a click on the picture`}
+                    title={pk ? 'Click the picture to change this colour' : 'Click the picture to choose this colour'} onClick={() => setActive(i)}>
+                    {pk ? <span class="dw-swatch" style={{ background: `rgb(${pk.color[0]},${pk.color[1]},${pk.color[2]})` }} /> : <span class="dw-swatch empty">click picture</span>}
+                  </button>
+                  {(slots.length > 1 || pk) && <button type="button" class="dw-slot-x" aria-label={`Remove colour ${i + 1}`} title="Remove this colour" onClick={() => dropSlot(i)}>✕</button>}
+                </span>
+              ))}
+              <button type="button" class="btn small" disabled={slots.some((x) => !x)} onClick={addSlot} title="Add another colour that is this same height" aria-label="Add another colour">+</button>
+              {loaded && <button class="btn small" onClick={() => fill({ color: guessWallColor(loaded.img), spot: null })} title="Pick the darkest main colour">Darkest colour</button>}
             </div>
             <label class="numf" title="Feet above the map's base level. Negative is lower: −10 for water or a pit.">
               <span>Height</span>
@@ -145,7 +164,7 @@ export function ColorHeightsModal(props: { client: TableClient; board: Board | n
             </label>
             <SliderField label="How close the colour must be" value={sens} min={2} max={60} onInput={setSens} hint="Up: catches more shades. Down: only the exact colour." />
             <SliderField label={`${word === 'square' ? 'Square' : 'Hex'} counts when this much is that colour`} value={frac} min={20} max={95} step={5} unit="%" onInput={setFrac} />
-            <Toggle checked={patch} onChange={setPatch} label="Only the patch I clicked" hint="Leave off to paint every place on the map with this colour." />
+            <Toggle checked={patch} onChange={setPatch} label="Only the patch I clicked" hint="Off: every place on the map with these colours." />
           </div>
         </>
       )}

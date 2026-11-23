@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cellCentersIn, cellsCovered, colorRegion } from '../src/core/colorcells';
+import { cellCentersIn, cellsCovered, colorRegion, colorsRegion } from '../src/core/colorcells';
 import type { GridSettings } from '../src/types';
 import type { PixelImage } from '../src/core/gridcut';
 
@@ -31,6 +31,35 @@ describe('colour regions', () => {
   });
   it('a click on nothing matching selects nothing', () => {
     expect(colorRegion(pools(), [40, 90, 200], 20, { x: 20, y: 250 }).some((v) => v)).toBe(false);
+  });
+});
+
+describe('several colours at one height', () => {
+  /** the pools picture with a green ledge (x 0..100, y 0..100) added */
+  function withLedge(): PixelImage {
+    const img = pools();
+    for (let y = 0; y < 100; y++) for (let x = 0; x < 100; x++) { const p = (y * 400 + x) * 4; img.data[p] = 60; img.data[p + 1] = 170; img.data[p + 2] = 70; }
+    return img;
+  }
+  const n = (m: Uint8Array) => m.reduce((a, b) => a + b, 0);
+  it('adds the areas of every picked colour together', () => {
+    const img = withLedge();
+    const blue = { color: [40, 90, 200] as [number, number, number], spot: { x: 150, y: 150 } };
+    const green = { color: [60, 170, 70] as [number, number, number], spot: { x: 50, y: 50 } };
+    expect(n(colorsRegion(img, [blue], 20, true))).toBe(100 * 100);
+    expect(n(colorsRegion(img, [blue, green], 20, true))).toBe(100 * 100 + 100 * 100);
+    // with "only the patch I clicked" off, each colour is taken wherever it is
+    expect(n(colorsRegion(img, [blue, green], 20, false))).toBe(2 * 100 * 100 + 100 * 100);
+  });
+  it('a colour picked twice is not counted twice, and no colours is nothing', () => {
+    const img = withLedge();
+    const blue = { color: [40, 90, 200] as [number, number, number], spot: { x: 150, y: 150 } };
+    expect(n(colorsRegion(img, [blue, blue], 20, true))).toBe(100 * 100);
+    expect(n(colorsRegion(img, [], 20, true))).toBe(0);
+  });
+  it('a colour with no click spot is taken wherever it is, even when only patches are asked for', () => {
+    const img = withLedge();
+    expect(n(colorsRegion(img, [{ color: [40, 90, 200], spot: null }], 20, true))).toBe(2 * 100 * 100);
   });
 });
 

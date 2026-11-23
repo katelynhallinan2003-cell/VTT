@@ -18,9 +18,29 @@ describe('what each kind of wall stops', () => {
   });
 });
 
+describe('windows open and close', () => {
+  it('a shut window blocks walking only; an open one blocks nothing; a plain wall never opens', () => {
+    const shut = W('a', 0, 0, 1, 0, 'window'), open = W('b', 0, 0, 1, 0, 'window', true), wall = W('c', 0, 0, 1, 0, 'wall', true);
+    expect([shut, open].map(blocksSight)).toEqual([false, false]);
+    expect([shut, open].map(blocksMove)).toEqual([true, false]);
+    // a wall that somehow says it is open still stops everything
+    expect(blocksMove(wall)).toBe(true);
+    expect(blocksSight(wall)).toBe(true);
+    expect(moveSegs([shut, open, wall])).toHaveLength(2);
+  });
+  it('keeps an open window open when saved, and a wall never saves as open', () => {
+    const win = W('w', 0, 0, 100, 0, 'window', true);
+    expect(normalizeWall('w', wallToWire(win))!.open).toBe(true);
+    expect(normalizeWall('w', wallToWire({ ...win, open: false }))!.open).toBe(false);
+    expect(normalizeWall('x', { ...wallToWire(W('x', 0, 0, 1, 1)), o: 1 })!.open).toBe(false);
+    // windows saved before they could open load shut
+    expect(normalizeWall('y', { p: '0,0,10,0', k: 'n' })!.open).toBe(false);
+  });
+});
+
 describe('saving and loading', () => {
   it('round-trips every kind', () => {
-    for (const w of [W('a', 10.04, 20, 30, 40.96), W('b', 0, 0, 100, 0, 'door', true, true), W('c', 5, 5, 6, 6, 'window')]) {
+    for (const w of [W('a', 10.04, 20, 30, 40.96), W('b', 0, 0, 100, 0, 'door', true, true), W('c', 5, 5, 6, 6, 'window'), W('e', 5, 5, 6, 6, 'window', true)]) {
       const back = normalizeWall(w.id, wallToWire(w))!;
       expect(back.k).toBe(w.k);
       expect(back.open).toBe(w.open);

@@ -1049,12 +1049,12 @@ export class Board {
     }, `${scene.wallRev}:${this.wallPrevSeq}`, editing || u.showWalls);
   }
 
-  /** The door whose diamond is under `p` (the DM clicks it to open or close it). */
+  /** The door or window whose handle is under `p` (the DM clicks it to open or close it). */
   private doorAt(p: Vec): Wall | null {
     const max = Math.max(this.client.grid.cell * 0.2, 9 / this.cam.zoom);
     let best: Wall | null = null, bd = max;
     for (const w of this.client.scene?.walls.values() ?? []) {
-      if (w.k !== 'door') continue;
+      if (w.k === 'wall') continue;
       const m = wallMid(w);
       const d = Math.hypot(m.x - p.x, m.y - p.y);
       if (d <= bd) { bd = d; best = w; }
@@ -1319,7 +1319,7 @@ export class Board {
     const z = this.cam.zoom;
     const list = this.client.wallsList();
     const fail = (err: Error) => this.cb.onNotice(err.message, 'error');
-    const door = wallNear(list.filter((x) => x.k === 'door'), w, 8 / z);
+    const door = wallNear(list.filter((x) => x.k !== 'wall'), w, 8 / z);
     if (door) { void this.client.toggleDoor(door.wall.id).catch(fail); return; }
     const en = endNear(list, w, 9 / z);
     if (en) {
@@ -2199,7 +2199,7 @@ export class Board {
       this.startPress(w, e);
       return;
     }
-    // the DM opens and closes a door by clicking its diamond (tokens on top of it win)
+    // the DM opens and closes a door or window by clicking its handle (tokens on top of it win)
     if (this.client.isDM && this.ui.data.showWalls && !e.shiftKey) {
       const door = this.doorAt(w);
       if (door) { void this.client.toggleDoor(door.id); return; }

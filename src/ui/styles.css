@@ -564,6 +564,10 @@ input[type=text], input[type=number], input[type=password], select { border-radi
 /* Heights panel: the card for the selected (or next) ground */
 .ht-card { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--line, #3a3f4b); border-radius: 8px; background: rgba(255,255,255,0.03); }
 .ht-card .btn[disabled], .ht-card .seg button[disabled] { opacity: 0.45; cursor: not-allowed; }
+/* a heading that folds the rest of its card away */
+.fold-head { display: flex; align-items: center; gap: 6px; width: 100%; padding: 2px 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.fold-head:hover strong { text-decoration: underline; }
+.fold-caret { width: 1em; color: var(--muted, #98a0b0); }
 
 /* ---- handouts */
 .handout-img { display: block; max-width: 100%; max-height: 60vh; margin: 0 auto 10px; border-radius: 6px; object-fit: contain; }
@@ -667,3 +671,10 @@ textarea:not(.text-editor):focus { border-color: var(--accent); }
 .dw-over line { stroke: #ff3b8a; stroke-width: 3; stroke-linecap: round; vector-effect: non-scaling-stroke; }
 .dw-controls { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .dw-swatch { display: inline-block; width: 28px; height: 18px; border-radius: 4px; border: 1px solid #888; }
+.dw-swatch.empty { width: auto; padding: 0 6px; font-size: 11px; line-height: 16px; color: var(--muted, #98a0b0); border-style: dashed; }
+/* one colour of the height being painted: click it to say the next click on the picture changes it */
+.dw-slot { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border-radius: 6px; border: 2px solid transparent; }
+.dw-slot.on { border-color: var(--accent, #6aa9ff); }
+.dw-slot-pick { padding: 0; border: 0; background: none; cursor: pointer; display: inline-flex; }
+.dw-slot-x { padding: 0 4px; border: 0; background: none; color: var(--muted, #98a0b0); cursor: pointer; font-size: 12px; }
+.dw-slot-x:hover { color: inherit; }

@@ -873,7 +873,7 @@ export class TableClient {
     if (!before.length) return;
     const after = before.map((w) => {
       const n = { ...w, ...patch };
-      if (n.k !== 'door') n.open = false; // only doors open
+      if (n.k === 'wall') n.open = false; // only doors and windows open
       return n;
     });
     await this.putWalls(after);
@@ -950,11 +950,11 @@ export class TableClient {
     return true;
   }
 
-  /** Open or close a door. */
+  /** Open or close a door or a window. */
   async toggleDoor(id: string): Promise<void> {
     const w = this.scene?.walls.get(id);
-    if (!w || w.k !== 'door') return;
-    await this.updateWalls([id], { open: !w.open }, w.open ? 'Close door' : 'Open door');
+    if (!w || w.k === 'wall') return;
+    await this.updateWalls([id], { open: !w.open }, `${w.open ? 'Close' : 'Open'} ${w.k}`);
   }
 
   async removeDrawings(ids: string[], label = 'Erase drawing'): Promise<void> {

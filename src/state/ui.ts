@@ -118,6 +118,8 @@ export interface UiData {
   showWalls: boolean;
   /** the DM walks through walls, and sees through them */
   wallIgnore: boolean;
+  /** the "On this map" switches in the Walls tool are unfolded (folded by default: set once, left alone) */
+  wallMapOpen: boolean;
   /** DM: the initiative pop-up is open */
   initOpen: boolean;
   /** where the turn order sits on screen: across the top middle, or down the right edge */
@@ -196,6 +198,7 @@ export class UiState {
     wallSel: new Set(),
     showWalls: readFlag('vtt-show-walls', true),
     wallIgnore: false,
+    wallMapOpen: readFlag('vtt-wall-map-open', false),
     initPos: readStr('vtt-init-pos', 'top', ['top', 'side'] as const),
     panButton: readStr('vtt-pan-button', 'right', ['right', 'middle'] as const),
     pingMode: readStr('vtt-ping-mode', 'middle', ['middle', 'hold'] as const),
@@ -249,6 +252,7 @@ export class UiState {
       if (patch.wallH !== undefined) localStorage.setItem('vtt-wall-h', String(patch.wallH));
       if (patch.wallSnap !== undefined) localStorage.setItem('vtt-wall-snap', patch.wallSnap);
       if (patch.showWalls !== undefined) localStorage.setItem('vtt-show-walls', patch.showWalls ? '1' : '0');
+      if (patch.wallMapOpen !== undefined) localStorage.setItem('vtt-wall-map-open', patch.wallMapOpen ? '1' : '0');
       if (patch.initPos !== undefined) localStorage.setItem('vtt-init-pos', patch.initPos);
       if (patch.tplShare !== undefined) localStorage.setItem('vtt-tpl-share', patch.tplShare ? '1' : '0');
       if (patch.testMulti !== undefined) localStorage.setItem('vtt-test-multi', patch.testMulti ? '1' : '0');

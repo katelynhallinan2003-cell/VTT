@@ -17,6 +17,7 @@ An issue the user says is still broken moves back up to *Open* with a note on wh
 
 ## Open
 
+- [ ] **#32 Auto-add walls and heights from a map picture: is it a good idea, and how?** (waiting on user) (added 2026-11-23): "Before doing it, tell me if this is a good idea and how it would be done. Could it have a button to try and auto add the height mapping, and another to try and auto add the walls?" Answered in chat with a plan (a "Detect walls…" draft-and-review tool; heights as "paint a height from a picked colour", not true auto-height). Not built until the user says go.
 Carried over from the old `TASKS.md` on 2026-11-22 (asked 2026-11-21, before this file existed):
 
 - [ ] **#4 Players get "permission denied" when drawing or placing a template** (waiting on user) (added 2026-11-21):

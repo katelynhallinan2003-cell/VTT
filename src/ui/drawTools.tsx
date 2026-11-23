@@ -156,7 +156,7 @@ export function DrawFlyout(props: { ui: UiState; client: TableClient }) {
 
 const BRUSH_SIZES = [1, 2, 3, 4, 6, 8];
 
-export function HeightFlyout(props: { ui: UiState; client: TableClient }) {
+export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromColor?: () => void }) {
   const { ui, client } = props;
   const d = useUi(ui);
   useClient(client);
@@ -208,6 +208,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient }) {
           <button key={k} class={mode === k ? 'on' : ''} onClick={() => ui.set({ heightMode: k })}>{label}</button>
         ))}
       </div>
+      {!rough && mode === 'paint' && props.onFromColor && <button class="btn small" title="Pick a colour on the map picture (water, a pit) and paint every place with it at a height" onClick={props.onFromColor}>Paint height from a colour…</button>}
       {mode !== 'move' && (
         <>
           {!gridless && mode !== 'ramp' && <Toggle checked={d.heightSnap} onChange={(v) => ui.set({ heightSnap: v })} label={`Fill whole ${cellWord}s`} hint="Hold Alt to flip this for one stroke." />}
@@ -296,7 +297,7 @@ const WALL_HINT: Record<WallKind, string> = {
 
 const SHAPE_HINT = { line: 'One wall at a time, run on from point to point', box: 'A room: four walls at once', free: 'Draw a line by hand', circle: 'A round room' } as const;
 
-export function WallFlyout(props: { ui: UiState; client: TableClient }) {
+export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?: () => void }) {
   const { ui, client } = props;
   const d = useUi(ui);
   useClient(client);
@@ -357,6 +358,7 @@ export function WallFlyout(props: { ui: UiState; client: TableClient }) {
           <div class="seg wrap">
             {([['corner', 'Corners'], ['half', 'Halves too'], ['off', 'Free']] as const).map(([k, label]) => <button key={k} class={d.wallSnap === k ? 'on' : ''} onClick={() => ui.set({ wallSnap: k })}>{label}</button>)}
           </div>
+          {props.onDetect && <button class="btn small" title="Look for the walls printed on the map picture and add them for you to check" onClick={props.onDetect}>Detect walls from the map…</button>}
           <p class="hint">
             {d.wallKind === 'door' || d.wallShape === 'line' ? 'Click points and the walls run on; double-click, Enter, Esc or right-click to stop. Or drag one wall at a time.'
               : d.wallShape === 'box' ? 'Drag out a room, or click two opposite corners.'

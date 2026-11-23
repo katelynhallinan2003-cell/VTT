@@ -10,7 +10,7 @@ import { DEFAULT_CLIFF_FT, cliffSegs, rampCells, walkExtra, walkNote, type WalkE
 import { paintedCliffBlocks } from '../core/terrainMovement';
 import { EMPTY_TERRAIN, MAX_STROKE_CELLS, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, heightColor, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
-import { scaleCut, type GridCut } from '../core/gridcut';
+import { scaleCut, type GridCut, type PixelImage } from '../core/gridcut';
 import { AUTO_GRID_STRENGTH, detectPrintedGrid, impliedGrid } from '../core/mapgrid';
 import { lightOf, viewerOf, type LightSrc, type Viewer } from '../core/light';
 import { LightLayer } from './LightLayer';
@@ -726,6 +726,25 @@ export class Board {
     const f = detectPrintedGrid(px.img, { hint, shape: meta.grid.shape, any: opts.any });
     if (!f) return { error: 'I could not find evenly spaced grid lines in this picture. Some maps have none, or only faint ones.', noGrid: true };
     return { cut: { ...scaleCut(f.cut, pixelScale), on: true }, strength: f.strength };
+  }
+
+  /**
+   * The main map picture, shrunk to at most `maxSide` pixels a side, for the "Detect walls" window.
+   * `toScene` and `fromScene` convert between points in that sample and points on the board.
+   */
+  async readMapForWalls(maxSide: number): Promise<{ img: PixelImage; toScene: (p: Vec) => Vec; fromScene: (p: Vec) => Vec; cellPx: number } | { error: string }> {
+    const tex = this.mapTex;
+    const meta = this.client.scene?.meta;
+    if (!tex || !meta?.mapUrl) return { error: 'Add a map picture to this scene first.' };
+    const px = await readGridSample(tex, meta.mapUrl, maxSide);
+    if (!px) return { error: "This browser would not let me read the map picture, so I can't look for walls in it." };
+    const k = px.sampleScale * meta.mapScale;
+    return {
+      img: px.img,
+      toScene: (p) => ({ x: meta.mapX + p.x * k, y: meta.mapY + p.y * k }),
+      fromScene: (p) => ({ x: (p.x - meta.mapX) / k, y: (p.y - meta.mapY) / k }),
+      cellPx: meta.grid.cell / k,
+    };
   }
 
   async chooseGridOverlay(choice: GridOverlay) {

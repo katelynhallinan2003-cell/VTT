@@ -123,14 +123,14 @@ function readPixels(source: CanvasImageSource, width: number, height: number, ma
 }
 
 /** A renderer may discard fine lines to fit its GPU. Sample the original at the finder's resolution. */
-export async function readGridSample(tex: LoadedTexture, url: string) {
+export async function readGridSample(tex: LoadedTexture, url: string, maxSide = 2 * WORK_SIDE) {
   const src = tex.texture.source;
   if (src.pixelWidth === tex.w && src.pixelHeight === tex.h) {
-    return readPixels(src.resource, tex.w, tex.h, 2 * WORK_SIDE);
+    return readPixels(src.resource, tex.w, tex.h, maxSide);
   }
   try {
     const original = await loadImageWithRetry(url);
-    return readPixels(original, original.naturalWidth, original.naturalHeight, 2 * WORK_SIDE);
+    return readPixels(original, original.naturalWidth, original.naturalHeight, maxSide);
   } catch {
     return null;
   }

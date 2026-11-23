@@ -76,3 +76,5 @@ Read `CLAUDE.md` (this file) and `WIP.md` before doing anything else in a sessio
 
 - **Lights are props, not tokens.** A torch or other light-only mark (`isLightMark`: no shape, no picture, has a light) is not in the DM's Tokens list (it has a folded "Lights" list under it), not in the initiative order, and cannot be claimed or given to a player. A creature carrying a light is an ordinary token.
 
+- **Drafting from the map picture.** "Detect walls" and "Paint height from colour" read the main map picture in the browser (a sample of at most 1400 or 1000 pixels a side; nothing is uploaded) and only ever *propose*: the DM sees the result drawn over the picture, tunes it, and one button adds it as a single undoable step. Detected walls are plain walls 10 ft high; doors, windows and one-way cliff edges stay manual. Heights are never guessed from the picture's shading: the DM names the colour and the height. The pixel work lives in `core/walltrace.ts` and `core/colorcells.ts` (plain arrays, unit-tested on drawn maps in `tests/walltrace.test.ts` and `tests/colorcells.test.ts`); a failure on a real map becomes a new drawn map in those tests before it is fixed.
+

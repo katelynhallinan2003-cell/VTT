@@ -15,6 +15,8 @@ import { AddTokenModal, ClaimModal, GridDialog, LibraryModal, NewFolderModal, Ne
 import { SceneBar } from './sceneBar';
 import { saveTokensToLibrary } from './tokenLib';
 import { droppedImage } from './uploads';
+import { ColorHeightsModal } from './colorHeights';
+import { DetectWallsModal } from './detectWalls';
 import { DrawFlyout, DrawInspector, HeightFlyout, RulerFlyout, TemplateFlyout, TestMoveBar, TextEditor, WallFlyout } from './drawTools';
 import { Dock, Rail, TokenTag } from './panels';
 import { InitPopup, InitStrip } from './initiative';
@@ -27,6 +29,8 @@ type ModalState =
   | { kind: 'newScene'; file?: File | null }
   | { kind: 'scenes' }
   | { kind: 'newFolder' }
+  | { kind: 'detectWalls' }
+  | { kind: 'colorHeights' }
   | { kind: 'library' }
   | { kind: 'settings'; tab?: SettingsTab }
   | { kind: 'claim' }
@@ -370,8 +374,8 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       )}
       {d.tool === 'template' && <TemplateFlyout ui={ui} client={client} />}
       {d.tool === 'ruler' && <RulerFlyout ui={ui} client={client} />}
-      {d.tool === 'height' && client.isDM && <HeightFlyout ui={ui} client={client} />}
-      {d.tool === 'wall' && client.isDM && <WallFlyout ui={ui} client={client} />}
+      {d.tool === 'height' && client.isDM && <HeightFlyout ui={ui} client={client} onFromColor={() => setModal({ kind: 'colorHeights' })} />}
+      {d.tool === 'wall' && client.isDM && <WallFlyout ui={ui} client={client} onDetect={() => setModal({ kind: 'detectWalls' })} />}
       <TextEditor ui={ui} client={client} board={board} />
       <DrawInspector ui={ui} client={client} board={board} />
 
@@ -490,6 +494,8 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {modal?.kind === 'addToken' && <AddTokenModal client={client} at={modal.at} initialFile={modal.file} onClose={() => setModal(null)} onCreated={(id) => ui.select([id])} />}
       {modal?.kind === 'newScene' && <NewSceneModal client={client} initialFile={modal.file} folder={['all', 'none'].includes(d.sceneFolder) ? null : d.sceneFolder} onClose={() => setModal(null)} onCreated={() => ui.set({ dockTab: 'scene' })} />}
       {modal?.kind === 'newFolder' && <NewFolderModal client={client} onClose={() => setModal(null)} onCreated={(id) => ui.set({ sceneFolder: id })} />}
+      {modal?.kind === 'detectWalls' && <DetectWallsModal client={client} board={board} onClose={() => setModal(null)} />}
+      {modal?.kind === 'colorHeights' && <ColorHeightsModal client={client} board={board} onClose={() => setModal(null)} />}
       {modal?.kind === 'scenes' && <ScenesModal client={client} onClose={() => setModal(null)} onNew={() => setModal({ kind: 'newScene' })} onNewFolder={() => setModal({ kind: 'newFolder' })} />}
       {modal?.kind === 'library' && <LibraryModal client={client} onClose={() => setModal(null)} onUseMap={useLibraryMap} onAddToken={addLibraryToken} onAddSaved={(e) => { void addSavedToken(e); setModal(null); }} />}
       {modal?.kind === 'settings' && <SettingsModal key={modal.tab ?? 'first'} client={client} ui={ui} tab={modal.tab} onClose={() => setModal(null)} onSignOut={client.isDM ? props.onSignOut : undefined} />}

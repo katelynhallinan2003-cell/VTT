@@ -3,6 +3,7 @@ import type { LibraryItem, LibraryKind } from '../types';
 import { removeLibraryItem, watchImageCleanup, type ImageCleanupLink } from '../state/account';
 import type { TableClient } from '../state/client';
 import { P } from '../state/paths';
+import { deleteFromImgbb } from '../core/imgbb';
 import { toast } from './common';
 
 export function PictureTrash({ client, kind, item, disabled }: { client: TableClient; kind: LibraryKind; item: LibraryItem; disabled?: boolean }) {
@@ -10,8 +11,11 @@ export function PictureTrash({ client, kind, item, disabled }: { client: TableCl
   async function remove() {
     setBusy(true);
     try {
-      await removeLibraryItem(client.backend, client.uid, kind, item);
-      toast(item.name + ' removed from library.', 'ok');
+      const key = client.uploadKey;
+      const hosted = await removeLibraryItem(client.backend, client.uid, kind, item, key ? (url) => deleteFromImgbb(url, key) : undefined);
+      toast(hosted ? item.name + ' removed from your library and from ImgBB.'
+        : item.deleteUrl ? item.name + ' removed from your library. ImgBB could not be asked from here: finish it under ImgBB cleanup.'
+        : item.name + ' removed from your library.', hosted ? 'ok' : 'info', hosted ? 2600 : 5200);
     } catch (e) {
       toast('Could not remove ' + item.name + '. ' + String(e), 'error');
     } finally {

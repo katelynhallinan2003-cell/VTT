@@ -44,6 +44,45 @@ export async function createTable(backend: Backend, user: AuthUser, name: string
   return tid;
 }
 
+/** Rename a table, both on the table itself (players see it on the join screen) and in the DM's list of tables. */
+export async function renameTable(backend: Backend, uid: string, tid: string, name: string): Promise<void> {
+  await backend.update({
+    [`${P.meta(tid)}/name`]: name,
+    [`${P.userTable(uid, tid)}/name`]: name,
+  });
+}
+
+/**
+ * Delete a table: its scenes, players, saved characters, handouts, DM notes and its place in the DM's list.
+ * The database rules have no write at the level of `players`, `chars` or `scenes`, only one level down, so each of
+ * those is cleared entry by entry. Removing the table's `owner` marker is what makes its link stop working; that needs
+ * the rules published with the owner-may-delete line, so if the database refuses it, everything else is still cleared
+ * and `linkRemoved` is false (the old link then opens an empty table until the rules are republished and it is deleted again).
+ * Pictures uploaded to the picture host are not touched.
+ */
+export async function deleteTable(backend: Backend, uid: string, tid: string): Promise<{ linkRemoved: boolean }> {
+  const keysAt = async (path: string) => Object.keys(((await backend.get(path).catch(() => null)) as Record<string, unknown> | null) ?? {});
+  const [players, chars, scenes] = await Promise.all([keysAt(P.players(tid)), keysAt(`${P.table(tid)}/chars`), keysAt(P.sceneIndex(tid))]);
+  const wipe: Record<string, null> = {
+    [P.meta(tid)]: null,
+    [P.settings(tid)]: null,
+    [P.handouts(tid)]: null,
+    [`${P.table(tid)}/upload`]: null,
+    [`${P.table(tid)}/dm`]: null,
+    [P.userTable(uid, tid)]: null,
+  };
+  for (const id of players) wipe[P.player(tid, id)] = null;
+  for (const id of chars) wipe[P.tableChars(tid, id)] = null;
+  for (const id of scenes) wipe[P.scene(tid, id)] = null;
+  try {
+    await backend.update({ ...wipe, [P.owner(tid)]: null });
+    return { linkRemoved: true };
+  } catch {
+    await backend.update(wipe);
+    return { linkRemoved: false };
+  }
+}
+
 export async function getTableOwner(backend: Backend, tid: string): Promise<string | null> {
   const v = await backend.get(P.owner(tid));
   return typeof v === 'string' ? v : null;
@@ -68,6 +107,7 @@ export async function addLibraryItem(backend: Backend, uid: string, kind: Librar
   const id = backend.newKey();
   const wire: Record<string, unknown> = { name: item.name, url: item.url, addedAt: SERVER_TS };
   if (item.thumb) wire.thumb = item.thumb;
+  if (item.preview) wire.preview = item.preview;
   if (item.deleteUrl) wire.deleteUrl = item.deleteUrl;
   if (item.w) wire.w = item.w;
   if (item.h) wire.h = item.h;
@@ -97,11 +137,24 @@ export async function removeTokenFromLib(backend: Backend, path: string, id: str
   await backend.remove(`${path}/${id}`);
 }
 
-export async function removeLibraryItem(backend: Backend, uid: string, kind: LibraryKind, item: LibraryItem) {
+/**
+ * Take a picture out of the library in one write. Its private ImgBB deletion link moves to the cleanup list in the same write,
+ * so nothing is lost whatever happens next. Then, if the DM's upload key is known, ImgBB is asked to delete the hosted picture
+ * (`deleteHosted`); when it says it did, the cleanup entry is dropped. Returns whether the hosted picture was deleted.
+ */
+export async function removeLibraryItem(
+  backend: Backend, uid: string, kind: LibraryKind, item: LibraryItem,
+  deleteHosted?: (deleteUrl: string) => Promise<boolean>,
+): Promise<boolean> {
   const updates: Record<string, unknown> = { [`${P.userLibrary(uid, kind)}/${item.id}`]: null };
   const deleteUrl = imgbbDeleteUrl(item.deleteUrl);
   if (deleteUrl) updates[`${P.imageCleanup(uid, kind)}/${item.id}`] = { name: item.name, deleteUrl };
   await backend.update(updates);
+  if (!deleteUrl || !deleteHosted) return false;
+  let gone = false;
+  try { gone = await deleteHosted(deleteUrl); } catch { gone = false; }
+  if (gone) await backend.remove(`${P.imageCleanup(uid, kind)}/${item.id}`).catch(() => undefined);
+  return gone;
 }
 
 export interface ImageCleanupLink { id: string; name: string; deleteUrl: string }

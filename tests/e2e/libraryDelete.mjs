@@ -64,7 +64,7 @@ try {
   await button('Delete Old token').click();
   await dm.getByRole('dialog', { name: 'My library' }).waitFor();
   await button('Delete Old token').waitFor({ state: 'detached' });
-  assert.equal(await dm.getByText(/ImgBB cleanup/).count(), 0);
+  assert.equal(await dm.locator('summary', { hasText: /ImgBB cleanup/ }).count(), 0);
   assert.deepEqual(errors, []);
   console.log('PASS  One-click removal, selected map clearing, optional private cleanup, export privacy and older token art');
 } finally { await browser.close(); }

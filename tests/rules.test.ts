@@ -194,6 +194,16 @@ describe('security rules: tables and DM powers', () => {
     expect(can(db, dm, 'write', `${T}/owner`, 'dm-uid')).toBe(false);
     expect(can(db, stranger, 'write', `${T}/owner`, 'g1')).toBe(false);
   });
+  it('only the owner can remove the owner marker, which is how a table is deleted', () => {
+    expect(can(db, dm, 'write', `${T}/owner`, null)).toBe(true);
+    expect(can(db, p1, 'write', `${T}/owner`, null)).toBe(false);
+    expect(can(db, stranger, 'write', `${T}/owner`, null)).toBe(false);
+    // players, chars and scenes can only be cleared entry by entry, so deleting a table does that
+    expect(can(db, dm, 'write', `${T}/players`, null)).toBe(false);
+    expect(can(db, dm, 'write', `${T}/players/p1`, null)).toBe(true);
+    expect(can(db, dm, 'write', `${T}/scenes/S1`, null)).toBe(true);
+    expect(can(db, dm, 'write', `${T}/dm`, null)).toBe(true);
+  });
   it('the owner writes meta, settings, scenes and DM data; players cannot', () => {
     for (const p of [`${T}/meta/activeScene`, `${T}/settings/perm`, `${T}/scenes/S1/meta/grid`, `${T}/scenes/S1/fogOps/b`, `${T}/dm/scenes/S1/tokens/x`, `${T}/upload/key`]) {
       expect(can(db, dm, 'write', p, { a: 1 })).toBe(true);

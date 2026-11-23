@@ -34,15 +34,12 @@ try {
   assert.equal(await dm.evaluate(() => window.__vtt.client.scene.meta.mapUrl), original);
   console.log('PASS  ImgBB rejection identifies the host and preserves the existing map');
 
-  const url = new URL('linked-map.png', base).href;
-  await dm.route(url, (route) => route.fulfill({ contentType: 'image/png', body: picture }));
+  // the DM recovers by uploading again or from the library: there is no paste-a-link box any more
   await dm.getByRole('button', { name: 'Library', exact: true }).click();
-  await dm.getByPlaceholder('…or paste a link to a picture').fill(url);
-  await dm.getByRole('button', { name: 'Add', exact: true }).click();
-  await dm.getByRole('button', { name: 'Use in scene' }).click();
-  await dm.waitForFunction((url) => window.__vtt.board.mapUrl === url && window.__vtt.board.mapSprite, url);
+  await dm.getByRole('button', { name: /Upload picture/ }).waitFor();
+  assert.equal(await dm.getByPlaceholder('…or paste a link to a picture').count(), 0);
   assert.equal(attempts, 1);
-  console.log('PASS  A direct picture link replaces the map without another upload');
+  console.log('PASS  The library offers uploads only (no paste-a-link box) and the refusal did not retry');
 } finally {
   await browser.close();
 }

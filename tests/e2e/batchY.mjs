@@ -20,7 +20,7 @@ await dm.waitForSelector('.board-host canvas');
 await dm.getByRole('button', { name: '+ New scene' }).first().click();
 await dm.getByRole('button', { name: 'Use sample dungeon' }).click();
 await dm.locator('.modal .muted', { hasText: 'Sample dungeon.png' }).waitFor();
-check('the new scene window explains what summoning does', /moved onto this scene/.test(await dm.locator('.modal').innerText()) && /Summon players to it/.test(await dm.locator('.modal').innerText()));
+check('a first scene has no summon tick, since nobody has joined to be summoned', !/Summon players to it/.test(await dm.locator('.modal').innerText()));
 await dm.getByRole('button', { name: 'Create scene' }).click();
 await dm.waitForFunction(() => window.__vtt?.board?.mapSprite);
 await sleep(400);
@@ -36,9 +36,11 @@ await dm.evaluate(() => { const c = window.__vtt.client; c.openScene(c.sceneInde
 await sleep(500);
 check('on a private scene the button says Summon players', (await dm.getByRole('button', { name: 'Summon players' }).count()) === 1);
 check('and there is nothing to bring players to', (await dm.getByRole('button', { name: 'Bring players here' }).count()) === 0);
-const chip = await dm.locator('.topchip.warn').boundingBox();
-const vw = 1400;
-check('the private-scene note hangs from the top edge, in the middle', chip && chip.y <= 1 && Math.abs(chip.x + chip.width / 2 - vw / 2) < 6, JSON.stringify(chip));
+const chip = await dm.locator('.corner-chip.warn').boundingBox();
+const vh = 850;
+check('the private-scene note is in the lower left corner', chip && chip.x <= 16 && chip.y + chip.height >= vh - 16, JSON.stringify(chip));
+const bar = await dm.locator('.toolbar').boundingBox();
+check('and does not sit on the toolbar', chip && bar && chip.y >= bar.y + bar.height - 1, JSON.stringify({ chip, bar }));
 await dm.screenshot({ path: '/tmp/shots/y1-private.png' });
 await dm.evaluate(() => { const c = window.__vtt.client; c.openScene(c.sceneIndex.find((s) => s.name !== 'Second').id); });
 await dm.waitForFunction(() => window.__vtt.client.scene?.loaded && window.__vtt.client.scene.meta.name !== 'Second');
@@ -147,6 +149,11 @@ await pl.waitForSelector('.board-host canvas');
 await pl.waitForFunction(() => window.__vtt?.client?.scene?.loaded);
 await sleep(900);
 // the claim window is open on the player: a handout still opens over it
+// once someone has joined, the New scene window offers to summon them
+await dm.locator('select.scene-select').selectOption('__new');
+await dm.locator('.modal', { hasText: 'New scene' }).waitFor();
+check('with a player at the table the new scene window explains what summoning does', /moved onto this scene/.test(await dm.locator('.modal').innerText()) && /Summon players to it/.test(await dm.locator('.modal').innerText()));
+await dm.getByRole('button', { name: 'Cancel' }).click();
 check('the player has the claim window open', (await pl.locator('.modal', { hasText: 'Pick your character' }).count()) === 1);
 await dm.bringToFront();
 const hid = await dm.evaluate(async () => { const c = window.__vtt.client; const id = await c.saveHandout({ title: 'Warning', text: 'The bridge is out.', img: null }); await c.showHandout(id, null); return id; });

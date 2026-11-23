@@ -385,6 +385,8 @@ export interface LibraryItem {
   name: string;
   url: string;
   thumb?: string;
+  /** A medium-sized copy, used for the hover preview so the original is not loaded just to look at it. */
+  preview?: string;
   /** Private to the owning DM's library. */
   deleteUrl?: string;
   w?: number;

@@ -1,10 +1,28 @@
 import { loadImage } from './images';
 
-export interface UploadResult { url: string; thumb: string; w: number; h: number; deleteUrl?: string }
+export interface UploadResult { url: string; thumb: string; /** a medium-sized copy, for hover previews */ preview?: string; w: number; h: number; deleteUrl?: string }
 
 /** ImgBB returns a private management page with an image ID and a deletion token. */
 export function imgbbDeleteUrl(value: unknown): string | undefined {
   return typeof value === 'string' && /^https:\/\/ibb\.co\/[A-Za-z0-9]+\/[A-Za-z0-9_-]+$/.test(value) ? value : undefined;
+}
+
+/**
+ * Ask ImgBB to delete a hosted picture from the browser. ImgBB documents only uploads, so this is a best effort: the deletion
+ * link is sent a DELETE with the API key, and it only counts as deleted when ImgBB answers with JSON saying it succeeded.
+ * A refusal, a network problem or the browser blocking the cross-site request all answer false, and the caller keeps the
+ * private deletion link so the picture can still be removed by hand.
+ */
+export async function deleteFromImgbb(deleteUrl: string, key: string): Promise<boolean> {
+  if (!imgbbDeleteUrl(deleteUrl) || !key) return false;
+  try {
+    const res = await fetch(`${deleteUrl}?key=${encodeURIComponent(key)}`, { method: 'DELETE' });
+    if (!res.ok) return false;
+    const json: any = await res.json().catch(() => null);
+    return json?.success === true;
+  } catch {
+    return false;
+  }
 }
 
 /** Upload to imgbb (https://api.imgbb.com/). `key` is the DM's API key, shared with the table. */
@@ -23,7 +41,7 @@ export async function uploadToImgbb(blob: Blob, key: string, name?: string): Pro
   if (!res.ok || !json?.success) {
     const detail = typeof json?.error?.message === 'string' ? json.error.message.trim() : '';
     if (res.status === 403 || /\bforbidden\b/i.test(detail)) {
-      throw new Error(`ImgBB refused this upload (HTTP ${res.status}). The DM can check uploads in Settings → Pictures and files → Test upload, or use a direct picture link.`);
+      throw new Error(`ImgBB refused this upload (HTTP ${res.status}). The DM can check uploads in Settings → Pictures and files → Test upload.`);
     }
     throw new Error(`ImgBB upload failed (HTTP ${res.status}). ${detail}`.trim());
   }
@@ -35,6 +53,7 @@ export async function uploadToImgbb(blob: Blob, key: string, name?: string): Pro
   return {
     url,
     thumb: d.thumb?.url || d.medium?.url || url,
+    preview: typeof d.medium?.url === 'string' && /^https?:\/\//i.test(d.medium.url) ? d.medium.url : undefined,
     deleteUrl: imgbbDeleteUrl(d.delete_url),
     w: Number(d.width) || 0,
     h: Number(d.height) || 0,

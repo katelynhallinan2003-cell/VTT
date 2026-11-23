@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'preact/hooks';
 import { createBackend, loadConfig } from '../backend';
 import type { Backend } from '../backend/types';
 import { PLAYER_COLORS } from '../core/model';
-import { createTable, getTableName, getTableOwner, isAllowedDM, watchUserTables } from '../state/account';
+import { createTable, deleteTable, getTableName, getTableOwner, isAllowedDM, renameTable, watchUserTables } from '../state/account';
 import { TableClient } from '../state/client';
 import { P } from '../state/paths';
 import type { AppConfig, AuthUser, Player, UserTableEntry } from '../types';
@@ -47,6 +47,8 @@ function Home(props: { backend: Backend; demo: boolean }) {
   const [tables, setTables] = useState<UserTableEntry[]>([]);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
+  // the table whose name is being edited in the list
+  const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
   const isDmUser = !!user && !user.anonymous;
 
   useEffect(() => backend.onAuth(setUser), [backend]);
@@ -77,6 +79,27 @@ function Home(props: { backend: Backend; demo: boolean }) {
     setBusy(false);
   };
   const linkFor = (tid: string) => `${location.href.split('#')[0]}#/t/${tid}`;
+  const saveName = async () => {
+    if (!renaming || !user) return;
+    const next = renaming.value.trim();
+    const old = tables.find((t) => t.id === renaming.id);
+    setRenaming(null);
+    if (!next || next === old?.name) return;
+    try { await renameTable(backend, user.uid, renaming.id, next); }
+    catch (e) { toast(`Could not rename the table: ${asErr(e)}`, 'error'); }
+  };
+  const remove = async (t: UserTableEntry) => {
+    if (!user) return;
+    if (!confirm(`Delete the table “${t.name}”? Its scenes, tokens, players' saved characters and handouts are lost for good. Pictures you uploaded stay where they are.`)) return;
+    setBusy(true);
+    try {
+      const r = await deleteTable(backend, user.uid, t.id);
+      toast(r.linkRemoved ? `Deleted “${t.name}”` : `Deleted the contents of “${t.name}”. Its old link still opens an empty table until database.rules.json is republished and it is deleted again.`, r.linkRemoved ? 'ok' : 'info', r.linkRemoved ? 2400 : 7000);
+    } catch (e) {
+      toast(`Could not delete the table: ${asErr(e)}`, 'error');
+    }
+    setBusy(false);
+  };
 
   return (
     <div class="screen center">
@@ -111,9 +134,23 @@ function Home(props: { backend: Backend; demo: boolean }) {
             <ul class="list">
               {tables.map((t) => (
                 <li key={t.id}>
-                  <a class="grow link" href={`#/t/${t.id}`}>{t.name}</a>
-                  <button class="btn small" onClick={() => copyText(linkFor(t.id))}>Copy player link</button>
-                  <a class="btn small primary" href={`#/t/${t.id}`}>Open</a>
+                  {renaming?.id === t.id ? (
+                    <>
+                      <input type="text" class="grow" autoFocus aria-label={`New name for ${t.name}`} value={renaming.value}
+                        onInput={(e) => setRenaming({ id: t.id, value: (e.target as HTMLInputElement).value })}
+                        onKeyDown={(e) => { if (e.key === 'Enter') void saveName(); else if (e.key === 'Escape') setRenaming(null); }} />
+                      <button class="btn small primary" onClick={() => void saveName()}>Save</button>
+                      <button class="btn small" onClick={() => setRenaming(null)}>Cancel</button>
+                    </>
+                  ) : (
+                    <>
+                      <a class="grow link" href={`#/t/${t.id}`}>{t.name}</a>
+                      <button class="btn small" onClick={() => copyText(linkFor(t.id))}>Copy player link</button>
+                      <button class="btn small" onClick={() => setRenaming({ id: t.id, value: t.name })}>Rename</button>
+                      <button class="btn small danger" disabled={busy} onClick={() => void remove(t)}>Delete</button>
+                      <a class="btn small primary" href={`#/t/${t.id}`}>Open</a>
+                    </>
+                  )}
                 </li>
               ))}
             </ul>

@@ -18,6 +18,7 @@ import { THEMES, getAccent, getTheme, setAccent, setTheme } from './theme';
 import { TokenCropper, NO_FRAMING, type Framing, type PaintApi } from './tokenCropper';
 import { addRecent, dragHasImage, droppedImage, getRecent, uploadImage } from './uploads';
 import { ImageCleanup, PictureTrash } from './libraryDelete';
+import { LibrarySearch, filterLibrary, useHoverPreview } from './libraryBrowse';
 
 const asErr = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -152,9 +153,6 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
             <FilePick onFile={(f) => { setFile(f); setPicked(null); setFraming({ ...NO_FRAMING }); if (!name) setName(f.name.replace(/\.\w+$/, '')); }} />
             {file && <span class="muted">{file.name}</span>}
           </div>
-          <Field label="…or paste a link to a picture">
-            <input type="text" value={url} placeholder="https://…" onInput={(e) => { setUrl((e.target as HTMLInputElement).value); setFile(null); setPicked(null); setFraming({ ...NO_FRAMING }); }} />
-          </Field>
           {(lib.length > 0 || recent.length > 0) && (
             <>
               <div class="field-label">{lib.length ? 'From your library' : 'Recently used'}</div>
@@ -201,6 +199,9 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
 }
 
 // ================================================================== new scene
+/** How many library pictures New scene shows before "Show all". */
+const LIB_COLLAPSED = 12;
+const linkHost = (u: string) => { try { return new URL(u.trim()).hostname; } catch { return 'a link'; } };
 export function NewSceneModal(props: { client: TableClient; onClose: () => void; onCreated?: () => void; /** the folder to start in */ folder?: string | null; /** a picture that was dropped on the page: it starts as the map */ initialFile?: File | null }) {
   const { client } = props;
   useClient(client);
@@ -220,6 +221,12 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
   /** a picture is being dragged over the page right now */
   const [dragOver, setDragOver] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
+  /** the library list: what is typed in the search box, and whether it is opened out to every picture */
+  const [query, setQuery] = useState('');
+  const [expanded, setExpanded] = useState(false);
+  const hover = useHoverPreview();
+  /** nobody but the DM has joined yet (a first table has no players until the link is shared), so there is no one to summon */
+  const anyPlayers = [...client.players.values()].some((p) => !p.dm);
 
   const useFile = (f: File | Blob, n: string) => { setFile(f); setFileName(n); setPicked(null); setUrl(''); };
 
@@ -286,7 +293,7 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
   }
 
   return (
-    <Modal title="New scene" onClose={props.onClose} width={560}
+    <Modal title="New scene" onClose={props.onClose} width={expanded ? 840 : 560}
       footer={<><button class="btn" onClick={props.onClose}>Cancel</button><button class="btn primary" disabled={busy || preparing} onClick={create}>{busy ? 'Uploading…' : 'Create scene'}</button></>}>
       <Field label="Scene name"><input type="text" value={name} autoFocus onInput={(e) => setName((e.target as HTMLInputElement).value)} placeholder={fileName.replace(/\.\w+$/, '') || 'Goblin cave'} /></Field>
       {client.sceneFolders.length > 0 && (
@@ -317,25 +324,44 @@ export function NewSceneModal(props: { client: TableClient; onClose: () => void;
           </div>
         )}
       </div>
-      <Field label="…or paste a link to a picture"><input type="text" value={url} placeholder="https://…" onInput={(e) => { setUrl((e.target as HTMLInputElement).value); setFile(null); setPicked(null); }} /></Field>
-      {lib.length > 0 && (
-        <>
-          <div class="field-label">From your library</div>
-          <div class="thumbs">
-            {lib.map((l) => (
-              <div key={l.id} class="picture-tile">
-                <button class={`thumb ${picked?.id === l.id ? 'on' : ''}`} title={l.name} onClick={() => { setPicked(l.id); setFile(null); setUrl(''); }}>
-                  <img src={l.thumb ?? l.url} alt={l.name} loading="lazy" />
-                </button>
-                <PictureTrash client={client} kind="maps" item={l} disabled={busy} />
-              </div>
-            ))}
-          </div>
-        </>
+      {/* a picture dragged in from another web page arrives as a link: say so, since there is no box to show it in */}
+      {url.trim() && !file && !picked && (
+        <div class="row wrap dropzone-link">
+          <span class="muted grow" title={url}>Using the picture from {linkHost(url)}</span>
+          <button class="icon-btn" aria-label="Remove this picture" title="Remove this picture" onClick={() => setUrl('')}>✕</button>
+        </div>
       )}
+      {lib.length > 0 && (() => {
+        const found = filterLibrary(lib, query);
+        const shown = expanded || query.trim() ? found : found.slice(0, LIB_COLLAPSED);
+        return (
+          <>
+            <div class="row between lib-head">
+              <div class="field-label">From your library ({lib.length})</div>
+              {lib.length > LIB_COLLAPSED && (
+                <button class="btn small" aria-expanded={expanded} onClick={() => setExpanded((v) => !v)}>{expanded ? 'Show fewer' : `Show all ${lib.length}`}</button>
+              )}
+            </div>
+            {lib.length > 6 && <LibrarySearch value={query} onChange={setQuery} shown={found.length} total={lib.length} />}
+            <div class={`thumbs ${expanded ? 'big lib-scroll' : ''}`}>
+              {shown.map((l) => (
+                <div key={l.id} class="picture-tile" {...hover.bind(l)}>
+                  <button class={`thumb ${picked?.id === l.id ? 'on' : ''}`} title={l.name} onClick={() => { setPicked(l.id); setFile(null); setUrl(''); }}>
+                    <img src={l.thumb ?? l.url} alt={l.name} loading="lazy" />
+                  </button>
+                  {expanded && <div class="lib-name" title={l.name}>{l.name}</div>}
+                  <PictureTrash client={client} kind="maps" item={l} disabled={busy} />
+                </div>
+              ))}
+              {!shown.length && <p class="muted">Nothing in your library matches “{query}”.</p>}
+            </div>
+          </>
+        );
+      })()}
+      {hover.node}
       <div class="stack">
         {file && client.backend.kind !== 'mock' && <Toggle checked={saveLib} onChange={setSaveLib} label="Save this map to my library" />}
-        <Toggle checked={makeActive} onChange={setMakeActive} label="Summon players to it as soon as it is made" hint="On: everyone is moved onto this scene straight away. Off: it stays private until you press Summon players." />
+        {anyPlayers && <Toggle checked={makeActive} onChange={setMakeActive} label="Summon players to it as soon as it is made" hint="On: everyone is moved onto this scene straight away. Off: it stays private until you press Summon players." />}
       </div>
     </Modal>
   );
@@ -442,7 +468,8 @@ export function LibraryModal(props: { client: TableClient; onClose: () => void; 
   const items = useLibrary(client, tab === 'saved' ? 'tokens' : tab);
   const artTab = tab === 'saved' ? 'tokens' : tab;
   const [busy, setBusy] = useState(false);
-  const [url, setUrl] = useState('');
+  const [query, setQuery] = useState('');
+  const hover = useHoverPreview();
 
   async function upload(f: File) {
     setBusy(true);
@@ -453,18 +480,6 @@ export function LibraryModal(props: { client: TableClient; onClose: () => void; 
     } catch (e) { toast(asErr(e), 'error'); }
     setBusy(false);
   }
-  async function addUrl() {
-    const u = url.trim();
-    if (!u) return;
-    setBusy(true);
-    try {
-      const img = await loadImage(u, true);
-      await addLibraryItem(client.backend, client.uid, artTab, { name: u.split('/').pop()?.replace(/\.\w+$/, '') || 'Image', url: u, w: img.naturalWidth, h: img.naturalHeight });
-      setUrl('');
-    } catch { toast('That picture link could not be loaded.', 'error'); }
-    setBusy(false);
-  }
-
   return (
     <Modal title="My library" onClose={props.onClose} width={640}>
       <div class="tabs">
@@ -480,13 +495,12 @@ export function LibraryModal(props: { client: TableClient; onClose: () => void; 
       )}
       {tab !== 'saved' && <div class="row wrap">
         <FilePick label={busy ? 'Uploading…' : 'Upload picture…'} onFile={upload} />
-        <input type="text" class="grow" placeholder="…or paste a link to a picture" value={url} onInput={(e) => setUrl((e.target as HTMLInputElement).value)} onKeyDown={(e) => { if (e.key === 'Enter') void addUrl(); }} />
-        <button class="btn" onClick={addUrl} disabled={!url.trim() || busy}>Add</button>
       </div>}
+      {tab !== 'saved' && items.length > 6 && <LibrarySearch value={query} onChange={setQuery} shown={filterLibrary(items, query).length} total={items.length} />}
       {tab !== 'saved' && items.length === 0 && <p class="muted">{client.backend.kind === 'mock' ? 'Nothing here. In demo mode the library is not kept.' : 'Nothing here yet. Your library is saved to your Google account, so it follows you to any device.'}</p>}
       {tab !== 'saved' && <div class="thumbs big">
-        {items.map((it) => (
-          <div key={it.id} class="lib-item">
+        {filterLibrary(items, query).map((it) => (
+          <div key={it.id} class="lib-item" {...hover.bind(it)}>
             <div class="picture-tile">
               <img src={it.thumb ?? it.url} alt={it.name} loading="lazy" />
               <PictureTrash client={client} kind={artTab} item={it} />
@@ -500,7 +514,9 @@ export function LibraryModal(props: { client: TableClient; onClose: () => void; 
           </div>
         ))}
       </div>}
+      {tab !== 'saved' && items.length > 0 && query.trim() && !filterLibrary(items, query).length && <p class="muted">Nothing in your library matches “{query}”.</p>}
       {tab !== 'saved' && <ImageCleanup key={artTab} client={client} kind={artTab} />}
+      {hover.node}
     </Modal>
   );
 }

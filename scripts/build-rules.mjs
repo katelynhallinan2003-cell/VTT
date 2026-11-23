@@ -45,8 +45,8 @@ const rules = {
       $tid: {
         owner: {
           '.read': 'auth != null',
-          // only an allowlisted Google account can claim a new table
-          '.write': `auth != null && !data.exists() && newData.val() === auth.uid && ${ALLOWED_DM}`,
+          // only an allowlisted Google account can claim a new table; only the owner can remove it again (deleting the table)
+          '.write': `auth != null && ((!data.exists() && newData.val() === auth.uid && ${ALLOWED_DM}) || (data.val() === auth.uid && !newData.exists()))`,
           '.validate': 'newData.isString()',
         },
         meta: readAllWriteOwner,

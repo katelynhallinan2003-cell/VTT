@@ -17,7 +17,7 @@
       "$tid": {
         "owner": {
           ".read": "auth != null",
-          ".write": "auth != null && !data.exists() && newData.val() === auth.uid && auth.token.email_verified === true && root.child('config').child('allowedEmails').child(auth.token.email.toLowerCase().replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',')).val() === true",
+          ".write": "auth != null && ((!data.exists() && newData.val() === auth.uid && auth.token.email_verified === true && root.child('config').child('allowedEmails').child(auth.token.email.toLowerCase().replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',').replace('.', ',')).val() === true) || (data.val() === auth.uid && !newData.exists()))",
           ".validate": "newData.isString()"
         },
         "meta": {

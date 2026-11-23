@@ -170,6 +170,15 @@ input.num { width: 74px; flex: none; padding: 4px 6px; }
 .thumbs.big { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
 .thumb { aspect-ratio: 1; padding: 0; border: 2px solid transparent; border-radius: 8px; overflow: hidden; background: var(--sunken); cursor: pointer; }
 .thumb.on { border-color: var(--accent); }
+.thumbs.big .picture-tile > .thumb { aspect-ratio: 4 / 3; }
+.lib-scroll { max-height: 46vh; overflow-y: auto; padding-right: 4px; align-content: start; }
+.lib-head { margin-bottom: 4px; }
+.lib-search { margin-bottom: 8px; }
+.dropzone-link { margin-bottom: 8px; }
+/* a bigger look at a library picture while the pointer is over it */
+.lib-preview { position: fixed; z-index: 300; width: 440px; max-width: calc(100vw - 16px); pointer-events: none; background: var(--panel-solid); border: 1px solid var(--border-hi, var(--border)); border-radius: 12px; padding: 8px; box-shadow: 0 16px 48px var(--shadow); }
+.lib-preview img { display: block; width: 100%; max-height: 300px; object-fit: contain; border-radius: 8px; background: var(--sunken); }
+.lib-preview-cap { margin-top: 6px; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .picture-tile { position: relative; min-width: 0; }
 .picture-tile > .thumb { display: block; width: 100%; }
 .picture-trash { position: absolute; top: 4px; right: 4px; display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 1px solid #ffffff66; border-radius: 6px; background: #20232bea; color: white; cursor: pointer; }

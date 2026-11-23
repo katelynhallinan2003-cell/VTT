@@ -390,6 +390,7 @@ export function normalizeLibraryItem(id: string, raw: any): LibraryItem | null {
     name: str(raw.name, 'Untitled'),
     url: raw.url,
     thumb: typeof raw.thumb === 'string' ? raw.thumb : undefined,
+    preview: typeof raw.preview === 'string' ? raw.preview : undefined,
     deleteUrl: imgbbDeleteUrl(raw.deleteUrl),
     w: typeof raw.w === 'number' ? raw.w : undefined,
     h: typeof raw.h === 'number' ? raw.h : undefined,

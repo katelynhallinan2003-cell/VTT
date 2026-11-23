@@ -48,6 +48,7 @@ await sleep(500);
 
 // ---- test move bar flush at the top
 await dm.keyboard.press('m');
+await sleep(400); // the top stack measures itself a moment after it appears
 const tb = await dm.locator('.testbar').boundingBox();
 // flush with the top edge when it fits between the two halves of the top bar; just under the top bar when it does not, and never over it
 const pills = await dm.locator('.pill').evaluateAll((els) => els.map((e) => { const r = e.getBoundingClientRect(); return { x: r.left, r: r.right, b: r.bottom }; }));

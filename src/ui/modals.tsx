@@ -35,7 +35,7 @@ function FilePick(props: { onFile: (f: File) => void; label?: string; accept?: s
     <>
       <input ref={ref} type="file" accept={props.accept ?? 'image/*'} hidden
         onChange={(e) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) props.onFile(f); (e.target as HTMLInputElement).value = ''; }} />
-      <button class="btn" onClick={() => ref.current?.click()}>{props.label ?? 'Choose a picture…'}</button>
+      <button class="btn" onClick={() => ref.current?.click()}>{props.label ?? 'Upload a picture…'}</button>
     </>
   );
 }
@@ -648,7 +648,7 @@ export function SettingsModal(props: { client: TableClient; ui: UiState; onClose
             <li><kbd>Middle-click</kbd> or hold <kbd>left mouse</kbd> for a moment (your choice above) — ping</li>
             <li class="keys-head">Tools</li>
             <li><kbd>V</kbd> select · <kbd>P</kbd> draw and write · <kbd>C</kbd> spell templates · <kbd>R</kbd> ruler · <kbd>M</kbd> test move</li>
-            <li><kbd>G</kbd> grid · <kbd>F</kbd> fog · <kbd>H</kbd> heights · <kbd>B</kbd> walls · <kbd>I</kbd> initiative (DM)</li>
+            <li><kbd>G</kbd> grid · <kbd>O</kbd> player view · <kbd>F</kbd> fog · <kbd>H</kbd> heights · <kbd>B</kbd> walls · <kbd>I</kbd> initiative (DM)</li>
             <li><kbd>T</kbd> add a token · <kbd>E</kbd> edit the selected tokens · <kbd>?</kbd> this list</li>
             <li><kbd>Esc</kbd> — back to select, let go of what you are drawing, or put test moves back</li>
             <li class="keys-head">Tokens</li>

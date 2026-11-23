@@ -261,6 +261,8 @@ export interface Drawing {
   hc?: boolean;
   /** a stroke of difficult ground (costs extra to walk through), not of height */
   dt?: boolean;
+  /** a stroke of daylight: the ground it covers is lit by the sun when the rest of the scene is dim or dark */
+  dl?: boolean;
   /** a spell template: the ground it covers counts as difficult while it is on the map */
   td?: boolean;
   /** private: only the person who made it (and the DM) can see it */

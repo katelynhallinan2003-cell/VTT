@@ -1,5 +1,6 @@
 import { Container, Sprite, Texture } from 'pixi.js';
-import { paintGlow, paintSeen, paintShade, type Frame, type LightSrc, type Viewer } from '../core/light';
+import { paintDayMask, paintGlow, paintSeen, paintShade, type Frame, type LightSrc, type Viewer } from '../core/light';
+import type { Terrain } from '../core/terrain';
 import type { Seg } from '../core/walls';
 import type { Ambient, Rect, Vec } from '../types';
 import { canvasTexture } from './textures';
@@ -42,6 +43,16 @@ class Paper {
   }
 }
 
+/** A plain canvas to draw the painted daylight on, one per frame size. */
+class Mask {
+  readonly canvas = document.createElement('canvas');
+  readonly ctx = this.canvas.getContext('2d')!;
+  size(w: number, h: number) {
+    if (this.canvas.width !== w) this.canvas.width = w;
+    if (this.canvas.height !== h) this.canvas.height = h;
+  }
+}
+
 /**
  * Darkness and light on the board: a night wash with the lights cut out of it, a coloured glow where they shine, and, when it is
  * dark and the fog follows what tokens see, the shape of what the party can see (used to cut holes in the fog).
@@ -53,6 +64,8 @@ export class LightLayer {
   private seenPaper = new Paper(true);
   private seenFrame: Frame | null = null;
   private litPaper = new Paper();
+  private dayShade = new Mask();
+  private daySeen = new Mask();
   private shadeKey = '';
   private seenKey = '';
 
@@ -68,7 +81,7 @@ export class LightLayer {
   hide() { this.container.visible = false; }
 
   /** Paint the dark and the glow for the scene (again only when something about it changed). `dm`: the DM's own view, which is see-through so the map can still be worked on. */
-  paint(o: { ambient: Ambient; rect: Rect; lights: LightSrc[]; viewers: Viewer[]; segs: Seg[]; dm: boolean; key: string }) {
+  paint(o: { ambient: Ambient; rect: Rect; lights: LightSrc[]; viewers: Viewer[]; segs: Seg[]; day: Terrain | null; dm: boolean; key: string }) {
     this.container.visible = true;
     this.shade.sprite.alpha = o.dm ? 0.62 : 1;
     const scale = Math.min(1, 1400 / Math.max(o.rect.w, o.rect.h, 1));
@@ -80,21 +93,25 @@ export class LightLayer {
     if (!remade && key === this.shadeKey) return;
     this.shadeKey = key;
     const f: Frame = { origin, scale, w, h };
-    paintShade(this.shade.ctx, f, o.ambient, o.lights, o.viewers, o.segs);
+    const day = o.day?.areas.length ? o.day : null;
+    if (day) { this.dayShade.size(w, h); paintDayMask(this.dayShade.ctx, f, day); }
+    paintShade(this.shade.ctx, f, o.ambient, o.lights, o.viewers, o.segs, day ? this.dayShade.canvas : null);
     paintGlow(this.glow.ctx, f, o.ambient === 'bright' ? [] : o.lights, o.segs);
     this.shade.upload();
     this.glow.upload();
   }
 
   /** Paint the shape of what the viewers can see in the dark, in the same frame as the fog's own canvas. */
-  paintSeen(f: Frame, lights: LightSrc[], viewers: Viewer[], segs: Seg[], key: string) {
+  paintSeen(f: Frame, lights: LightSrc[], viewers: Viewer[], segs: Seg[], day: Terrain | null, key: string) {
     const k = `${key}|${f.w}x${f.h}|${f.origin.x},${f.origin.y},${f.scale}`;
     const remade = this.seenPaper.fit(f.w, f.h, f.origin, f.scale);
     this.litPaper.fit(f.w, f.h, f.origin, f.scale);
     if (!remade && k === this.seenKey) return;
     this.seenKey = k;
     this.seenFrame = f;
-    paintSeen(this.seenPaper.ctx, this.litPaper.ctx, f, lights, viewers, segs);
+    const dayOn = day?.areas.length ? day : null;
+    if (dayOn) { this.daySeen.size(f.w, f.h); paintDayMask(this.daySeen.ctx, f, dayOn); }
+    paintSeen(this.seenPaper.ctx, this.litPaper.ctx, f, lights, viewers, segs, dayOn ? this.daySeen.canvas : null);
     this.seenPaper.upload();
   }
 

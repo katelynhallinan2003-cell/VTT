@@ -1,4 +1,6 @@
 import type { Ambient, GridSettings, Token, TokenLight, Vec } from '../types';
+import { cellPoly } from './cells';
+import type { Terrain } from './terrain';
 import { visibilityPolygon, type Seg } from './walls';
 
 /** How dark each kind of scene is where nothing lights it (0 = daylight, 1 = pitch black). */
@@ -179,10 +181,48 @@ export function eraseStops(b: number, r: number, ambient: Ambient): [number, num
 }
 
 /**
+ * The shape of the daylight the DM painted: white where the sun shines, see-through elsewhere. Strokes go down in the order they
+ * were made, and an erase stroke takes daylight away again. Free strokes are round brushes, cell strokes are whole squares or hexes.
+ */
+export function paintDayMask(ctx: Ctx, f: Frame, day: Terrain): void {
+  toScreen(ctx);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.clearRect(0, 0, f.w, f.h);
+  if (!day.areas.length) return;
+  toWorld(ctx, f);
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#fff';
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  const strokes = day.areas.flatMap((a) => a.strokes).sort((a, b) => a.t - b.t || (a.id < b.id ? -1 : 1));
+  for (const s of strokes) {
+    ctx.globalCompositeOperation = s.erase ? 'destination-out' : 'source-over';
+    if (s.kind === 'cells') {
+      for (const c of s.pts) { path(ctx, cellPoly(day.grid, c)); ctx.fill(); }
+    } else if (s.kind === 'free' && s.pts.length) {
+      if (s.pts.length === 1) {
+        ctx.beginPath();
+        ctx.arc(s.pts[0].x, s.pts[0].y, s.r, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.lineWidth = s.r * 2;
+        ctx.beginPath();
+        ctx.moveTo(s.pts[0].x, s.pts[0].y);
+        for (let i = 1; i < s.pts.length; i++) ctx.lineTo(s.pts[i].x, s.pts[i].y);
+        ctx.stroke();
+      }
+    }
+  }
+  ctx.globalCompositeOperation = 'source-over';
+  toScreen(ctx);
+}
+
+/**
  * Paint the darkness of a scene onto a canvas: a night-coloured wash, with each light lifting it where it reaches
  * and each viewer's darkvision lifting it by half. The canvas ends up see-through where it is bright.
+ * `day`: a canvas of the same size with the painted daylight on it (see `paintDayMask`), which clears the wash completely.
  */
-export function paintShade(ctx: Ctx, f: Frame, ambient: Ambient, lights: LightSrc[], viewers: Viewer[], segs: Seg[]): void {
+export function paintShade(ctx: Ctx, f: Frame, ambient: Ambient, lights: LightSrc[], viewers: Viewer[], segs: Seg[], day: CanvasImageSource | null = null): void {
   toScreen(ctx);
   ctx.globalCompositeOperation = 'source-over';
   ctx.clearRect(0, 0, f.w, f.h);
@@ -215,6 +255,10 @@ export function paintShade(ctx: Ctx, f: Frame, ambient: Ambient, lights: LightSr
       path(ctx, poly);
       ctx.fill();
     }
+  }
+  if (day) {
+    toScreen(ctx);
+    ctx.drawImage(day, 0, 0);
   }
   ctx.globalCompositeOperation = 'source-over';
 }
@@ -250,8 +294,9 @@ const hexRgb = (c: string): string => {
 /**
  * What the party sees when it is dark, painted as an opaque shape on `seen`: each viewer's sight where a light reaches
  * (drawn on `lit` first), plus what its darkvision and its own touch give. `lit` is scratch space of the same size.
+ * `day`: the painted daylight (see `paintDayMask`), which counts as lit wherever a viewer can see it.
  */
-export function paintSeen(seen: Ctx, lit: Ctx, f: Frame, lights: LightSrc[], viewers: Viewer[], segs: Seg[]): void {
+export function paintSeen(seen: Ctx, lit: Ctx, f: Frame, lights: LightSrc[], viewers: Viewer[], segs: Seg[], day: CanvasImageSource | null = null): void {
   toScreen(lit);
   lit.globalCompositeOperation = 'source-over';
   lit.clearRect(0, 0, f.w, f.h);
@@ -262,6 +307,10 @@ export function paintSeen(seen: Ctx, lit: Ctx, f: Frame, lights: LightSrc[], vie
     if (poly.length < 3) continue;
     path(lit, poly);
     lit.fill();
+  }
+  if (day) {
+    toScreen(lit);
+    lit.drawImage(day, 0, 0);
   }
   toScreen(seen);
   seen.globalCompositeOperation = 'source-over';

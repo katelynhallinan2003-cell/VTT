@@ -6,7 +6,7 @@ import { FILL_LEVEL, STROKE_CELLS, beamWidthPx, dashSegments, fitPenPoints, hand
 import { templateRoughDraws } from '../core/templaterough';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
-import { altitudeOf, groundAt, heightNote, isRough, roughOf, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
+import { altitudeOf, dayOf, groundAt, heightNote, isDay, isRough, roughOf, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
 import { DEFAULT_CLIFF_FT, cliffSegs, rampCells, walkExtra, walkNote, type WalkExtra } from '../core/walk';
 import { paintedCliffBlocks } from '../core/terrainMovement';
 import { EMPTY_TERRAIN, MAX_STROKE_CELLS, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, heightColor, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
@@ -58,7 +58,7 @@ type Drag =
   /** painting (or rubbing out) ground with the Heights brush */
   /** a ramp being dragged out from its low (or high) end to the other */
   | { kind: 'ramp'; a: Vec; b: Vec }
-  | { kind: 'terrain'; /** painting difficult ground instead of height */ rough?: boolean; erase: boolean; /** the area it paints into (empty: erase from every area) */ group: string; h: number; add: boolean; /** the cells covered so far (null for a free brush) */ cells: Map<string, Vec> | null; pts: Vec[]; last: Vec; size: number }
+  | { kind: 'terrain'; /** painting difficult ground instead of height */ rough?: boolean; /** painting daylight instead of height */ day?: boolean; erase: boolean; /** the area it paints into (empty: erase from every area) */ group: string; h: number; add: boolean; /** the cells covered so far (null for a free brush) */ cells: Map<string, Vec> | null; pts: Vec[]; last: Vec; size: number }
   | { kind: 'ruler'; /** another leg added to a measurement that is already there */ extend?: boolean }
   /** drawing a wall (or a box of walls) with the Walls tool; `cont` when it carries on from the last wall */
   | { kind: 'wall'; a: Vec; b: Vec; down: Vec; moved: boolean; cont: boolean; shape: 'line' | 'box' | 'free' | 'circle'; /** the pointer's path (freehand walls) */ pts: Vec[] }
@@ -103,6 +103,10 @@ export class Board {
   /** difficult ground: a layer of its own, hatched on the map */
   private rough: Terrain = EMPTY_TERRAIN({ ...DEFAULT_GRID });
   private roughG = new Graphics();
+  /** daylight the DM painted: it lights the ground when the scene is dim or dark (shown tinted while the Heights tool paints it) */
+  private day: Terrain = EMPTY_TERRAIN({ ...DEFAULT_GRID });
+  private dayG = new Graphics();
+  private dayShown = false;
   /** 0 (hidden) to 1 (fully shown): the ground fades in and out */
   private heightFade = 0;
   /** until when the ground stays on show without a drag (a keyboard step, say) */
@@ -255,7 +259,7 @@ export class Board {
     this.distText.anchor.set(0.5, 1);
     this.distText.visible = false;
     this.ghostLayer.sortableChildren = true;
-    this.world.addChild(this.mapLayer, this.extraLayer, this.gridG, this.terrainLayer.container, this.roughG, this.drawLayer.container, this.wallLayer.container, this.auraG, this.tokenLayer, this.ghostLayer, this.lightLayer.container, this.fogLayer, this.overlayG, this.fxLayer, this.distText);
+    this.world.addChild(this.mapLayer, this.extraLayer, this.gridG, this.terrainLayer.container, this.roughG, this.dayG, this.drawLayer.container, this.wallLayer.container, this.auraG, this.tokenLayer, this.ghostLayer, this.lightLayer.container, this.fogLayer, this.overlayG, this.fxLayer, this.distText);
     app.stage.addChild(this.world);
 
     this.bindInput(app.canvas);
@@ -509,6 +513,7 @@ export class Board {
       const next = zonesOf(scene.draws.values(), this.client.grid);
       if (next.sig !== this.zones.sig) { this.zones = next; this.seenTokensRev = -1; this.refreshDraws(); }
       this.refreshRough();
+      this.refreshDay();
     }
     if (scene.tokensRev !== this.seenTokensRev) {
       this.seenTokensRev = scene.tokensRev;
@@ -572,6 +577,8 @@ export class Board {
     this.zones = EMPTY_TERRAIN(this.client.grid);
     this.rough = EMPTY_TERRAIN(this.client.grid);
     this.roughG.clear();
+    this.day = EMPTY_TERRAIN(this.client.grid);
+    this.dayG.clear();
     this.seenGridKey = '';
     if (this.fogSprite) this.fogSprite.visible = false;
     this.fitPending = true;
@@ -990,6 +997,37 @@ export class Board {
     this.invalidate();
   }
 
+  // ------------------------------------------------------------------ daylight
+  private refreshDay() {
+    const scene = this.client.scene;
+    if (!scene) return;
+    const next = dayOf(scene.draws.values(), this.client.grid);
+    if (next.sig === this.day.sig) return;
+    this.day = next;
+    this.paintDay();
+    this.invalidate();
+  }
+
+  private dayWanted(): boolean {
+    const u = this.ui.data;
+    return this.client.isDM && !u.dmPreview && u.tool === 'height' && u.groundKind === 'day';
+  }
+
+  /** Tint the daylight gold so the DM can see what they are painting (only while the Heights tool is on Daylight). */
+  private paintDay() {
+    const g = this.dayG;
+    g.clear();
+    const u = this.ui.data;
+    g.visible = this.dayShown = this.dayWanted();
+    if (!g.visible) return;
+    const box = terrainBounds(this.day);
+    if (!box) return;
+    const grid = this.client.grid;
+    const cells = cellCentersIn(grid, box).filter((p) => isDay(this.day, p)).slice(0, 8000);
+    for (const c of cells) g.poly(cellPoly(grid, c).flatMap((p) => [p.x, p.y]));
+    g.fill({ color: 0xf2c230, alpha: 0.3 });
+  }
+
   /** Is the ground at this spot difficult? */
   isRoughAt(p: Vec): boolean { return isRough(this.rough, p); }
 
@@ -1089,6 +1127,8 @@ export class Board {
     const to = { x: tokenCoordinate(end.x), y: tokenCoordinate(end.y) };
     const dx = to.x - from.x, dy = to.y - from.y;
     const token = id ? this.client.scene?.tokens.get(id) : undefined;
+    // a light-only mark is a prop the DM sets down and leaves: it goes through walls and over cliffs, whatever the switches say
+    if (token && isLightMark(token)) return false;
     for (const seg of segs) {
       const t = rayHit(from, dx, dy, seg);
       if (t > 1) continue;
@@ -1436,7 +1476,7 @@ export class Board {
   }
 
   /** What shines and who sees, for a scene that is not in full daylight (null in daylight). Positions are where the tokens are drawn now. */
-  private lighting(): { ambient: Ambient; lights: LightSrc[]; viewers: Viewer[]; key: string } | null {
+  private lighting(): { ambient: Ambient; lights: LightSrc[]; viewers: Viewer[]; day: Terrain | null; key: string } | null {
     const scene = this.client.scene;
     const meta = scene?.meta;
     if (!scene || !meta) return null;
@@ -1456,8 +1496,9 @@ export class Board {
       if (w) viewers.push(w);
     }
     const r = (n: number) => Math.round(n * 2) / 2;
-    const key = `${scene.id}|${ambient}|${scene.wallRev}:${this.zones.sig}|${lights.map((l) => `${r(l.x)},${r(l.y)},${r(l.b)},${r(l.r)},${l.c},${l.alt ?? ''}`).join(';')}|${viewers.map((w) => `${r(w.x)},${r(w.y)},${r(w.r)},${r(w.dv)},${r(w.touch)},${w.alt ?? ''}`).join(';')}`;
-    return { ambient, lights, viewers, key };
+    const day = this.day.areas.length ? this.day : null;
+    const key = `${scene.id}|${ambient}|${scene.wallRev}:${this.zones.sig}|${day?.sig ?? ''}|${lights.map((l) => `${r(l.x)},${r(l.y)},${r(l.b)},${r(l.r)},${l.c},${l.alt ?? ''}`).join(';')}|${viewers.map((w) => `${r(w.x)},${r(w.y)},${r(w.r)},${r(w.dv)},${r(w.touch)},${w.alt ?? ''}`).join(';')}`;
+    return { ambient, lights, viewers, day, key };
   }
 
   /** The dark wash and the glow of the lights over the map. */
@@ -1465,7 +1506,7 @@ export class Board {
     const meta = this.client.scene?.meta;
     if (!L || !meta) { this.lightLayer.hide(); return; }
     const rect = sceneRect(meta) ?? { x: 0, y: 0, w: 2000, h: 1500 };
-    this.lightLayer.paint({ ambient: L.ambient, rect, lights: L.lights, viewers: L.viewers, segs: this.wallSegs().sight, dm: this.client.isDM && !this.ui.data.dmPreview, key: L.key });
+    this.lightLayer.paint({ ambient: L.ambient, rect, lights: L.lights, viewers: L.viewers, segs: this.wallSegs().sight, day: L.day, dm: this.client.isDM && !this.ui.data.dmPreview, key: L.key });
   }
 
   /** Tokens standing on remembered (grey) ground that nobody can see right now: out of sight for the players until someone looks again. */
@@ -1511,7 +1552,7 @@ export class Board {
         return () => false;
       }
       const m = this.fogMask;
-      this.lightLayer.paintSeen({ origin: m.origin, scale: m.scale, w: m.canvas.width, h: m.canvas.height }, L.lights, L.viewers, this.wallSegs().sight, L.key);
+      this.lightLayer.paintSeen({ origin: m.origin, scale: m.scale, w: m.canvas.width, h: m.canvas.height }, L.lights, L.viewers, this.wallSegs().sight, L.day, L.key);
       if (this.fogMaskKind !== 's') { sprite.setMask({ mask: this.lightLayer.seenSprite, inverse: true }); this.fogMaskKind = 's'; }
       return (p) => this.lightLayer.seenAt(p);
     }
@@ -1608,6 +1649,7 @@ export class Board {
     const prev = this.prevUi;
     this.prevUi = { testMove: u.testMove, sharePlot: u.sharePlot, tool: u.tool, rulerColor: u.rulerColor, cover: u.tplCover, heights: u.heightView, draft: u.fxDraft, sel: u.drawSel };
     if (u.drawSel !== prev.sel && this.client.scene) this.refreshDraws();
+    if (this.dayWanted() !== this.dayShown) { this.paintDay(); this.invalidate(); }
     if (u.fxDraft !== prev.draft && this.client.scene) this.reconcileTokens();
     if (prev.testMove && !u.testMove && this.testMoves.size) this.resetTestMoves();
     if (u.sharePlot !== prev.sharePlot) this.publishLive(true);
@@ -1953,7 +1995,7 @@ export class Board {
       g.rect(b.x - pad + (mv?.dx ?? 0), b.y - pad + (mv?.dy ?? 0), b.w + pad * 2, b.h + pad * 2).stroke({ width: 1.5 / z, color: SELECT });
     }
     // handles to drag the edges, corners or ends of one selected drawing
-    if (u.drawSel.size === 1 && d?.kind !== 'drawmove' && (u.tool === 'select' || u.tool === 'height' || (u.tool === 'draw' && u.drawTool !== 'erase'))) {
+    if (u.drawSel.size === 1 && d?.kind !== 'drawmove' && (u.tool === 'select' || u.tool === 'height' || (u.tool === 'draw' && u.drawTool !== 'erase') || (u.tool === 'template' && u.tplMode === 'select'))) {
       const dd = this.shownDrawing([...u.drawSel][0]);
       if (dd && this.client.canEditDrawing(dd)) {
         const hs = 4.5 / z;
@@ -2176,7 +2218,7 @@ export class Board {
       }
       return;
     }
-    if (tool === 'select' || tool === 'height' || (tool === 'draw' && this.ui.data.drawTool !== 'erase')) {
+    if (tool === 'select' || tool === 'height' || (tool === 'draw' && this.ui.data.drawTool !== 'erase') || (tool === 'template' && this.ui.data.tplMode === 'select')) {
       const hh = this.handleAt(w);
       if (hh) { this.drag = { kind: 'drawresize', id: hh.d.id, handle: hh.h.id, orig: hh.d, patch: null }; return; }
     }
@@ -2185,7 +2227,7 @@ export class Board {
     if (tool === 'draw') { this.startDraw(w, e); return; }
     if (tool === 'height' && this.client.isDM) { this.startHeight(w, e); return; }
     if (tool === 'wall' && this.client.isDM) { this.startWall(w, e); return; }
-    if (tool === 'template') { this.startTemplate(w, e); return; }
+    if (tool === 'template') { if (this.ui.data.tplMode === 'select') this.startTemplateSelect(w, e); else this.startTemplate(w, e); return; }
     if (tool === 'ruler') { this.startRuler(w, e); return; }
 
     // ---- select tool
@@ -2486,7 +2528,9 @@ export class Board {
    */
   private startHeight(w: Vec, e: PointerEvent) {
     const u = this.ui.data;
-    const rough = u.groundKind === 'rough';
+    const kind = u.groundKind;
+    const rough = kind === 'rough', day = kind === 'day';
+    const layer = rough || day;
     const gridless = currentOverlay(this.client.grid) === 'none';
     const mode = terrainBrushMode(u, gridless);
     if (mode === 'ramp') {
@@ -2496,7 +2540,7 @@ export class Board {
       this.drag = { kind: 'ramp', a: p, b: p };
       return;
     }
-    if (!rough && (mode === 'move' || e.ctrlKey || e.metaKey)) {
+    if (!layer && (mode === 'move' || e.ctrlKey || e.metaKey)) {
       const a = areaAt(this.zones, w);
       if (!a) { if (!e.shiftKey) this.ui.selectDrawings([]); return; }
       const sel = new Set(u.drawSel);
@@ -2515,13 +2559,13 @@ export class Board {
       return;
     }
     const erase = mode === 'erase';
-    const cur = rough ? null : this.currentArea();
-    const add = !rough && !erase && (cur?.add ?? u.heightAdds);
+    const cur = layer ? null : this.currentArea();
+    const add = !layer && !erase && (cur?.add ?? u.heightAdds);
     // Each additive gesture goes above the ground already there, even if the previous area is selected.
-    const group = rough ? 'dt' : erase ? cur?.id ?? '' : add ? newAreaId() : cur?.id ?? newAreaId();
+    const group = rough ? 'dt' : day ? 'dl' : erase ? cur?.id ?? '' : add ? newAreaId() : cur?.id ?? newAreaId();
     const d: Extract<Drag, { kind: 'terrain' }> = {
-      kind: 'terrain', erase, group, rough,
-      h: rough ? 1 : cur?.h ?? u.heightFt, add,
+      kind: 'terrain', erase, group, rough, day,
+      h: layer ? 1 : cur?.h ?? u.heightFt, add,
       cells: !gridless && u.heightSnap !== e.altKey ? new Map() : null, pts: [], last: w, size: u.heightBrush,
     };
     this.drag = d;
@@ -2570,13 +2614,14 @@ export class Board {
       pts = d.pts.length > 2 ? fitPenPoints(d.pts, Math.max(0.5, wpx * 0.06)) : d.pts;
     }
     if (!pts.length) return;
-    const col = d.rough ? '#c8791b' : heightColor(d.h);
+    const col = d.rough ? '#c8791b' : d.day ? '#f2c230' : heightColor(d.h);
+    const layer = d.rough || d.day;
     const cur = this.selectedAreas();
     const keep = cur.length === 1 && cur[0].id === d.group ? cur[0].ids : [];
     void this.client.addDrawing(
-      { k: 'terrain', p: joinPts(pts), color: col, w: wpx, fill: 0, fc: '', dash: false, txt: '', fs: 28, bw: 5, hz: d.erase ? null : d.h, hg: d.group, ha: !d.erase && d.add, he: d.erase, hc: !!d.cells, ...(d.rough ? { dt: true } : {}) },
-      { label: d.rough ? (d.erase ? 'Erase difficult ground' : 'Paint difficult ground') : d.erase ? 'Erase ground' : 'Paint ground', onId: (id) => {
-        if (!d.erase && !d.rough) {
+      { k: 'terrain', p: joinPts(pts), color: col, w: wpx, fill: 0, fc: '', dash: false, txt: '', fs: 28, bw: 5, hz: d.erase ? null : d.h, hg: d.group, ha: !d.erase && d.add, he: d.erase, hc: !!d.cells, ...(d.rough ? { dt: true } : d.day ? { dl: true } : {}) },
+      { label: d.rough ? (d.erase ? 'Erase difficult ground' : 'Paint difficult ground') : d.day ? (d.erase ? 'Erase daylight' : 'Paint daylight') : d.erase ? 'Erase ground' : 'Paint ground', onId: (id) => {
+        if (!d.erase && !layer) {
           if (d.add) this.ui.set({ heightAdds: true, heightFt: d.h, drawSel: new Set() });
           else this.ui.selectDrawings([...keep, id]);
         }
@@ -2590,10 +2635,11 @@ export class Board {
     const grid = this.client.grid;
     const erase = d ? d.erase : u.heightMode === 'erase';
     const rough = d ? !!d.rough : u.groundKind === 'rough';
-    const cur = rough ? null : this.currentArea();
+    const day = d ? !!d.day : u.groundKind === 'day';
+    const cur = rough || day ? null : this.currentArea();
     const h = d ? d.h : cur ? cur.h : u.heightFt;
     const add = d ? d.add : cur ? cur.add : u.heightAdds;
-    const col = erase ? 0xff6b6b : rough ? 0xc8791b : num(heightColor(h));
+    const col = erase ? 0xff6b6b : rough ? 0xc8791b : day ? 0xf2c230 : num(heightColor(h));
     const snap = d ? !!d.cells : currentOverlay(grid) !== 'none' && u.heightSnap !== !!this.altDown;
     const n = d ? d.size : u.heightBrush;
     if (snap) {
@@ -2611,7 +2657,7 @@ export class Board {
       } else if (d) g.circle(d.pts[0].x, d.pts[0].y, r).fill({ color: col, alpha: 0.45 });
       g.circle(at.x, at.y, r).stroke({ width: 1.5 / z, color: col, alpha: 0.9 });
     }
-    if (d && !erase && !rough) this.plotLabel(li++, areaLabelAt(add ? groundAt(this.zones, at) + h : h), at.x, at.y - Math.max(grid.cell * 0.7, 18 / z), col);
+    if (d && !erase && !rough && !day) this.plotLabel(li++, areaLabelAt(add ? groundAt(this.zones, at) + h : h), at.x, at.y - Math.max(grid.cell * 0.7, 18 / z), col);
     return li;
   }
 
@@ -2631,6 +2677,31 @@ export class Board {
       }
       g.fill({ color: col, alpha: 0.4 });
     }
+  }
+
+  /**
+   * The Spell templates tool in Select mode: a click picks the template under the pointer (Shift adds more), a drag moves it a whole square at a time
+   * (Alt: freely), its handles resize it, Delete takes it away. Tokens and the map are left alone here, and so are other drawings.
+   */
+  private startTemplateSelect(w: Vec, e: PointerEvent) {
+    const list = this.client.drawingsSorted().filter((d) => isTemplate(d.k));
+    const tol = 6 / this.cam.zoom;
+    let hit: Drawing | null = null;
+    for (let i = list.length - 1; i >= 0 && !hit; i--) {
+      if (this.client.canEditDrawing(list[i]) && hitDrawing(list[i], w, tol, this.client.grid, true)) hit = list[i];
+    }
+    const only = (ids: Iterable<string>) => new Set([...ids].filter((id) => { const d = this.client.scene?.draws.get(id); return !!d && isTemplate(d.k); }));
+    if (!hit) { if (!e.shiftKey) this.ui.selectDrawings([]); return; }
+    let sel = only(this.ui.data.drawSel);
+    if (e.shiftKey) {
+      if (sel.has(hit.id)) sel.delete(hit.id); else sel.add(hit.id);
+      this.ui.selectDrawings(sel);
+      return;
+    }
+    if (!sel.has(hit.id)) sel = new Set([hit.id]);
+    this.ui.selectDrawings(sel);
+    this.drag = { kind: 'drawmove', ids: [...sel], start: w, dx: 0, dy: 0, moved: false, snap: true };
+    this.startPress(w, e);
   }
 
   private startTemplate(w: Vec, e: PointerEvent) {
@@ -3233,6 +3304,7 @@ export class Board {
       case 'v': ui.set({ tool: 'select' }); break;
       case 'g': if (c.isDM && c.scene?.meta) void c.updateScene({ grid: { visible: !c.scene.meta.grid.visible } }); break;
       case 'f': if (c.isDM) ui.set({ tool: ui.data.tool === 'fog' ? 'select' : 'fog' }); break;
+      case 'o': if (c.isDM) ui.set({ dmPreview: !ui.data.dmPreview }); break;
       case 'p': if (c.canDo('draw')) ui.set({ tool: ui.data.tool === 'draw' ? 'select' : 'draw' }); break;
       case 'c': if (c.canDo('template')) ui.set({ tool: ui.data.tool === 'template' ? 'select' : 'template' }); break;
       case 'z': this.focusSelection(); break;

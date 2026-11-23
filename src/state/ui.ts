@@ -12,8 +12,8 @@ export type DockTab = 'scene' | 'tokens' | 'players';
 export type InitPos = 'top' | 'side';
 
 export function terrainBrushMode(u: UiData, gridless: boolean): UiData['heightMode'] {
-  if (u.heightMode === 'ramp' && (gridless || u.groundKind === 'rough')) return 'paint';
-  if (u.heightMode === 'move' && u.groundKind === 'rough') return 'paint';
+  if (u.heightMode === 'ramp' && (gridless || u.groundKind !== 'height')) return 'paint';
+  if (u.heightMode === 'move' && u.groundKind !== 'height') return 'paint';
   return u.heightMode;
 }
 
@@ -69,6 +69,8 @@ export interface UiData {
   tplShare: boolean;
   /** the next spell templates placed count as difficult ground */
   tplRough: boolean;
+  /** the Spell templates tool: place new ones, or click the ones already there to move, resize or delete them */
+  tplMode: 'place' | 'select';
   /** test move: each drag adds a leg to the move instead of replacing it */
   testMulti: boolean;
   /** ruler: each drag adds a leg to the measurement instead of starting again */
@@ -86,7 +88,7 @@ export interface UiData {
   /** what the Heights brush does: paint ground, rub ground out, or select and move an area */
   heightMode: 'paint' | 'ramp' | 'erase' | 'move';
   /** what the Heights brush lays down: height, or difficult ground */
-  groundKind: 'height' | 'rough';
+  groundKind: 'height' | 'rough' | 'day';
   /** a ramp climbs (or falls) from this many feet at the end you press on to that many at the other end */
   rampFrom: number;
   rampTo: number;
@@ -170,7 +172,7 @@ export class UiState {
     drawSel: new Set(), testMove: false, testCount: 0,
     sharePlot: readFlag('vtt-share-plot', false),
     tplShare: readFlag('vtt-tpl-share', true),
-    tplRough: false,
+    tplRough: false, tplMode: 'place',
     testMulti: readFlag('vtt-test-multi', false),
     rulerMulti: readFlag('vtt-ruler-multi', false),
     autoGrid: readFlag('vtt-auto-grid', true),
@@ -179,7 +181,7 @@ export class UiState {
     fxJump: readFlag('vtt-fx-jump', true), fxDraft: null,
     heightFt: (() => { try { const n = Number(localStorage.getItem('vtt-height-ft')); return Number.isFinite(n) && localStorage.getItem('vtt-height-ft') !== null ? n : 10; } catch { return 10; } })(),
     heightMode: readStr('vtt-height-mode', 'paint', ['paint', 'ramp', 'erase', 'move'] as const),
-    groundKind: readStr('vtt-ground-kind', 'height', ['height', 'rough'] as const),
+    groundKind: readStr('vtt-ground-kind', 'height', ['height', 'rough', 'day'] as const),
     rampFrom: (() => { try { const n = Number(localStorage.getItem('vtt-ramp-from')); return Number.isFinite(n) && localStorage.getItem('vtt-ramp-from') !== null ? n : 0; } catch { return 0; } })(),
     rampTo: (() => { try { const n = Number(localStorage.getItem('vtt-ramp-to')); return Number.isFinite(n) && localStorage.getItem('vtt-ramp-to') !== null ? n : 20; } catch { return 20; } })(),
     heightSnap: readFlag('vtt-height-snap', true),

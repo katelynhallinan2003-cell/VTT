@@ -13,6 +13,10 @@ export type Zone = Terrain;
 export const zonesOf = (draws: Iterable<Drawing>, grid: GridSettings): Terrain => terrainOf(draws, grid);
 /** Difficult ground (a layer of its own, painted with the Heights brush): where it costs extra to walk. */
 export const roughOf = (draws: Iterable<Drawing>, grid: GridSettings): Terrain => terrainOf(draws, grid, 'rough');
+/** Daylight (a layer of its own, painted with the Heights brush): where the sun lights the ground even when the scene is dim or dark. */
+export const dayOf = (draws: Iterable<Drawing>, grid: GridSettings): Terrain => terrainOf(draws, grid, 'day');
+/** Is this point in daylight? */
+export const isDay = (day: Terrain, p: Vec): boolean => day.areas.length > 0 && groundAtTerrain(day, p) > 0;
 /** Is the ground at this point difficult? */
 export const isRough = (rough: Terrain, p: Vec): boolean => rough.areas.length > 0 && groundAtTerrain(rough, p) > 0;
 

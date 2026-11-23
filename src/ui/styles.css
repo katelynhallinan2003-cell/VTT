@@ -457,6 +457,8 @@ input[type=text], input[type=number], input[type=password], select { border-radi
 .pill-left { left: 12px; }
 .pill-right { right: 12px; }
 .brand { background: none; border: none; font-size: 20px; cursor: pointer; color: var(--accent); padding: 0 2px; }
+/* the generic select rule pins a dropdown to the start of its row (so it never stretches in a column); the bar centres its dropdowns */
+.pill select { align-self: center; padding: 5px 8px; }
 .scene-select { width: auto; max-width: 280px; padding: 5px 8px; }
 .scene-name { font-weight: 600; padding: 0 6px; }
 .toolbar { top: 66px; }

@@ -149,15 +149,15 @@ const unionRect = (rs: Rect[]): Rect => {
 };
 
 /** Everything about the ground in one place. Old-style boxes and circles come first (smallest on top), then painted areas in the order they were started. */
-export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings, layer: 'ground' | 'rough' = 'ground'): Terrain {
+export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings, layer: 'ground' | 'rough' | 'day' = 'ground'): Terrain {
   const legacy: Area[] = [];
   const groups = new Map<string, { paint: Drawing[]; hz: number; add: boolean }>();
   const erasers: Drawing[] = [];
   const sigParts: string[] = [];
   for (const d of draws) {
     if (d.hz == null && d.k !== 'terrain') continue;
-    // difficult ground is painted with the same brush but is a layer of its own: it never changes how high anything is
-    if (!!d.dt !== (layer === 'rough')) continue;
+    // difficult ground and daylight are painted with the same brush but are layers of their own: they never change how high anything is
+    if ((d.dt ? 'rough' : d.dl ? 'day' : 'ground') !== layer) continue;
     sigParts.push(`${d.id}|${d.k}|${d.p}|${d.w}|${d.hz}|${d.hg ?? ''}|${d.ha ? 1 : 0}|${d.he ? 1 : 0}|${d.hc ? 1 : 0}|${d.t}`);
     if (d.k === 'terrain') {
       if (d.he) { erasers.push(d); continue; }

@@ -46,6 +46,7 @@ const Icon = (props: { d: string; size?: number }) => (
 const ICONS = {
   select: 'M5 3l14 8-6 2-2 6z',
   grid: 'M4 4h16v16H4zM4 9.3h16M4 14.7h16M9.3 4v16M14.7 4v16',
+  eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
   fog: 'M7 18a4 4 0 0 1-.6-7.96A5.5 5.5 0 0 1 17 8.5a4.5 4.5 0 0 1 .5 9.5zM8 21h8',
   token: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 8v8M8 12h8',
   fit: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5',
@@ -351,6 +352,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
         {client.isDM && <div class="tool-sep" />}
         {/* the DM's tools for setting a scene up and running a fight */}
         {client.isDM && <ToolBtn icon="grid" label={gridOn ? 'Hide the grid' : 'Show the grid'} hotkey="G" on={gridOn} toggle disabled={!scene?.meta} onClick={() => void client.updateScene({ grid: { visible: !gridOn } })} />}
+        {client.isDM && <ToolBtn icon="eye" label={d.dmPreview ? 'Back to the DM view' : 'Player view: see the map the way your players do'} hotkey="O" on={d.dmPreview} onClick={() => ui.set({ dmPreview: !d.dmPreview })} />}
         {client.isDM && <ToolBtn icon="fog" label="Fog of war" hotkey="F" on={d.tool === 'fog'} onClick={() => ui.set({ tool: d.tool === 'fog' ? 'select' : 'fog' })} />}
         {client.isDM && <ToolBtn icon="wall" label="Walls: draw walls, doors and windows" hotkey="B" on={d.tool === 'wall'} onClick={() => ui.set({ tool: d.tool === 'wall' ? 'select' : 'wall' })} />}
         {client.isDM && <ToolBtn icon="height" label="Heights: draw high and low ground" hotkey="H" on={d.tool === 'height'} onClick={() => ui.set({ tool: d.tool === 'height' ? 'select' : 'height' })} />}
@@ -467,7 +469,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {client.metaLoaded && !client.isDM && !client.activeSceneId && <div class="empty-card"><h2>Waiting for the DM…</h2><p>No scene is being shown yet.</p></div>}
       {scene?.meta && !scene.meta.mapUrl && client.isDM && <div class="hint-chip">This scene has no map yet. <button class="link" onClick={() => ui.set({ dockTab: 'scene' })}>Add one in the Scene tab</button>.</div>}
       {/* lower left: the note that this scene is private, under the toolbar and clear of the tool panels */}
-      {client.isDM && !live && client.viewSceneId && <div class="corner-chip warn">Private scene: players can't see this yet</div>}
+      {client.isDM && !live && client.viewSceneId && <div class="corner-chip warn" title="Players can't see this scene until you summon them or move the table onto it.">Hidden from players</div>}
       {/* ---------------- top middle: things that hang from the top edge, one under the other so none covers another */}
       <div class="topstack" ref={topRef}>
         {client.isDM && d.dmPreview && <div class="topchip">Previewing what players see <button class="link" onClick={() => ui.set({ dmPreview: false })}>Stop</button></div>}

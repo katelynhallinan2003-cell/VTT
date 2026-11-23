@@ -84,6 +84,7 @@ kbd { background: var(--raise); border: 1px solid var(--border); border-bottom-w
 .small { font-size: 12px; }
 .error-text { color: var(--danger); }
 .hint { color: var(--muted); font-size: 12px; display: block; }
+.hint.warn { color: var(--warn); background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 6px; padding: 6px 8px; }
 .grow { flex: 1; min-width: 0; }
 .left { text-align: left; }
 .spacer { flex: 1; }

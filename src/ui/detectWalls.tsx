@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { Board } from '../board/Board';
 import { snapToCorner } from '../core/geometry';
 import type { PixelImage } from '../core/gridcut';
-import { colorAt, detectPieces, guessWallColor, looksSolid, tidy, type Piece, type Rgb } from '../core/walltrace';
+import { colorAt, detectPieces, guessWallColor, looksSolid, suggestSensitivity, tidy, type Piece, type Rgb } from '../core/walltrace';
 import type { TableClient } from '../state/client';
 import type { Vec } from '../types';
 import { Modal, SliderField, Toggle, toast, useClient } from './common';
@@ -27,6 +27,8 @@ export function DetectWallsModal(props: { client: TableClient; board: Board | nu
   const [color, setColor] = useState<Rgb>([30, 30, 30]);
   const [sens, setSens] = useState(22);
   const [mode, setMode] = useState<'lines' | 'edges'>('lines');
+  /** false when the picked colour is spread through the picture like texture instead of being one flat colour */
+  const [clear, setClear] = useState(true);
   const [skipGrid, setSkipGrid] = useState(true);
   const [minSq, setMinSq] = useState(0.75);
   const [snap, setSnap] = useState(true);
@@ -39,6 +41,16 @@ export function DetectWallsModal(props: { client: TableClient; board: Board | nu
   const grid = client.grid;
   const existing = client.wallsList().length;
 
+  /** take this colour as the wall colour: work out whether it draws lines or fills areas, and how close a pixel has to be */
+  const useColor = (pic: Loaded, col: Rgb) => {
+    const sug = suggestSensitivity(pic.img, col);
+    const solid = looksSolid(pic.img, col, sug.sens, Math.max(2, pic.cellPx * 0.3));
+    setColor(col);
+    setClear(sug.clear);
+    setMode(solid ? 'edges' : 'lines');
+    setSens(solid ? sug.sens : 22);
+  };
+
   // read the picture once
   useEffect(() => {
     let dead = false;
@@ -47,9 +59,7 @@ export function DetectWallsModal(props: { client: TableClient; board: Board | nu
       if (dead) return;
       if ('error' in r) { setError(r.error); setBusy(false); return; }
       setLoaded(r);
-      const c = guessWallColor(r.img);
-      setColor(c);
-      setMode(looksSolid(r.img, c, 22, Math.max(2, r.cellPx * 0.3)) ? 'edges' : 'lines');
+      useColor(r, guessWallColor(r.img));
     })();
     return () => { dead = true; };
   }, [board]);
@@ -69,7 +79,14 @@ export function DetectWallsModal(props: { client: TableClient; board: Board | nu
     setBusy(true);
     const t = setTimeout(() => {
       if (id !== run.current) return;
-      const px = detectPieces(loaded.img, { color, sensitivity: sens, thinPx: skipGrid ? 1 : 0, minLen: Math.max(4, loaded.cellPx * minSq), tol: 2.5, mode });
+      // along the edge of solid rock the outline is ragged (crystals, rubble), so it is smoothed and drawn with long straight pieces;
+      // a colour that is only texture or shadow has an even rougher outline, so that one is drawn coarser still
+      const solid = mode === 'edges';
+      const k = clear ? 1 : 2;
+      const px = detectPieces(loaded.img, {
+        color, sensitivity: sens, thinPx: skipGrid ? 1 : 0, minLen: Math.max(4, loaded.cellPx * minSq),
+        tol: solid ? Math.max(2.5, loaded.cellPx * 0.25 * k) : 2.5, smoothPx: solid ? Math.round(loaded.cellPx * 0.2 * k) : 0, mode,
+      });
       const scene = px.map((s) => ({ a: loaded.toScene(s.a), b: loaded.toScene(s.b) }));
       const cell = grid.cell;
       const tidied = tidy(scene, { join: Math.max(2, cell * 0.2), snapTol: cell * 0.3, straightDeg: 4, minLen: Math.max(2, cell * minSq), snap: snap ? (p) => snapToCorner(grid, p) : undefined });
@@ -78,7 +95,7 @@ export function DetectWallsModal(props: { client: TableClient; board: Board | nu
       setBusy(false);
     }, 150);
     return () => clearTimeout(t);
-  }, [loaded, color, sens, skipGrid, minSq, snap, mode]);
+  }, [loaded, color, sens, skipGrid, minSq, snap, mode, clear]);
 
   const shown = useMemo(() => (pieces && loaded ? pieces.map((p) => ({ a: loaded.fromScene(p.a), b: loaded.fromScene(p.b) })) : []), [pieces, loaded]);
   const n = pieces?.length ?? 0;
@@ -87,16 +104,9 @@ export function DetectWallsModal(props: { client: TableClient; board: Board | nu
     const c = canvas.current;
     if (!c || !loaded) return;
     const r = c.getBoundingClientRect();
-    const col = colorAt(loaded.img, ((e.clientX - r.left) / r.width) * c.width, ((e.clientY - r.top) / r.height) * c.height);
-    setColor(col);
-    setMode(looksSolid(loaded.img, col, sens, Math.max(2, loaded.cellPx * 0.3)) ? 'edges' : 'lines');
+    useColor(loaded, colorAt(loaded.img, ((e.clientX - r.left) / r.width) * c.width, ((e.clientY - r.top) / r.height) * c.height));
   };
-  const guessAgain = () => {
-    if (!loaded) return;
-    const c = guessWallColor(loaded.img);
-    setColor(c);
-    setMode(looksSolid(loaded.img, c, sens, Math.max(2, loaded.cellPx * 0.3)) ? 'edges' : 'lines');
-  };
+  const guessAgain = () => { if (loaded) useColor(loaded, guessWallColor(loaded.img)); };
 
   const add = async () => {
     if (!pieces || !pieces.length) return;
@@ -139,6 +149,7 @@ export function DetectWallsModal(props: { client: TableClient; board: Board | nu
                 <button class={mode === 'edges' ? 'on' : ''} title="The colour fills the rock round the rooms: the walls run along its edge" onClick={() => setMode('edges')}>Solid areas</button>
               </div>
             </div>
+            {!clear && <p class="hint warn">This colour is spread all over the picture (texture, shadow, grass), not one flat colour, so what is found here is a guess. Click a flat colour on the wall or rock itself, or draw the walls by hand.</p>}
             <SliderField label="How close the colour must be" value={sens} min={2} max={60} onInput={setSens} hint="Up: catches fainter wall. Down: only the exact colour." />
             <SliderField label="Ignore pieces shorter than" value={minSq} min={0.25} max={3} step={0.25} unit="squares" onInput={setMinSq} />
             <Toggle checked={skipGrid} onChange={setSkipGrid} label="Ignore thin lines (a printed grid)" />

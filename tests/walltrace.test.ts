@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { colorAt, detectPieces, dropSmall, guessWallColor, looksSolid, openMask, simplify, thin, tidy, tracePaths, wallMask, type Piece } from '../src/core/walltrace';
+import { closeMask, colorAt, detectPieces, dropSmall, guessWallColor, looksSolid, openMask, simplify, smoothPath, suggestSensitivity, thin, tidy, traceContours, tracePaths, wallMask, type Piece } from '../src/core/walltrace';
 import type { PixelImage } from '../src/core/gridcut';
 import { rng } from './helpers/mapgen';
 
@@ -212,5 +212,205 @@ describe('walls along the edge of solid rock', () => {
     const got = tidy(detectPieces(rock(ROOMS), { ...OPTS, color: [35, 35, 35], mode: 'edges' }), { join: 8, snapTol: 14, straightDeg: 4, minLen: 10 });
     expect(got.length).toBe(8);
     for (const q of got) expect(q.a.x === q.b.x || q.a.y === q.b.y, JSON.stringify(q)).toBe(true);
+  });
+});
+
+describe('outlines of shapes', () => {
+  const shape = (w: number, h: number, rects: [number, number, number, number][]) => {
+    const m = new Uint8Array(w * h);
+    for (const [x0, y0, x1, y1] of rects) for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) m[y * w + x] = 1;
+    return m;
+  };
+  it('follows a shape all the way round, back to where it began', () => {
+    const loops = traceContours(shape(20, 14, [[4, 3, 14, 9]]), 20, 14);
+    expect(loops.length).toBe(1);
+    const l = loops[0];
+    expect(l[0]).toEqual(l[l.length - 1]);
+    expect(l.length).toBe(2 * (10 + 6) + 1);
+    const s = simplify(l, 0.5);
+    expect(s.length).toBe(5); // four corners, and the start again
+  });
+  it('gives a line that stops at the picture edge where a shape runs off it', () => {
+    const loops = traceContours(shape(20, 14, [[0, 3, 8, 9]]), 20, 14);
+    expect(loops.length).toBe(1);
+    const l = loops[0];
+    expect(l[0]).not.toEqual(l[l.length - 1]); // open
+    expect(l.every((p) => p.x > 0 || p.y === 3 || p.y === 9 || true)).toBe(true);
+    expect(l.some((p) => p.x === 0 && p.y > 3 && p.y < 9)).toBe(false); // nothing along the picture's own border
+  });
+  it('keeps two shapes that only touch corner to corner apart', () => {
+    expect(traceContours(shape(10, 10, [[2, 2, 4, 4], [4, 4, 6, 6]]), 10, 10).length).toBe(2);
+  });
+  it('closing fills a narrow notch and leaves wide gaps', () => {
+    const w = 40, h = 20;
+    const m = shape(w, h, [[2, 5, 38, 15]]);
+    for (let y = 5; y < 10; y++) m[y * w + 10] = 0; // a notch one pixel wide
+    for (let y = 5; y < 10; y++) for (let x = 25; x < 31; x++) m[y * w + x] = 0; // and a wide one
+    const c = closeMask(m, w, h, 2);
+    expect(c[7 * w + 10]).toBe(1);
+    expect(c[7 * w + 28]).toBe(0);
+  });
+  it('smoothing takes the stair-steps out of an outline and keeps the ends of an open line', () => {
+    const pts = Array.from({ length: 41 }, (_, i) => ({ x: i, y: 10 + (i % 2) }));
+    const s = smoothPath(pts, 3);
+    expect(s[0]).toEqual(pts[0]);
+    expect(s[40]).toEqual(pts[40]);
+    const wobble = (a: { y: number }[]) => Math.max(...a.slice(5, 35).map((p) => p.y)) - Math.min(...a.slice(5, 35).map((p) => p.y));
+    expect(wobble(s)).toBeLessThan(wobble(pts) / 2);
+  });
+});
+
+/**
+ * Pictures built to have what the two maps that failed had: (a) dark rock that fades softly into a ragged crystal fringe and a blue-grey floor
+ * that is close enough to the rock colour for the old fixed setting to swallow it; (b) no wall colour at all, only shadow and texture.
+ */
+describe('maps that used to fail', () => {
+  const W = 700, H = 900, CELL = 40;
+  /** two big pieces of dark rock, ragged along the edge of a winding passage */
+  const void1: [number, number][] = [[0, 0], [250, 0], [250, 300], [180, 420], [190, 560], [120, 700], [0, 760]];
+  const void2: [number, number][] = [[450, 0], [700, 0], [700, 800], [560, 860], [520, 700], [470, 560], [520, 380], [450, 220]];
+  const inside = (poly: [number, number][], x: number, y: number) => {
+    let c = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const [xi, yi] = poly[i], [xj, yj] = poly[j];
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) c = !c;
+    }
+    return c;
+  };
+  const segDist = (x: number, y: number, a: [number, number], b: [number, number]) => {
+    const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+    const t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / l2));
+    return Math.hypot(x - (a[0] + t * dx), y - (a[1] + t * dy));
+  };
+  const edgeDist = (poly: [number, number][], x: number, y: number) => {
+    let d = Infinity;
+    for (let i = 0; i < poly.length; i++) d = Math.min(d, segDist(x, y, poly[i], poly[(i + 1) % poly.length]));
+    return d;
+  };
+  function tunnelLike(): PixelImage {
+    const r = rng(11);
+    const data = new Uint8ClampedArray(W * H * 4);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const p = (y * W + x) * 4;
+        const dIn = Math.min(...[void1, void2].map((poly) => (inside(poly, x, y) ? -edgeDist(poly, x, y) : edgeDist(poly, x, y))));
+        // 0 deep in the rock, 1 out on the floor, with a soft ramp about a square wide and a ragged fringe on it
+        const t = Math.max(0, Math.min(1, (dIn + 10 + (r() - 0.5) * 34) / 34));
+        const n = (r() - 0.5) * 8;
+        data[p] = 8 + t * 40 + n; data[p + 1] = 14 + t * 55 + n; data[p + 2] = 50 + t * 55 + n; data[p + 3] = 255;
+      }
+    }
+    // cobbles: thin darker cracks over the floor
+    for (let k = 0; k < 160; k++) {
+      const x0 = Math.floor(r() * W), y0 = Math.floor(r() * H), a = r() * Math.PI;
+      for (let s = 0; s < 22; s++) {
+        const x = Math.round(x0 + Math.cos(a) * s), y = Math.round(y0 + Math.sin(a) * s);
+        if (x < 0 || y < 0 || x >= W || y >= H || inside(void1, x, y) || inside(void2, x, y)) continue;
+        const p = (y * W + x) * 4; data[p] -= 12; data[p + 1] -= 14; data[p + 2] -= 10;
+      }
+    }
+    return { data, width: W, height: H };
+  }
+  /** how much of the edge of the rock has a piece near it, and how much of the pieces lie away from any edge */
+  const fit = (pieces: Piece[], tol: number) => {
+    const edge = [...void1, ...void2];
+    let on = 0, tot = 0, stray = 0, all = 0;
+    for (const poly of [void1, void2]) {
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i], b = poly[(i + 1) % poly.length];
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        for (let s = 0; s <= len; s += 10) {
+          const x = a[0] + ((b[0] - a[0]) * s) / len, y = a[1] + ((b[1] - a[1]) * s) / len;
+          if (x < 8 || y < 8 || x > W - 8 || y > H - 8) continue; // the picture's own border is not a wall
+          tot++;
+          if (pieces.some((q) => segDist(x, y, [q.a.x, q.a.y], [q.b.x, q.b.y]) <= tol)) on++;
+        }
+      }
+    }
+    for (const q of pieces) {
+      const len = Math.hypot(q.b.x - q.a.x, q.b.y - q.a.y);
+      for (let s = 0; s <= len; s += 10) {
+        all++;
+        const x = q.a.x + ((q.b.x - q.a.x) * s) / len, y = q.a.y + ((q.b.y - q.a.y) * s) / len;
+        if (Math.min(edgeDist(void1, x, y), edgeDist(void2, x, y)) > tol) stray++;
+      }
+    }
+    void edge;
+    return { covered: on / Math.max(1, tot), stray: stray / Math.max(1, all) };
+  };
+  const solidOpts = (sens: number) => ({ color: [8, 14, 50] as [number, number, number], sensitivity: sens, thinPx: 1, minLen: CELL * 0.75, tol: CELL * 0.25, smoothPx: Math.round(CELL * 0.2), mode: 'edges' as const });
+
+  it('works out a tight setting for dark rock with a flat colour, and says the colour is clear', () => {
+    const img = tunnelLike();
+    const g = guessWallColor(img);
+    expect(g[2]).toBeLessThan(80);
+    const s = suggestSensitivity(img, g);
+    expect(s.clear).toBe(true);
+    expect(s.sens).toBeLessThan(15);
+    expect(looksSolid(img, g, s.sens, CELL * 0.3)).toBe(true);
+  });
+  it('draws long walls along the edge of the rock instead of a scatter of stubs', () => {
+    const img = tunnelLike();
+    const s = suggestSensitivity(img, guessWallColor(img));
+    const pieces = tidy(detectPieces(img, solidOpts(s.sens)), { join: CELL * 0.2, snapTol: 0, straightDeg: 4, minLen: CELL * 0.75 });
+    const f = fit(pieces, CELL * 0.6);
+    expect(f.covered).toBeGreaterThan(0.85);
+    expect(f.stray).toBeLessThan(0.1);
+    expect(pieces.length).toBeLessThan(60);
+    const total = pieces.reduce((t, q) => t + Math.hypot(q.b.x - q.a.x, q.b.y - q.a.y), 0);
+    expect(total / pieces.length).toBeGreaterThan(CELL * 0.9); // pieces about a square or longer on average
+  });
+  it('the same rock traced with a fixed setting, no smoothing and a tiny tolerance is mostly thrown away as stubs', () => {
+    const img = tunnelLike();
+    const T = { join: CELL * 0.2, snapTol: 0, straightDeg: 4, minLen: CELL * 0.75 };
+    const old = tidy(detectPieces(img, { ...solidOpts(22), tol: 2.5, smoothPx: 0 }), T);
+    const now = tidy(detectPieces(img, solidOpts(suggestSensitivity(img, [8, 14, 50]).sens)), T);
+    expect(fit(old, CELL * 0.6).covered).toBeLessThan(0.3);
+    expect(fit(now, CELL * 0.6).covered).toBeGreaterThan(0.85);
+  });
+  it('the old fixed setting let the rock colour run into the floor, which the suggested one does not', () => {
+    const img = tunnelLike();
+    const cover = (s: number) => wallMask(img, [8, 14, 50], s).reduce((a, b) => a + b, 0) / (W * H);
+    const sug = suggestSensitivity(img, [8, 14, 50]).sens;
+    expect(cover(22)).toBeGreaterThan(cover(sug) + 0.2);
+  });
+  it('leaves rock that touches the picture edge open there: no wall along the border', () => {
+    const img = tunnelLike();
+    const pieces = detectPieces(img, solidOpts(suggestSensitivity(img, [8, 14, 50]).sens));
+    const onBorder = pieces.filter((q) => (q.a.x < 3 && q.b.x < 3) || (q.a.y < 3 && q.b.y < 3) || (q.a.x > W - 3 && q.b.x > W - 3) || (q.a.y > H - 3 && q.b.y > H - 3));
+    expect(onBorder.length).toBe(0);
+  });
+
+  /** grass and shadow: dark colour everywhere in blotches, no flat wall colour to pick */
+  function shadowy(): PixelImage {
+    const r = rng(5);
+    const data = new Uint8ClampedArray(W * H * 4);
+    for (let i = 0; i < W * H; i++) { const v = (r() - 0.5) * 60; data[i * 4] = 90 + v; data[i * 4 + 1] = 130 + v; data[i * 4 + 2] = 50 + v * 0.6; data[i * 4 + 3] = 255; }
+    for (let k = 0; k < 400; k++) {
+      const cx = r() * W, cy = r() * H, rad = 6 + r() * 22, shade = 0.35 + r() * 0.5;
+      for (let y = Math.max(0, Math.floor(cy - rad)); y < Math.min(H, cy + rad); y++) for (let x = Math.max(0, Math.floor(cx - rad)); x < Math.min(W, cx + rad); x++) {
+        if (Math.hypot(x - cx, y - cy) > rad * (0.7 + r() * 0.3)) continue;
+        const p = (y * W + x) * 4; data[p] *= shade; data[p + 1] *= shade; data[p + 2] *= shade;
+      }
+    }
+    return { data, width: W, height: H };
+  }
+  it('says so when the colour is only texture and shadow, with nothing flat to pick', () => {
+    const img = shadowy();
+    expect(suggestSensitivity(img, guessWallColor(img)).clear).toBe(false);
+    expect(suggestSensitivity(img, colorAt(img, 300, 400, 2)).clear).toBe(false);
+  });
+  it('a colour that is only texture is outlined coarsely: far fewer pieces than a fine outline of the same ragged shapes', () => {
+    const img = shadowy();
+    const g = guessWallColor(img);
+    const base = { color: g, sensitivity: 22, thinPx: 1, minLen: CELL * 0.75, mode: 'edges' as const };
+    const fine = detectPieces(img, { ...base, tol: CELL * 0.25, smoothPx: Math.round(CELL * 0.2) });
+    const coarse = detectPieces(img, { ...base, tol: CELL * 0.5, smoothPx: Math.round(CELL * 0.4) });
+    expect(coarse.length).toBeGreaterThan(0);
+    expect(coarse.length).toBeLessThan(fine.length * 0.7);
+  });
+  it('still calls flat ink clear', () => {
+    const img = drawMap(600, 400, ROOM, { grid: 50 });
+    expect(suggestSensitivity(img, [30, 30, 30]).clear).toBe(true);
   });
 });

@@ -302,6 +302,125 @@ export function simplify(pts: Vec[], tol: number): Vec[] {
   return pts.filter((_, i) => keep[i]);
 }
 
+/**
+ * How near the colour a pixel has to be, picked from the picture itself. A flat colour (ink, solid rock) shows up in the colour distances as a
+ * tall narrow peak that drops to the level of everything else within a short distance; the setting goes just past that drop. A fixed value
+ * cannot do this: dark rock that fades into the floor needs a tight setting, flat ink a wide one. `clear` is false when there is no such peak
+ * (the colour is spread through the picture like texture), and then `sens` is only the usual default. `sens` is on the 0 to 100 scale.
+ */
+export function suggestSensitivity(img: PixelImage, color: Rgb, lo = 4, hi = 30, fallback = 22): { sens: number; clear: boolean } {
+  const { data, width: w, height: h } = img;
+  const bins = new Float64Array(Math.ceil(MAX_DIST) + 1);
+  let n = 0;
+  for (let i = 0; i < w * h; i += 2) { // every other pixel is plenty
+    const p = i * 4;
+    if (data[p + 3] < 128) continue;
+    const dr = data[p] - color[0], dg = data[p + 1] - color[1], db = data[p + 2] - color[2];
+    bins[Math.round(Math.sqrt(dr * dr + dg * dg + db * db))]++;
+    n++;
+  }
+  const none = { sens: fallback, clear: false };
+  if (n < 100) return none;
+  const dens = new Float64Array(bins.length);
+  for (let d = 0; d < bins.length; d++) {
+    let sum = 0, k = 0;
+    for (let j = -2; j <= 2; j++) if (d + j >= 0 && d + j < bins.length) { sum += bins[d + j]; k++; }
+    dens[d] = (sum / k / n) * 100;
+  }
+  let pi = 0;
+  for (let d = 1; d <= 60; d++) if (dens[d] > dens[pi]) pi = d;
+  const peak = dens[pi];
+  // a real flat colour holds a good part of the picture in a narrow band; texture does not
+  let near = 0;
+  for (let d = 0; d <= 30; d++) near += dens[d];
+  if (near < 3) return none;
+  let knee = -1;
+  for (let d = pi; d <= 90; d++) if (dens[d] <= peak * 0.06) { knee = d; break; }
+  if (knee < 0) return none;
+  return { sens: Math.max(lo, Math.min(hi, ((knee * 1.6) / MAX_DIST) * 100)), clear: true };
+}
+
+/** Fill narrow gaps and notches: grow r times, then shrink r times. */
+export function closeMask(mask: Uint8Array, w: number, h: number, r: number): Uint8Array {
+  if (r <= 0) return mask;
+  const inv = new Uint8Array(mask.length);
+  for (let i = 0; i < mask.length; i++) inv[i] = mask[i] ? 0 : 1;
+  const o = openMask(inv, w, h, r);
+  const out = new Uint8Array(mask.length);
+  for (let i = 0; i < mask.length; i++) out[i] = o[i] ? 0 : 1;
+  return out;
+}
+
+/**
+ * The outlines of the shapes in a mask, as lines of points on the pixel corners. A shape that runs off the picture gives a line that stops at
+ * the picture's edge (the border itself is not an outline). Closed outlines end where they began.
+ */
+export function traceContours(mask: Uint8Array, w: number, h: number): Vec[][] {
+  const W = w + 1;
+  const DX = [1, 0, -1, 0], DY = [0, 1, 0, -1]; // 0 right, 1 down, 2 left, 3 up: clockwise round a shape on the screen
+  const has = new Uint8Array(W * (h + 1));
+  const into = new Uint8Array(W * (h + 1));
+  const add = (x: number, y: number, d: number) => { has[y * W + x] |= 1 << d; into[(y + DY[d]) * W + x + DX[d]]++; };
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (!mask[i]) continue;
+      if (y > 0 && !mask[i - w]) add(x, y, 0);
+      if (x < w - 1 && !mask[i + 1]) add(x + 1, y, 1);
+      if (y < h - 1 && !mask[i + w]) add(x + 1, y + 1, 2);
+      if (x > 0 && !mask[i - 1]) add(x, y + 1, 3);
+    }
+  }
+  const out: Vec[][] = [];
+  const follow = (sx: number, sy: number, d0: number) => {
+    const pts: Vec[] = [{ x: sx, y: sy }];
+    let x = sx, y = sy, d = d0;
+    for (;;) {
+      has[y * W + x] &= ~(1 << d);
+      x += DX[d]; y += DY[d];
+      pts.push({ x, y });
+      if (x === sx && y === sy) break;
+      const bits = has[y * W + x];
+      const nd = [(d + 1) % 4, d, (d + 3) % 4].find((k) => bits & (1 << k));
+      if (nd === undefined) break;
+      d = nd;
+    }
+    if (pts.length > 3) out.push(pts);
+  };
+  // lines that run off the picture first (they begin where nothing comes in), then the closed ones
+  for (let y = 0; y <= h; y++) for (let x = 0; x <= w; x++) {
+    const v = y * W + x;
+    if (!has[v] || into[v]) continue;
+    for (let d = 0; d < 4; d++) while (has[v] & (1 << d)) follow(x, y, d);
+  }
+  for (let y = 0; y <= h; y++) for (let x = 0; x <= w; x++) {
+    const v = y * W + x;
+    for (let d = 0; d < 4; d++) while (has[v] & (1 << d)) follow(x, y, d);
+  }
+  return out;
+}
+
+/** Smooth the stair-steps of a pixel outline: each point becomes the average of the points round it (a closed line wraps; an open one keeps its ends). */
+export function smoothPath(pts: Vec[], half: number): Vec[] {
+  const n = pts.length;
+  if (half < 1 || n < 4) return pts;
+  const closed = Math.hypot(pts[0].x - pts[n - 1].x, pts[0].y - pts[n - 1].y) < 1e-9;
+  const m = closed ? n - 1 : n;
+  const out: Vec[] = [];
+  for (let i = 0; i < m; i++) {
+    if (!closed && (i === 0 || i === m - 1)) { out.push(pts[i]); continue; }
+    let sx = 0, sy = 0, c = 0;
+    const k = closed ? half : Math.min(half, i, m - 1 - i);
+    for (let j = -k; j <= k; j++) {
+      const q = pts[closed ? (((i + j) % m) + m) % m : i + j];
+      sx += q.x; sy += q.y; c++;
+    }
+    out.push({ x: sx / c, y: sy / c });
+  }
+  if (closed) out.push(out[0]);
+  return out;
+}
+
 /** Does the colour fill big areas (solid rock round the rooms) rather than draw thin lines? Then the walls are along its edges. */
 export function looksSolid(img: PixelImage, color: Rgb, sensitivity: number, radius: number): boolean {
   const { width: w, height: h } = img;
@@ -341,6 +460,8 @@ export interface TraceOpts {
   minLen: number;
   /** how far a straight piece may stray from the drawn line, in pixels */
   tol: number;
+  /** 'edges' only: ragged edges (a rocky fringe, crystals) are smoothed over this many pixels before the walls are drawn along them */
+  smoothPx?: number;
 }
 
 /** Straight pieces along the walls in a picture, in pixels of that picture. */
@@ -349,16 +470,19 @@ export function detectPieces(img: PixelImage, o: TraceOpts): Piece[] {
   let m = wallMask(img, o.color, o.sensitivity);
   m = openMask(m, w, h, o.thinPx);
   m = dropSmall(m, w, h, o.minLen);
-  let skel: Uint8Array;
+  let paths: Vec[][];
   if (o.mode === 'edges') {
-    // fill small holes (furniture and floor marks inside the rock) so only real room outlines remain, then follow the edge
+    // fill small holes (furniture and floor marks inside the rock) so only real room outlines remain
     const inv = new Uint8Array(m.length);
     for (let i = 0; i < m.length; i++) inv[i] = m[i] ? 0 : 1;
     const big = dropSmall(inv, w, h, o.minLen);
     for (let i = 0; i < m.length; i++) m[i] = big[i] ? 0 : 1;
-    skel = thin(edgesOf(m, w, h), w, h);
-  } else skel = thin(m, w, h);
-  const paths = tracePaths(skel, w, h, Math.max(3, o.minLen * 0.6));
+    // round off the ragged fringe, then follow the outline of each shape directly (no centre-line step, so nothing is lost at the joins)
+    const r = Math.max(0, Math.round(o.smoothPx ?? 0));
+    m = closeMask(openMask(m, w, h, r), w, h, r);
+    paths = traceContours(m, w, h).map((p) => smoothPath(p, Math.round(r * 1.5)))
+      .filter((p) => { let len = 0; for (let k = 1; k < p.length; k++) len += Math.hypot(p[k].x - p[k - 1].x, p[k].y - p[k - 1].y); return len >= o.minLen; });
+  } else paths = tracePaths(thin(m, w, h), w, h, Math.max(3, o.minLen * 0.6));
   const out: Piece[] = [];
   for (const p of paths) {
     const s = simplify(p, o.tol);

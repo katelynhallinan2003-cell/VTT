@@ -31,6 +31,26 @@ Asked 2026-11-23, all in one message (the user also attached `SeasideMap.jpg` an
 
 
 
+Asked 2026-11-23, third message (14:43):
+
+- [ ] **#70 Reloading the page keeps me on the scene I was on** (added 2026-11-23): "when i reload the page with a refresh, it should stay on the scene i was on before the refresh, not defaulting back to scene 1."
+- [ ] **#71 Daylight controls belong in Scene, Light and darkness, not in Heights** (added 2026-11-23): "the daylight controls should be in with the other light and darkness stuff inside scene, not in heights."
+- [ ] **#72 Painted daylight draws weird lines along the grid and boxes of dark** (added 2026-11-23): "when i painted it in it made weird lines about the grid instead of smooth light with like boxes of dark?"
+- [ ] **#73 Painted daylight has a bright part and a dim part, like a light** (added 2026-11-23): "it should work kind of like a light where it has a aoe of bright and dim light rather than the hard edge it currently has."
+- [ ] **#74 Paint dim light as well as daylight** (added 2026-11-23): "yes add a dim light option as well."
+- [ ] **#75 Initiative: remove "No combat yet", and show the next-turn controls only once initiative has started** (added 2026-11-23).
+- [ ] **#76 Initiative: remove "Roll here, or type what a real d20 showed. Each token's bonus is added for you."** (added 2026-11-23).
+- [ ] **#77 Initiative: remove "There are no tokens on this scene yet."** (added 2026-11-23).
+- [ ] **#78 Initiative: "Roll all empty" and "roll or type some numbers" are the same thing, so only one** (added 2026-11-23): "those seem basically the same and shouldn't be repetitive."
+- [ ] **#79 Tokens tab: the DM can click a player and see and edit their saved tokens** (added 2026-11-23).
+- [ ] **#80 Tokens tab: the DM can see and edit that player's saved handouts** (added 2026-11-23).
+- [ ] **#81 A scene can be just a grid, with no map** (added 2026-11-23): "an option for a scene to just be a grid as the whole thing."
+- [ ] **#82 Add an empty grid to the side of a map** (added 2026-11-23): "or to add a grid to the side of a map as just a empty grid."
+- [ ] **#83 On creating a table, start with a grid instead of uploading a map** (added 2026-11-23).
+- [ ] **#84 "Add a second map" is too slow ("Adding..") or does not work** (added 2026-11-23).
+- [ ] **#85 "Add a second map" only offers upload, not the library** (added 2026-11-23): "it didnt give the option to select a map from the library it only said upload so that needs to be fixed."
+- [ ] **#86 "See as this player" in the Players tab, as a plain toggle** (added 2026-11-23): "sure a see as this player view is an option though i want to see the player view toggle as just a toggle rather than it opening a menu, so put it inside the player tab."
+
 ## Ideas (not requested)
 
 Suggestions nobody has asked for, carried over from the old `TASKS.md`. Do not build these unless the user asks; if

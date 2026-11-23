@@ -639,7 +639,6 @@ export function SettingsModal(props: { client: TableClient; ui: UiState; onClose
             <li><kbd>Shift</kbd>+click — multi-select, drag on empty space — box select, <kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd> — next / previous token</li>
             <li><kbd>Arrows</kbd> — nudge one square (or hex), <kbd>Alt</kbd> while dragging — move without snapping, <kbd>Del</kbd> — delete</li>
             <li><kbd>]</kbd> raise the selected tokens 5 ft (they fly) · <kbd>[</kbd> lower them (down to the ground)</li>
-            <li><kbd>Q</kbd> — hold while dragging a token to <b>teleport</b> it (DM: it jumps, walls and distance do not count). Or right-click empty ground and choose "Teleport selected token here".</li>
             <li><kbd>K</kbd> hide / reveal the selected tokens · <kbd>L</kbd> lock / unlock them (DM)</li>
             <li><kbd>N</kbd> next turn · <kbd>Shift</kbd>+<kbd>N</kbd> previous turn (DM, with initiative running)</li>
             <li><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo, <kbd>Ctrl</kbd>+<kbd>Y</kbd> redo, <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>X</kbd> / <kbd>V</kbd> copy, cut, paste tokens, <kbd>Ctrl</kbd>+<kbd>D</kbd> duplicate, <kbd>Ctrl</kbd>+<kbd>A</kbd> select all</li>
@@ -648,6 +647,8 @@ export function SettingsModal(props: { client: TableClient; ui: UiState; onClose
             <li class="muted">"Multi-step" in the test move bar makes each drag a new leg of the move, with the whole distance shown.</li>
             <li class="keys-head">While drawing</li>
             <li><kbd>Shift</kbd> locks angles and makes squares, <kbd>Alt</kbd> turns off snapping</li>
+            <li class="keys-head">Teleport (DM)</li>
+            <li>Hold <kbd>Q</kbd> and drag a token to teleport across walls or cliffs. You can also right-click its destination and choose “Teleport selected token here”.</li>
           </ul>
         </>
       )}

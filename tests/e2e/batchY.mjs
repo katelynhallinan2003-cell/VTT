@@ -132,6 +132,7 @@ await dm.keyboard.press('Escape');
 await dm.keyboard.press('Shift+Slash');
 await dm.locator('.modal', { hasText: 'Shortcuts' }).waitFor();
 const keys = await dm.locator('.keys').innerText();
+check('the bottom shortcut gives the DM teleport gesture', /Hold Q and drag a token to teleport/.test(await dm.locator('.keys li').last().innerText()));
 check('the hotkey list covers the new keys', /pan the view/.test(keys) && /teleport/i.test(keys) && /spell templates/.test(keys) && /next \/ previous token/.test(keys));
 await dm.screenshot({ path: '/tmp/shots/y3-keys.png' });
 await dm.keyboard.press('Escape');

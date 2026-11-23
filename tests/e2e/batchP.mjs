@@ -142,7 +142,7 @@ check('a window stops walking', near(t.x, gx(13.5), 3), JSON.stringify(t));
 await dm.evaluate(() => window.__vtt.ui.set({ wallIgnore: true }));
 await drag([gx(13.5), gy(12.5)], [gx(16.5), gy(12.5)]);
 t = await tok(elf);
-check('"I can walk through walls" lets the DM drag through', near(t.x, gx(16.5), 3), JSON.stringify(t));
+check('"DM can move tokens through walls" lets the DM drag through', near(t.x, gx(16.5), 3), JSON.stringify(t));
 await dm.evaluate(() => window.__vtt.ui.set({ wallIgnore: false }));
 await dm.evaluate(([id, x, y]) => window.__vtt.client.moveTokens([{ id, x, y }], [], { teleport: true }), [elf, gx(13.5), gy(12.5)]);
 await sleep(300);

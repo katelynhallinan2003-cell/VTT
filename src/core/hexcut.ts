@@ -30,7 +30,7 @@ function normals(shape: HexShape): [Vec, Vec, Vec] {
 
 /** The grid the app would have to describe these hexes (so the shared hex helpers can be used on a picture). */
 function asGrid(cut: Pick<GridCut, 'p' | 'x' | 'y'>, shape: HexShape): GridSettings {
-  return { shape, cell: cut.p, ox: cut.x, oy: cut.y, visible: true, color: '#000', opacity: 1, ft: 5, rule: 'chebyshev', snap: true };
+  return { shape, cell: cut.p, ox: cut.x, oy: cut.y, visible: true, color: '#ffffff', opacity: 1, ft: 5, rule: 'chebyshev', snap: true };
 }
 
 /** Every side of every hex that touches the picture, once each (three of each hex's six). */

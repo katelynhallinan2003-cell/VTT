@@ -2,6 +2,7 @@ import { Container, Graphics, Sprite, Text } from 'pixi.js';
 import { healthState, HEALTH_COLOR } from '../core/combat';
 import { altLabel, type Altitude } from '../core/height';
 import { addFx, tintColor } from '../core/effects';
+import { colorNum } from '../core/colornum';
 import { isLightMark } from '../core/light';
 import type { Effect, GridSettings, Token } from '../types';
 import { loadTexture, type LoadedTexture } from './textures';
@@ -22,7 +23,7 @@ const fxKey = (fx: Effect[]): string => fx.map((e) => `${e.id}${e.n}${e.ic}${e.c
 
 export { isLightMark };
 
-const hex = (c: string) => parseInt(c.replace('#', '').padEnd(6, '0').slice(0, 6), 16) || 0xffffff;
+const hex = colorNum;
 
 function hashColor(s: string): number {
   let h = 0;

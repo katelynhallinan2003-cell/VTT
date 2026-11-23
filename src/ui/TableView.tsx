@@ -332,7 +332,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
   const gridOn = !!scene?.meta?.grid.visible;
 
   return (
-    <div class="table-root" onDragEnter={onDragEnter} onDragLeave={onDragLeave} onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+    <div class="table-root" data-corner-chip={client.isDM && !live && client.viewSceneId ? '' : undefined} onDragEnter={onDragEnter} onDragLeave={onDragLeave} onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
       <div class="board-host" ref={hostRef} />
 
       {/* ---------------- left toolbar */}
@@ -462,9 +462,10 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       )}
       {client.metaLoaded && !client.isDM && !client.activeSceneId && <div class="empty-card"><h2>Waiting for the DM…</h2><p>No scene is being shown yet.</p></div>}
       {scene?.meta && !scene.meta.mapUrl && client.isDM && <div class="hint-chip">This scene has no map yet. <button class="link" onClick={() => ui.set({ dockTab: 'scene' })}>Add one in the Scene tab</button>.</div>}
+      {/* lower left: the note that this scene is private, under the toolbar and clear of the tool panels */}
+      {client.isDM && !live && client.viewSceneId && <div class="corner-chip warn">Private scene: players can't see this yet</div>}
       {/* ---------------- top middle: things that hang from the top edge, one under the other so none covers another */}
       <div class="topstack" ref={topRef}>
-        {client.isDM && !live && client.viewSceneId && <div class="topchip warn">Private scene: players can't see this yet</div>}
         {client.isDM && d.dmPreview && <div class="topchip">Previewing what players see <button class="link" onClick={() => ui.set({ dmPreview: false })}>Stop</button></div>}
         <TestMoveBar ui={ui} board={board} />
         {mapError && <div class="banner error">{mapError} <button class="btn small" onClick={() => board?.retryMap()}>Try again</button></div>}

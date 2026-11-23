@@ -1,7 +1,7 @@
 import { isLightMark } from '../core/light';
 import { useMemo, useRef, useState } from 'preact/hooks';
 import { healthState, HEALTH_LABEL, pctOf } from '../core/combat';
-import { MAX_EXTRA_MAPS, TOKEN_SIZES } from '../core/model';
+import { MAX_EXTRA_MAPS, TOKEN_SIZES, gridColorToSave } from '../core/model';
 import { gridPeriod, isHex } from '../core/hex';
 import { currentOverlay } from '../core/gridOverlay';
 import { GridChoices } from './GridChoices';
@@ -370,7 +370,7 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
         <button class={`btn ${d.tool === 'grid' ? 'primary' : ''}`} onClick={() => ui.set({ tool: d.tool === 'grid' ? 'select' : 'grid' })}>
           {d.tool === 'grid' ? (hex ? 'Drag a box around some hexes…' : 'Drag a box over the grid squares…') : 'Draw a box to set the grid'}
         </button>
-        <Field label="Grid colour"><input type="color" value={g.color} onInput={(e) => gridT({ color: (e.target as HTMLInputElement).value })} /></Field>
+        <Field label="Grid colour"><input type="color" value={g.color} onInput={(e) => gridT({ color: gridColorToSave((e.target as HTMLInputElement).value) })} /></Field>
 
         <Section id="grid-fine" title="Fine tune grid" defaultOpen={false}>
           <SliderField label={hex ? 'Hex size (side to side)' : 'Square size'} value={g.cell} min={10} max={300} step={0.1} unit="px" onInput={(v) => gridT({ cell: v })} />

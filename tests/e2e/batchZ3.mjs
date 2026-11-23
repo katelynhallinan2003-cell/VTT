@@ -42,7 +42,7 @@ await sleep(300);
 await dm.keyboard.press('h');
 check('the Heights panel offers difficult ground', (await dm.locator('.flyout button', { hasText: 'Difficult' }).count()) === 1);
 await dm.locator('.flyout button', { hasText: 'Difficult' }).click();
-check('and then only paints and rubs out', (await dm.locator('.flyout .seg button', { hasText: 'Ramp' }).count()) === 0 && (await dm.locator('.flyout .seg button', { hasText: 'Move' }).count()) === 0);
+check('and then only paints and erases', (await dm.locator('.flyout .seg button', { hasText: 'Ramp' }).count()) === 0 && (await dm.locator('.flyout .seg button', { hasText: 'Select' }).count()) === 0);
 await dragTo(C(8, 6), C(11, 6));
 const nRough = await dm.evaluate(() => window.__vtt.board.rough.areas.length);
 check('painting makes one difficult area', nRough === 1, `${nRough}`);
@@ -67,9 +67,9 @@ await sleep(300);
 const fl = await dm.evaluate(([id]) => { const b = window.__vtt.board; const t = window.__vtt.client.scene.tokens.get(id); return b.moveCost([{ x: t.x, y: t.y }, { x: t.x + 7 * 70, y: t.y }], true); }, [tok]);
 check('a flyer is not slowed by it', fl.ft === 35 && fl.note === '', JSON.stringify(fl));
 await dm.evaluate((id) => window.__vtt.client.updateTokens([id], { fly: false, elev: 0 }), tok);
-// rub out
+// erase
 await dm.keyboard.press('h');
-await dm.locator('.flyout .seg button', { hasText: 'Rub out' }).click();
+await dm.locator('.flyout .seg button', { hasText: 'Erase' }).click();
 await dragTo(C(9, 6), C(10, 6));
 const cells2 = await dm.evaluate(() => { const b = window.__vtt.board; return [8, 9, 10, 11].filter((i) => { const p = { x: b.client.grid.ox + (i + 0.5) * b.client.grid.cell, y: b.client.grid.oy + 6.5 * b.client.grid.cell }; return window.__vtt.board.isRoughAt(p); }).length; });
 check('rubbing out takes squares away', cells2 === 2, `${cells2}`);
@@ -147,7 +147,7 @@ check('and it is back at 10 ft', (await dm.evaluate(() => window.__vtt.board.wal
 await dm.keyboard.press('Escape');
 await dm.keyboard.press('h');
 await sleep(300);
-check('the Cliffs setting is in the Heights panel', (await dm.locator('.flyout', { hasText: 'Cliffs' }).count()) === 1);
+check('the Steepest climb (cliff) setting is in the Heights panel', (await dm.locator('.flyout', { hasText: 'Steepest climb' }).count()) === 1);
 
 // Six staggered, additive round brushes. The entire hill fits between grid centres.
 await dm.keyboard.press('Escape');

@@ -190,7 +190,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
   const n = terrain.areas.length;
   const rough = d.groundKind === 'rough';
   const roughN = roughOf(client.drawingsSorted(), grid).areas.length;
-  const modes = rough ? ([['paint', 'Paint'], ['erase', 'Rub out']] as const) : ([['paint', 'Paint'], ['ramp', 'Ramp'], ['erase', 'Rub out'], ['move', 'Move']] as const);
+  const modes = rough ? ([['paint', 'Paint'], ['erase', 'Erase']] as const) : ([['paint', 'Paint'], ['ramp', 'Ramp'], ['erase', 'Erase'], ['move', 'Select']] as const);
   const cliff = client.scene?.meta?.cliff ?? 10;
   return (
     <div class="flyout">
@@ -200,9 +200,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
           <button key={k} class={d.groundKind === k ? 'on' : ''} onClick={() => ui.set({ groundKind: k })}>{label}</button>
         ))}
       </div>
-      <p class="hint">{rough
-        ? 'Walking through difficult ground costs double movement. Flyers are not slowed.'
-        : 'Paint high and low ground. A token that walks onto it stands at that height; flyers keep their own.'}</p>
+      {rough && <p class="hint">Walking through difficult ground costs double movement. Flyers are not slowed.</p>}
       <div class="seg">
         {modes.filter(([k]) => !gridless || k !== 'ramp').map(([k, label]) => (
           <button key={k} class={mode === k ? 'on' : ''} onClick={() => ui.set({ heightMode: k })}>{label}</button>
@@ -262,15 +260,16 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
       {!rough && (
         <p class="hint">
           {mode === 'paint' && 'Paint or drag across the map. Ctrl-click an area to select it, then paint more onto it or change its height.'}
-          {mode === 'erase' && (editing ? 'Rubs out of the selected area only.' : 'Rubs out of every area. Select an area first to rub out of just that one.')}
-          {mode === 'move' && (gridless ? 'Drag an area to move it freely. Shift-click adds more.' : `Click an area to select it, then drag it. Ground made of whole ${cellWord}s moves a ${cellWord} at a time (Alt moves it freely). Shift-click adds more.`)}
+          {mode === 'erase' && (editing ? 'Erases from the selected area only.' : 'Erases from every area. Select an area first to erase from just that one.')}
+          {mode === 'move' && (gridless ? 'Click an area to select it and change its height. Drag it to move it freely. Shift-click adds more.' : `Click an area to select it and change its height. Drag it to move it: ground made of whole ${cellWord}s moves a ${cellWord} at a time (Alt moves it freely). Shift-click adds more.`)}
         </p>
       )}
-      {rough && <p class="hint">{mode === 'paint' ? 'Paint or drag across the map.' : 'Rubs out difficult ground wherever you drag.'}</p>}
+      {rough && <p class="hint">{mode === 'paint' ? 'Paint or drag across the map.' : 'Erases difficult ground wherever you drag.'}</p>}
       {!rough && client.isDM && (
         <div style={{ margin: '8px 0' }}>
-          <NumField label="Cliffs: drops over" value={cliff} min={0} max={1000} step={5} unit="ft" title="At 10 ft, a rise of more than 10 ft within 10 horizontal feet stops a walker. This includes overlapping brushes. A single 5 ft step is walkable. Set to 0 to turn off automatic cliffs."
+          <NumField label="Steepest climb" value={cliff} min={0} max={1000} step={5} unit="ft" title="At 10 ft, ground that rises more than 10 ft within 10 horizontal feet is a cliff and stops a walker. This includes overlapping brushes. A single 5 ft step is walkable. The distance sideways scales with this number. Set to 0 to turn off automatic cliffs."
             onCommit={(v) => void client.updateScene({ cliff: Math.max(0, Math.round(v)) })} />
+          <p class="hint">Ground that rises more than this is a cliff: walkers can't climb it, but can walk down. 0 turns cliffs off.</p>
         </div>
       )}
       <span class="field-label">Show the ground heights</span>
@@ -408,13 +407,10 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
       <div class="ht-card">
         <strong>On this map</strong>
         <Toggle checked={!!meta?.wallStop} onChange={(v) => void client.updateScene({ wallStop: v })} label="Walls stop the players' tokens" hint="Off: walls only block sight and spells." />
-        <Toggle checked={d.wallIgnore} onChange={(v) => ui.set({ wallIgnore: v })} label="I can walk through walls" hint="Only for you. Holding Q while you drag does it once." />
+        <Toggle checked={d.wallIgnore} onChange={(v) => ui.set({ wallIgnore: v })} label="DM can move tokens through walls" hint="Holding Q while you drag does it once." />
         <Toggle checked={d.showWalls} onChange={(v) => ui.set({ showWalls: v })} label="Show walls when this tool is closed" hint="Only on your screen." />
         {!sightOn && (
-          <div>
-            <p class="hint">Walls shape what tokens can see once their sight is on.</p>
-            <button class="btn small" onClick={() => void client.updateScene({ fog: { enabled: true, vision: true } })}>Turn on fog and token sight</button>
-          </div>
+          <button class="btn small" onClick={() => void client.updateScene({ fog: { enabled: true, vision: true } })}>Turn on fog and token sight</button>
         )}
       </div>
       <div class="row wrap">

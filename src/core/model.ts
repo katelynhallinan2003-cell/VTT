@@ -11,7 +11,7 @@ import { fxToWire, normalizeFx } from './effects';
 export const tokenCoordinate = (value: number) => Math.round(value * 10) / 10;
 
 export const DEFAULT_GRID: GridSettings = {
-  shape: 'square', cell: 70, ox: 0, oy: 0, visible: true, color: '#000000', opacity: 0.35,
+  shape: 'square', cell: 70, ox: 0, oy: 0, visible: true, color: '#ffffff', opacity: 0.35,
   ft: 5, rule: 'chebyshev', snap: true,
 };
 
@@ -37,6 +37,14 @@ const num = (v: unknown, d: number): number => (typeof v === 'number' && Number.
 const str = (v: unknown, d: string): string => (typeof v === 'string' ? v : d);
 const bool = (v: unknown, d: boolean): boolean => (typeof v === 'boolean' ? v : d);
 
+/**
+ * Grids saved before 2026-11-23 were given black as their colour but were always drawn white (black was read as "no colour"),
+ * so a saved pure black is that old default and shows white, as it always did. Black picked on purpose is saved as
+ * #010101, which looks the same and is not mistaken for it (see `gridColorToSave`).
+ */
+const OLD_DEFAULT_BLACK = new Set(['#000', '#000000']);
+export const gridColorToSave = (picked: string): string => (OLD_DEFAULT_BLACK.has(picked.toLowerCase()) ? '#010101' : picked);
+
 export function normalizeGrid(raw: any): GridSettings {
   const g = raw ?? {};
   return {
@@ -45,7 +53,7 @@ export function normalizeGrid(raw: any): GridSettings {
     ox: num(g.ox, 0),
     oy: num(g.oy, 0),
     visible: bool(g.visible, true),
-    color: str(g.color, DEFAULT_GRID.color),
+    color: OLD_DEFAULT_BLACK.has(str(g.color, DEFAULT_GRID.color).toLowerCase()) ? DEFAULT_GRID.color : str(g.color, DEFAULT_GRID.color),
     opacity: Math.min(1, Math.max(0, num(g.opacity, DEFAULT_GRID.opacity))),
     ft: num(g.ft, 5),
     rule: g.rule === 'alt' || g.rule === 'euclid' ? g.rule : 'chebyshev',

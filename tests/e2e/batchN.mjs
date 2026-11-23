@@ -1,4 +1,4 @@
-// Round 5d: the Heights brush. Paint by cell or freely, keep adding to an area, change its height, stack areas, rub out, move, merge, delete.
+// Round 5d: the Heights brush. Paint by cell or freely, keep adding to an area, change its height, stack areas, erase, select and move, merge, delete.
 import { launch, watch, sleep } from './lib.mjs';
 import { mkdirSync } from 'node:fs';
 const BASE = (process.env.BASE || 'http://127.0.0.1:4174/') + '?demo';
@@ -63,7 +63,7 @@ await dm.locator('.flyout-title', { hasText: /^Heights$/ }).waitFor();
 check('H opens the Heights panel', (await dm.evaluate(() => window.__vtt.ui.data.tool)) === 'height');
 check('it paints by default', (await dm.evaluate(() => window.__vtt.ui.data.heightMode)) === 'paint');
 check('there are no Box / Circle buttons any more', (await dm.locator('.flyout .seg button', { hasText: /^(Box|Circle)$/ }).count()) === 0);
-check('the panel has Paint, Rub out and Move', (await dm.locator('.flyout .seg button', { hasText: /^(Paint|Rub out|Move)$/ }).count()) === 3);
+check('the panel has Paint, Erase and Select', (await dm.locator('.flyout .seg button', { hasText: /^(Paint|Erase|Select)$/ }).count()) === 3);
 await dm.locator('.flyout .chip', { hasText: /^10$/ }).click();
 check('the next ground defaults to 10 ft and the card says it is for the next stroke', (await dm.evaluate(() => window.__vtt.ui.data.heightFt)) === 10 && (await dm.locator('.ht-card', { hasText: 'Next ground you paint' }).count()) === 1);
 
@@ -139,8 +139,8 @@ await dm.locator('.ht-card .btn', { hasText: /^Delete area/ }).click();
 await sleep(400);
 check('Delete takes that area away and the ground under it comes back', (await ground(cx(12), cy(13))) === 20 && (await ground(cx(12), cy(12))) === 25);
 
-// ---- rub out
-await dm.locator('.flyout .seg button', { hasText: /^Rub out$/ }).click();
+// ---- erase
+await dm.locator('.flyout .seg button', { hasText: /^Erase$/ }).click();
 await click([cx(11), cy(11)], { ctrl: true });
 ar = await areas();
 await drag([cx(11), cy(11)], [cx(11), cy(12)]);
@@ -149,11 +149,11 @@ check('rubbing out with an area selected writes an erase stroke tied to it', ts.
 check('the rubbed squares are open ground again', (await ground(cx(11), cy(11))) === 0 && (await ground(cx(11), cy(12))) === 0);
 check('the squares beside them keep their height', (await ground(cx(10), cy(11))) === 25 && (await ground(cx(12), cy(11))) === 25);
 check('the area is still selected afterwards', (await sel()).length >= 2);
-// rub out with nothing selected takes the top ground from every area
+// erase with nothing selected takes the top ground from every area
 await dm.keyboard.press('Escape');
 await drag([cx(14), cy(13)], [cx(14), cy(13)]);
 check('with nothing selected it rubs out of any area (20 ft area loses that square)', (await ground(cx(14), cy(13))) === 0);
-check('rub out with nothing selected makes a general erase stroke', (await terrain()).some((t) => t.he && t.hg === ''));
+check('erase with nothing selected makes a general erase stroke', (await terrain()).some((t) => t.he && t.hg === ''));
 
 // ---- undo takes the last stroke back
 await dm.keyboard.press('Control+z');
@@ -161,7 +161,7 @@ await sleep(400);
 check('Ctrl+Z brings the rubbed-out square back', (await ground(cx(14), cy(13))) === 20);
 
 // ---- move an area a whole square at a time
-await dm.locator('.flyout .seg button', { hasText: /^Move$/ }).click();
+await dm.locator('.flyout .seg button', { hasText: /^Select$/ }).click();
 const before = (await terrain()).find((t) => t.hg === ar[0].id && !t.he);
 await drag([cx(10), cy(11)], [cx(10) + 2.2 * cell, cy(11) - 3.1 * cell]);
 const after = (await terrain()).find((t) => t.id === before.id);
@@ -271,7 +271,7 @@ await dm.locator('.ht-card .numf input').blur();
 await click([gx, gy]);
 await click([gx, gy]);
 check('two gridless lowering strokes can dig below zero', await ground(gx, gy) === -5);
-await dm.getByRole('button', { name: 'Rub out', exact: true }).click();
+await dm.getByRole('button', { name: 'Erase', exact: true }).click();
 await dm.locator('.flyout .chips').first().getByRole('button', { name: String(grid.ft), exact: true }).click();
 await drag([gx, gy], [gx + cell * 0.7, gy]);
 check('gridless erasing follows the brush and leaves nearby ground intact', await ground(gx, gy) === 0 && await ground(gx, gy + cell) === -5 && !(await terrain()).at(-1).hc);

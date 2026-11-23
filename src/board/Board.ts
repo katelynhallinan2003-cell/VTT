@@ -14,6 +14,7 @@ import { scaleCut, type GridCut, type PixelImage } from '../core/gridcut';
 import { AUTO_GRID_STRENGTH, detectPrintedGrid, impliedGrid } from '../core/mapgrid';
 import { lightOf, viewerOf, type LightSrc, type Viewer } from '../core/light';
 import { LightLayer } from './LightLayer';
+import { colorNum } from '../core/colornum';
 import { DEFAULT_GRID, MAX_VIA, tokenCoordinate } from '../core/model';
 import { pctOf, toPub, visionCircles, withoutLights } from '../core/combat';
 import type { DrawingPatch, TableClient } from '../state/client';
@@ -56,7 +57,7 @@ type Drag =
   /** painting (or rubbing out) ground with the Heights brush */
   /** a ramp being dragged out from its low (or high) end to the other */
   | { kind: 'ramp'; a: Vec; b: Vec }
-  | { kind: 'terrain'; /** painting difficult ground instead of height */ rough?: boolean; erase: boolean; /** the area it paints into (empty: rub out of every area) */ group: string; h: number; add: boolean; /** the cells covered so far (null for a free brush) */ cells: Map<string, Vec> | null; pts: Vec[]; last: Vec; size: number }
+  | { kind: 'terrain'; /** painting difficult ground instead of height */ rough?: boolean; erase: boolean; /** the area it paints into (empty: erase from every area) */ group: string; h: number; add: boolean; /** the cells covered so far (null for a free brush) */ cells: Map<string, Vec> | null; pts: Vec[]; last: Vec; size: number }
   | { kind: 'ruler'; /** another leg added to a measurement that is already there */ extend?: boolean }
   /** drawing a wall (or a box of walls) with the Walls tool; `cont` when it carries on from the last wall */
   | { kind: 'wall'; a: Vec; b: Vec; down: Vec; moved: boolean; cont: boolean; shape: 'line' | 'box' | 'free' | 'circle'; /** the pointer's path (freehand walls) */ pts: Vec[] }
@@ -73,7 +74,7 @@ interface TestMove { from: Vec; to: Vec; via: Vec[] }
 const NO_IDS: Set<string> = new Set();
 const WALL_COLOR = { wall: 0xffd27a, door: 0xe8873a, window: 0x7fd8ff } as const;
 
-const num = (c: string) => parseInt(c.replace('#', '').padEnd(6, '0').slice(0, 6), 16) || 0xffffff;
+const num = colorNum;
 const SELECT = 0x4da3ff;
 const PRESS_PING_MS = 450;
 const SHARE_BLUE = 0x4da3ff;
@@ -2468,7 +2469,7 @@ export class Board {
   }
 
   /**
-   * The Heights tool. Paint lays down ground (in the selected area, or a new one), Rub out takes it away, Move slides whole areas.
+   * The Heights tool. Paint lays down ground (in the selected area, or a new one), Erase takes it away, Select picks whole areas to edit or slide.
    * Ctrl/Cmd-click picks the area under the pointer in any of them; Shift adds it to the selection.
    */
   private startHeight(w: Vec, e: PointerEvent) {
@@ -2562,7 +2563,7 @@ export class Board {
     const keep = cur.length === 1 && cur[0].id === d.group ? cur[0].ids : [];
     void this.client.addDrawing(
       { k: 'terrain', p: joinPts(pts), color: col, w: wpx, fill: 0, fc: '', dash: false, txt: '', fs: 28, bw: 5, hz: d.erase ? null : d.h, hg: d.group, ha: !d.erase && d.add, he: d.erase, hc: !!d.cells, ...(d.rough ? { dt: true } : {}) },
-      { label: d.rough ? (d.erase ? 'Rub out difficult ground' : 'Paint difficult ground') : d.erase ? 'Rub out ground' : 'Paint ground', onId: (id) => {
+      { label: d.rough ? (d.erase ? 'Erase difficult ground' : 'Paint difficult ground') : d.erase ? 'Erase ground' : 'Paint ground', onId: (id) => {
         if (!d.erase && !d.rough) {
           if (d.add) this.ui.set({ heightAdds: true, heightFt: d.h, drawSel: new Set() });
           else this.ui.selectDrawings([...keep, id]);

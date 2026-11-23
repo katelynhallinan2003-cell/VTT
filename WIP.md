@@ -19,18 +19,13 @@ An issue the user says is still broken moves back up to *Open* with a note on wh
 
 Carried over from the old `TASKS.md` on 2026-11-22 (asked 2026-11-21, before this file existed):
 
-- [ ] **#3 Republish `database.rules.json` in the Firebase console** (waiting on user) (added 2026-11-21): the live
-  database still has older rules. Needed for the handouts node (round 6g), the spell-template permission (round 7a) and
-  saved tokens and characters (round 7i, moved in round 7j: now `tables/$tid/chars`, so paste the 96-line file from round
-  7j, which replaces the whole Rules tab; the allowed emails are data and stay). Someone with access to the Firebase console has to
-  paste the file into the Rules tab; it cannot be done from here.
 - [ ] **#4 Players get "permission denied" when drawing or placing a template** (waiting on user) (added 2026-11-21):
   a template permission was added in round 7a, but the exact failing message was never seen. Verify with the user once
   #3 is done.
 - [ ] **#5 Tell me the exact wording if "permission denied" still appears** (waiting on user) (added 2026-11-21): for a
   player drawing or placing a template, after #3. Needed to finish #4 if it is still broken.
 - [ ] **#6 Handout pop-up for players** (waiting on user) (added 2026-11-21): two causes were fixed in round 7a.
-  Verify with the user once #3 is done.
+  #3 is done (rules republished 2026-11-22), so the user can check it now.
 
 ## Ideas (not requested)
 
@@ -143,3 +138,5 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
 - [x] **#29 Do any more work on the WIP** (added 2026-11-22, completed 2026-11-22): "do any more work on the WIP". Done: #27 and #28 built. Everything else open (#3 to #6) is waiting on the user (republish the rules, then check the template and handout problems); the Ideas are not built unless asked.
 - [x] **#30 Stop walkers at tightly stacked painted cliffs** (added 2026-11-22, completed 2026-11-23). Walking follows the painted edge and counts nearby uphill contours together. Browser tests cover a walker dragging into six overlapping circles twice and then teleporting onto the 30 ft top.
 - [x] **#31 Show the teleport gesture at the bottom of Settings shortcuts** (added 2026-11-22, completed 2026-11-23). The last entry in Mouse and keys explains how the DM can hold Q and drag a token across a wall or cliff.
+- [x] **#3 Republish `database.rules.json` in the Firebase console** (added 2026-11-21, completed 2026-11-22): the user pasted the 96-line file from round 7j into the Rules tab and confirmed it. It covers handouts (6g), the spell-template and draw permission (7a), and players' characters kept with the table (7j). Nothing else needs republishing until the rules change again.
+

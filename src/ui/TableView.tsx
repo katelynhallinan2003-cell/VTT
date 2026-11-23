@@ -1,3 +1,4 @@
+import { isLightMark } from '../core/light';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { Board } from '../board/Board';
 import * as geometry from '../core/geometry';
@@ -173,7 +174,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
   const scene = client.scene;
   useEffect(() => {
     if (client.isDM || claimOffered.current || !scene?.loaded || !client.me) return;
-    const unclaimed = [...scene.tokens.values()].some((t) => t.ownerUid === null && !t.hidden && !t.locked);
+    const unclaimed = [...scene.tokens.values()].some((t) => client.canDo('claim', t));
     if (client.myTokens().length === 0 && (unclaimed || client.canDo('create')) && !sessionStorage.getItem('vtt-claim-' + client.tableId)) {
       claimOffered.current = true;
       sessionStorage.setItem('vtt-claim-' + client.tableId, '1');
@@ -300,7 +301,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
         menuItems.push({ label: hid ? 'Reveal to players' : 'Hide from players', onClick: () => void client.updateTokens(ids, { hidden: !hid }) });
         const lk = toks.every((t) => t.locked);
         menuItems.push({ label: lk ? 'Unlock' : 'Lock in place', onClick: () => void client.updateTokens(ids, { locked: !lk }) });
-        for (const p of client.players.values()) menuItems.push({ label: `Give to ${p.name}`, onClick: () => void client.updateTokens(ids, { ownerUid: p.uid }) });
+        if (toks.every((t) => !isLightMark(t))) for (const p of client.players.values()) menuItems.push({ label: `Give to ${p.name}`, onClick: () => void client.updateTokens(ids, { ownerUid: p.uid }) });
         if (toks.some((t) => t.ownerUid)) menuItems.push({ label: 'Unassign', onClick: () => void client.updateTokens(ids, { ownerUid: null }) });
       } else {
         if (client.canDo('claim', menuToken)) menuItems.push({ label: 'Take control', onClick: () => void client.updateToken(menuToken.id, { ownerUid: client.uid }) });

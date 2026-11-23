@@ -72,3 +72,6 @@ Read `CLAUDE.md` (this file) and `WIP.md` before doing anything else in a sessio
 - **Nothing covers anything else.** What hangs from the top of the screen (notes, the test-move bar, warnings, the turn order) is one stack: it sits between the two halves of the top bar when it fits there and in a row under the top bar when it does not (`TableView` measures this; see the end of `styles.css`). The bar for the selected token keeps clear of the side panel. Check new things at 1366 by 768 as well as on a big screen.
 - **Windows and right-clicks.** On Windows the browser's "context menu" event arrives after the mouse button is let go, on Linux and Mac when it is pressed. Never open or close anything of ours in answer to that event: only stop the browser's own menu with it. (The browser tests run on whatever machine you are on, so run them on Windows too.)
 - **Old tests drift.** When a label or flow changes, update the e2e batches that used it; run the full e2e regression against a frozen build before pushing a round.
+
+- **Lights are props, not tokens.** A torch or other light-only mark (`isLightMark`: no shape, no picture, has a light) is not in the DM's Tokens list (it has a folded "Lights" list under it), not in the initiative order, and cannot be claimed or given to a player. A creature carrying a light is an ordinary token.
+

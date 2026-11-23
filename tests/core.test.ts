@@ -173,6 +173,15 @@ describe('permissions', () => {
     expect(can(ctx(PRESETS.strict), 'claim', tok({ ownerUid: null }))).toBe(true);
     expect(can(ctx(PRESETS.strict), 'claim', tok({ ownerUid: 'x' }))).toBe(false);
   });
+  it('a torch or other light-only mark cannot be claimed by a player', () => {
+    const torch = tok({ ownerUid: null, shape: 'none', img: null, light: { b: 20, d: 20, c: '#ffcc66' } as any });
+    expect(can(ctx(PRESETS.strict), 'claim', torch)).toBe(false);
+    expect(can(ctx(PRESETS.trusting), 'claim', torch)).toBe(false);
+    // a creature that carries a light is still a token a player can take
+    expect(can(ctx(PRESETS.strict), 'claim', tok({ ownerUid: null, light: { b: 20, d: 20, c: '#ffcc66' } as any }))).toBe(true);
+    // the DM can still do anything with it
+    expect(can(ctx(PRESETS.strict, 'dm'), 'claim', torch)).toBe(true);
+  });
   it('players can do nothing outside the live scene', () => {
     expect(can(ctx(PRESETS.trusting, 'player', false), 'ping')).toBe(false);
   });

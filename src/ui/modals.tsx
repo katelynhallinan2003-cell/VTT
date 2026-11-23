@@ -695,7 +695,7 @@ export function GridDialog(props: { shape?: GridShape; onApply: (cols: number, r
 export function ClaimModal(props: { client: TableClient; onClose: () => void; onNewToken: () => void; onBring?: (entry: SavedToken) => void }) {
   const { client } = props;
   useClient(client);
-  const free = [...(client.scene?.tokens.values() ?? [])].filter((t) => t.ownerUid === null && !t.hidden && !t.locked);
+  const free = [...(client.scene?.tokens.values() ?? [])].filter((t) => client.canDo('claim', t));
   const mine = client.myTokens();
   return (
     <Modal title={mine.length ? 'Your tokens' : 'Pick your character'} onClose={props.onClose} width={520}

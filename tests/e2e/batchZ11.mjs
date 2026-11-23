@@ -1,10 +1,11 @@
-// Dropping a picture on the page: the map of a first scene on an empty table, the map in the New scene box, a token once there are scenes.
-// Also: the page says what a drop will do, Settings is in tabs, the tools are in groups, and nothing at the top covers the top bar.
+// Round 7k: torches are not in the Tokens list (they have a folded Lights list) and a player cannot take one.
 import { launch, watch, sleep } from './lib.mjs';
+import { mkdirSync } from 'node:fs';
 const BASE = (process.env.BASE || 'http://127.0.0.1:4174/') + '?demo';
 const errors = [];
 const results = [];
 const check = (name, ok, extra = '') => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? '  ' + extra : ''}`); };
+mkdirSync('/tmp/shots', { recursive: true });
 const { browser, context } = await launch();
 const dm = await context.newPage();
 watch(dm, 'dm', errors);
@@ -15,100 +16,73 @@ await dm.getByRole('button', { name: /Start as the DM/ }).click();
 await dm.getByPlaceholder('New table name').fill('Z11');
 await dm.getByRole('button', { name: 'Create table' }).click();
 await dm.waitForSelector('.board-host canvas');
-await dm.locator('.empty-card').waitFor();
-
-// a made-up drag: a small picture with a 70 px grid on it, handed to the page the way a file from the desktop is
-const drag = (type, selector) => dm.evaluate(async ([type, selector]) => {
-  const c = document.createElement('canvas');
-  c.width = 700; c.height = 560;
-  const x = c.getContext('2d');
-  x.fillStyle = '#b9a98a'; x.fillRect(0, 0, 700, 560);
-  x.strokeStyle = '#3a3226'; x.lineWidth = 2;
-  for (let i = 0; i <= 700; i += 70) { x.beginPath(); x.moveTo(i, 0); x.lineTo(i, 560); x.stroke(); }
-  for (let j = 0; j <= 560; j += 70) { x.beginPath(); x.moveTo(0, j); x.lineTo(700, j); x.stroke(); }
-  const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
-  const dt = new DataTransfer();
-  dt.items.add(new File([blob], 'Goblin cave.png', { type: 'image/png' }));
-  document.querySelector(selector).dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 700, clientY: 400 }));
-}, [type, selector]);
-
-// ---- an empty table
-check('the empty table says a map can be dragged in', /drag a map picture/i.test(await dm.locator('.empty-card').innerText()));
-await drag('dragenter', '.table-root');
-await sleep(200);
-check('while a picture is over the page it says it will become the map', /use it as your map/i.test(await dm.locator('.drop-veil').innerText().catch(() => '')));
-await drag('drop', '.table-root');
-await dm.locator('.modal h2', { hasText: 'New scene' }).waitFor();
-check('dropping it opens New scene with the picture in it', (await dm.locator('.dropzone-name').innerText()) === 'Goblin cave.png' && (await dm.locator('.drop-veil').count()) === 0);
-check('with a small look at the picture', (await dm.locator('.dropzone-file img').count()) === 1);
-check('and nothing has been made yet', (await dm.evaluate(() => window.__vtt.client.sceneIndex.length)) === 0);
-
-// ---- the New scene box takes a drop anywhere while it is open
-await dm.locator('.dropzone-file .icon-btn').click();
-check('the picture can be taken out again', (await dm.locator('.dropzone-file').count()) === 0 && /Drag a map picture here/.test(await dm.locator('.dropzone').innerText()));
-await drag('dragenter', '.modal');
-await sleep(150);
-check('the box lights up while a picture is over the page', (await dm.locator('.dropzone.over').count()) === 1);
-await drag('drop', '.modal-back');
-await sleep(200);
-check('a drop anywhere goes into the box, not to the board behind', (await dm.locator('.dropzone-name').innerText()) === 'Goblin cave.png' && (await dm.locator('.modal h2').innerText()) === 'New scene');
+await dm.getByRole('button', { name: '+ New scene' }).first().click();
+await dm.getByRole('button', { name: 'Use sample dungeon' }).click();
+await dm.locator('.modal .muted', { hasText: 'Sample dungeon.png' }).waitFor();
 await dm.getByRole('button', { name: 'Create scene' }).click();
 await dm.waitForFunction(() => window.__vtt?.board?.mapSprite);
-await dm.waitForFunction(() => !!window.__vtt.client.scene?.meta?.mapGrid, null, { timeout: 15000 }).catch(() => {});
-const meta = await dm.evaluate(() => { const m = window.__vtt.client.scene.meta; return { name: m.name, cut: m.mapGrid, cell: m.grid.cell }; });
-check('the scene is named after the file', meta.name === 'Goblin cave', meta.name);
-check('and the grid printed on the dropped map is found and matched', !!meta.cut && Math.abs(meta.cut.p - 70) < 0.3 && Math.abs(meta.cell - 70) < 0.3, JSON.stringify(meta));
+await sleep(500);
+const tid = await dm.evaluate(() => location.hash.replace('#/t/', ''));
+const sid1 = await dm.evaluate(() => window.__vtt.client.viewSceneId);
 
-// ---- once there are scenes, a dropped picture is a token
-await drag('dragenter', '.table-root');
-await sleep(200);
-check('now the page says a drop makes a token', /make a token/i.test(await dm.locator('.drop-veil').innerText().catch(() => '')));
-await drag('drop', '.table-root');
-await dm.locator('.modal h2', { hasText: 'Add token' }).waitFor();
-check('and it opens Add token with the picture', (await dm.locator('.modal input[type=text]').first().inputValue()) === 'Goblin cave' && (await dm.locator('.drop-veil').count()) === 0);
-check('Add token asks for the picture before anything else, with the paint tools tucked away', (await dm.locator('.modal .seg button', { hasText: 'Erase image' }).count()) === 0 && (await dm.locator('.modal .btn', { hasText: /^Picture tools/ }).count()) === 1);
-await dm.locator('.modal .btn', { hasText: /^Picture tools/ }).click();
-check('and Picture tools brings them out', (await dm.locator('.modal .seg button', { hasText: 'Erase image' }).count()) === 1);
-await dm.locator('.modal input[type=text]').first().fill('Captain');
-await drag('drop', '.modal');
+
+
+// ---- a torch and a guard on the scene
+const torch = await dm.evaluate(() => window.__vtt.client.addToken({ x: 175, y: 175, name: 'Torch', size: 0.5, shape: 'none', label: 'dm', light: { b: 20, d: 20, c: '#ffcc66' } }));
+const guard = await dm.evaluate(() => window.__vtt.client.addToken({ x: 315, y: 175, name: 'Guard', size: 1 }));
+await sleep(500);
+await dm.keyboard.press('Escape');
+await dm.getByRole('button', { name: 'Tokens', exact: true }).click();
 await sleep(300);
-check('a picture dropped while Add token is open goes into it, and what was typed stays', (await dm.locator('.modal h2').innerText()) === 'Add token' && (await dm.locator('.modal input[type=text]').first().inputValue()) === 'Captain' && (await dm.locator('.modal .muted', { hasText: 'Goblin cave.png' }).count()) === 1);
-await dm.keyboard.press('Escape');
+const rows = () => dm.locator('.tok-list li .tok-name').allInnerTexts();
+let r = await rows();
+check('the Tokens list shows the guard but not the torch', r.length === 1 && /Guard/.test(r[0]), JSON.stringify(r));
+check('the search counts only real tokens', (await dm.getByPlaceholder(/Search 1 token/).count()) === 1);
+const lightsBtn = dm.getByRole('button', { name: /Lights \(1\)/ });
+check('lights have their own folded list', (await lightsBtn.count()) === 1 && (await lightsBtn.getAttribute('aria-expanded')) === 'false');
+await lightsBtn.click();
 await sleep(200);
-
-// ---- the right-click menu opens and stays open (on Windows the browser's own "context menu" event comes after the button is let go)
-await dm.mouse.click(700, 500, { button: 'right' });
-await sleep(400);
-check('a right click on the board opens the menu, and it stays', (await dm.locator('.ctx').count()) === 1 && /Add token here/.test(await dm.locator('.ctx').innerText()));
-await dm.keyboard.press('Escape');
-
-// ---- Settings is a page at a time
-await dm.locator('.pill-right button', { hasText: 'Settings' }).click();
-const tabs = await dm.locator('.modal .tabs button').allInnerTexts();
-check('Settings has four tabs', JSON.stringify(tabs) === JSON.stringify(['Table', 'Pictures and files', 'You', 'Mouse and keys']), JSON.stringify(tabs));
-check('and opens on the table', (await dm.locator('.modal', { hasText: 'What players can do' }).count()) === 1 && (await dm.locator('.modal .keys').count()) === 0);
-await dm.keyboard.press('Escape');
-await dm.keyboard.press('Shift+Slash');
+r = await rows();
+check('opening it lists the torch', r.length === 2 && r.some((t) => /Torch/.test(t)), JSON.stringify(r));
+await dm.screenshot({ path: '/tmp/shots/z11-lights.png' });
+await dm.getByPlaceholder(/Search 1 token/).fill('torch');
 await sleep(200);
-check('? opens it on the shortcuts', (await dm.locator('.modal .keys').count()) === 1);
+r = await rows();
+check('a search that matches a light shows it', r.length === 1 && /Torch/.test(r[0]), JSON.stringify(r));
+await dm.getByPlaceholder(/Search 1 token/).fill('');
+
+// ---- a player cannot take the torch
+const pl = await context.newPage();
+watch(pl, 'pl', errors);
+await pl.goto(`${BASE}#/t/${tid}`);
+await pl.getByPlaceholder('e.g. Aria').fill('Aria');
+await pl.getByRole('button', { name: 'Join table' }).click();
+await pl.waitForSelector('.board-host canvas');
+await sleep(1200);
+if (!(await pl.getByText('Pick your character').count())) await pl.getByRole('button', { name: 'My token' }).click();
+await pl.getByText('Pick your character').waitFor();
+const offered = await pl.locator('.modal .lib-item .lib-name').allInnerTexts();
+check('the player is offered the guard only', offered.length === 1 && offered[0] === 'Guard', JSON.stringify(offered));
+check('the player cannot claim the torch', (await pl.evaluate((id) => window.__vtt.client.canDo('claim', window.__vtt.client.scene.tokens.get(id)), torch)) === false);
+check('but can claim the guard', (await pl.evaluate((id) => window.__vtt.client.canDo('claim', window.__vtt.client.scene.tokens.get(id)), guard)) === true);
+await pl.keyboard.press('Escape');
+await pl.evaluate((id) => window.__vtt.ui.select([id]), torch);
+await sleep(300);
+check('selecting the torch offers no "Take control"', (await pl.getByRole('button', { name: 'Take control' }).count()) === 0);
+
+// ---- the DM has no "Give to" for a torch
+await dm.evaluate((id) => window.__vtt.ui.select([id]), torch);
+await sleep(200);
+const pt = await dm.evaluate((id) => { const v = window.__vtt.board.views.get(id); return window.__vtt.board.worldToScreen({ x: v.display.x, y: v.display.y }); }, torch);
+await dm.mouse.click(pt.x, pt.y, { button: 'right' });
+await sleep(300);
+const menu = await dm.locator('.ctx').allInnerTexts();
+check('the DM menu for a torch has no "Give to" entries', menu.length === 1 && !/Give to/.test(menu[0]) && /Hide from players|Reveal/.test(menu[0]), menu.join('|').slice(0, 200));
 await dm.keyboard.press('Escape');
-
-// ---- the tools: everyday ones first, then the DM's
-const tools = await dm.locator('.toolbar .tool').evaluateAll((b) => b.map((x) => x.getAttribute('aria-label').split(':')[0]));
-check('the toolbar starts with select, add token and ruler', JSON.stringify(tools.slice(0, 3)) === JSON.stringify(['Select / move', 'Add token', 'Ruler']), JSON.stringify(tools));
-check('and the scene tools come together after the drawing tools', tools.indexOf('Fog of war') > tools.indexOf('Spell templates') && tools.indexOf('Walls') === tools.indexOf('Fog of war') + 1);
-
-// ---- on a laptop-sized screen nothing at the top covers the top bar
-await dm.setViewportSize({ width: 1366, height: 768 });
-await dm.keyboard.press('m');
-await sleep(600);
-const boxes = await dm.evaluate(() => {
-  const r = (s) => { const b = document.querySelector(s)?.getBoundingClientRect(); return b ? { x: b.left, r: b.right, y: b.top, b: b.bottom } : null; };
-  return { bar: r('.testbar'), left: r('.pill-left'), right: r('.pill-right') };
-});
-const apart = (a, b) => !a || !b || a.r <= b.x || b.r <= a.x || a.b <= b.y || b.b <= a.y;
-check('the test-move bar does not cover either half of the top bar', !!boxes.bar && apart(boxes.bar, boxes.left) && apart(boxes.bar, boxes.right), JSON.stringify(boxes));
-await dm.keyboard.press('m');
+const gp = await dm.evaluate((id) => window.__vtt.board.worldToScreen({ x: window.__vtt.board.views.get(id).display.x, y: window.__vtt.board.views.get(id).display.y }), guard);
+await dm.mouse.click(gp.x, gp.y, { button: 'right' });
+await sleep(300);
+check('and the guard still has them', /Give to Aria/.test((await dm.locator('.ctx').allInnerTexts()).join('|')));
 
 console.log(errors.filter((e) => !/GL Driver|404|ReadPixels|GPU stall|willReadFrequently/.test(e)).join('\n') || 'no console problems');
 console.log(`${results.filter(Boolean).length}/${results.length} checks passed`);

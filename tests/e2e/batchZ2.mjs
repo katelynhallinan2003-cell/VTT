@@ -59,9 +59,18 @@ m = await tm(tok);
 check('with it the second drag adds a leg: the first stop is a corner', m && m.via.length === 1 && near(m.via[0], C(6, 3)) && near(m.to, C(6, 7)) && near(m.from, C(3, 3)), JSON.stringify(m));
 check('the real token has not moved', near(await realPos(), C(3, 3)));
 await dm.screenshot({ path: '/tmp/shots/z2-multi.png' });
+const shown = () => dm.evaluate(() => window.__vtt.board.plotLabels.filter((l) => l && l.visible).map((l) => l.text));
+const ftOf = (t) => parseFloat(t);
+let lab = await shown();
+check('a two-step test move shows each step and the total', lab.length === 3 && lab.filter((t) => / total$/.test(t)).length === 1, JSON.stringify(lab));
+const steps = lab.filter((t) => !/ total/.test(t)).map(ftOf), whole = lab.filter((t) => / total$/.test(t)).map(ftOf)[0];
+check('the steps are 15 ft and 20 ft and add up to the total', steps.length === 2 && Math.abs(steps[0] + steps[1] - whole) < 0.11 && steps[0] > 0 && steps[1] > 0, JSON.stringify(lab));
 await dragTo(C(6, 7), C(2, 7));
 m = await tm(tok);
 check('a third leg makes two corners', m && m.via.length === 2 && near(m.to, C(2, 7)), JSON.stringify(m && m.via));
+lab = await shown();
+const three = lab.filter((t) => !/ total/.test(t)).map(ftOf), whole3 = lab.filter((t) => / total$/.test(t)).map(ftOf)[0];
+check('three steps are each shown and add up to the total', three.length === 3 && Math.abs(three.reduce((a, b) => a + b, 0) - whole3) < 0.2, JSON.stringify(lab));
 // sharing it
 await dm.evaluate(() => window.__vtt.ui.set({ sharePlot: true }));
 await sleep(500);

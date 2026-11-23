@@ -1,4 +1,5 @@
 import type { Permissions, PermPreset, Role, Token } from '../types';
+import { isLightMark } from './light';
 
 export const PRESETS: Record<'trusting' | 'standard' | 'strict', Permissions> = {
   // Everyone at the table is a friend: players can do nearly everything.
@@ -75,7 +76,8 @@ export function can(ctx: PermCtx, action: Action, token?: Token): boolean {
     case 'template': return ctx.perm.playersTemplates || ctx.perm.playersDraw;
     case 'measure': return ctx.perm.playersMeasure;
     case 'create': return ctx.perm.playersCreateTokens;
-    case 'claim': return !!token && token.ownerUid === null && !token.locked && !token.hidden;
+    // a torch or other light-only mark is a prop, never a character a player can take
+    case 'claim': return !!token && token.ownerUid === null && !token.locked && !token.hidden && !isLightMark(token);
     case 'move':
     case 'edit':
       return !!token && !token.locked && !token.hidden && (own || ctx.perm.playersMoveAnyToken);

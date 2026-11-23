@@ -121,6 +121,8 @@ export class Board {
   private overlayG = new Graphics();
   private fxLayer = new Container();
   private plotLabels: Text[] = [];
+  /** the next free label slot after the labels the overlay has already placed this frame */
+  private plotNext = 0;
   private ghostViews = new Map<string, TokenView>();
   /** token id -> the move being tried: where it really is, where it ends up, and the corners it turned at on the way (several steps) */
   private testMoves = new Map<string, TestMove>();
@@ -1773,6 +1775,7 @@ export class Board {
     g.clear();
     this.distText.visible = false;
     for (const t of this.plotLabels) t.visible = false;
+    this.plotNext = 0;
     const z = this.cam.zoom;
     const lw = 2.5 / z;
     const { tool, scaleStart, scaleEnd } = this.ui.data;
@@ -1835,9 +1838,12 @@ export class Board {
         const lastLeg = before[before.length - 1];
         if (before.length > 1) this.dashedLine(g, before, 0xffffff, z);
         g.moveTo(lastLeg.x, lastLeg.y).lineTo(a.display.x, a.display.y).stroke({ width: 2 / z, color: 0xffffff, alpha: 0.7 });
-        const cost = this.moveCost([...before, { x: a.display.x, y: a.display.y }], a.token.fly);
+        const whole = [...before, { x: a.display.x, y: a.display.y }];
+        const cost = this.moveCost(whole, a.token.fly);
         const ft = cost.ft;
-        this.distText.text = cost.note ? `${ft} ft · ${cost.note}` : `${ft} ft`;
+        // in several steps: each step's own distance sits on the step, the whole is at the token
+        if (whole.length > 2) this.plotNext = this.stepLabels(this.plotNext, whole, a.token.fly, 0xffffff, z);
+        this.distText.text = `${ft} ft${whole.length > 2 ? ' total' : ''}${cost.note ? ` · ${cost.note}` : ''}`;
         this.distText.scale.set(1 / z);
         this.distText.position.set(a.display.x, a.display.y - (a.token.size * grid.cell) / 2 - 6 / z);
         this.distText.visible = true;
@@ -1898,7 +1904,7 @@ export class Board {
     const grid = c.grid;
     const u = this.ui.data;
     const d = this.drag;
-    let li = 0;
+    let li = this.plotNext;
 
     // outlines around selected drawings (shifted while they are being dragged)
     for (const id of u.drawSel) {
@@ -2000,8 +2006,26 @@ export class Board {
     const grid = this.client.grid;
     const to = path[path.length - 1];
     const cost = this.moveCost(path, t.fly);
-    this.plotLabel(li, `${name ? name + ': ' : ''}${cost.ft} ft${cost.note ? ` (${cost.note})` : ''}`, to.x, to.y - (t.size * grid.cell) / 2 - 6 / this.cam.zoom, color);
+    li = this.stepLabels(li, path, t.fly, color, this.cam.zoom);
+    this.plotLabel(li, `${name ? name + ': ' : ''}${cost.ft} ft${path.length > 2 ? ' total' : ''}${cost.note ? ` (${cost.note})` : ''}`, to.x, to.y - (t.size * grid.cell) / 2 - 6 / this.cam.zoom, color);
     return li + 1;
+  }
+
+  /**
+   * A move made in several steps: how far each step went, on the step. The steps add up to the whole
+   * (each is the difference between the cost so far and the cost one corner earlier, so stairs and rough ground are counted once).
+   */
+  private stepLabels(li: number, path: Vec[], fly: boolean, color: number, z: number): number {
+    if (path.length < 3) return li;
+    let prev = 0;
+    for (let i = 1; i < path.length; i++) {
+      const sofar = this.moveCost(path.slice(0, i + 1), fly).ft;
+      const leg = Math.round((sofar - prev) * 10) / 10;
+      prev = sofar;
+      const a = path[i - 1], b = path[i];
+      this.plotLabel(li++, `${leg} ft`, (a.x + b.x) / 2, (a.y + b.y) / 2 - 10 / z, color);
+    }
+    return li;
   }
 
   private drawFogPreview(g: Graphics, z: number) {

@@ -644,3 +644,4 @@ textarea:not(.text-editor):focus { border-color: var(--accent); }
   background: var(--panel-solid); color: var(--text); border: 1px solid var(--border-hi); border-radius: 8px; padding: 5px 10px; font-size: 12.5px; font-weight: 600; box-shadow: 0 6px 20px var(--shadow); }
 .tool:disabled { opacity: 1; }
 .tool:disabled svg { opacity: .35; }
+.tok-lights { margin-top: 10px; }

@@ -1,3 +1,4 @@
+import { isLightMark } from '../core/light';
 import { useMemo, useRef, useState } from 'preact/hooks';
 import { healthState, HEALTH_LABEL, pctOf } from '../core/combat';
 import { MAX_EXTRA_MAPS, TOKEN_SIZES } from '../core/model';
@@ -502,33 +503,48 @@ export function TokenList(props: { client: TableClient; ui: UiState; board: Boar
   useClient(client);
   const d = useUi(ui);
   const [q, setQ] = useState('');
-  const all = [...(client.scene?.tokens.values() ?? [])].sort((a, b) => (a.name || '~').localeCompare(b.name || '~') || a.z - b.z);
-  const shown = all.filter((t) => !q.trim() || t.name.toLowerCase().includes(q.trim().toLowerCase()));
+  const [lightsOpen, setLightsOpen] = useState(false);
+  const sorted = [...(client.scene?.tokens.values() ?? [])].sort((a, b) => (a.name || '~').localeCompare(b.name || '~') || a.z - b.z);
+  // torches and other light-only marks are props, not characters: they have their own folded list below the tokens
+  const all = sorted.filter((t) => !isLightMark(t));
+  const lights = sorted.filter((t) => isLightMark(t));
+  const match = (t: Token) => !q.trim() || t.name.toLowerCase().includes(q.trim().toLowerCase());
+  const shown = all.filter(match);
+  const shownLights = lights.filter(match);
+  const row = (t: Token) => {
+    const owner = t.ownerUid ? client.players.get(t.ownerUid) : null;
+    return (
+      <li key={t.id} class={d.selection.has(t.id) ? 'on' : ''}
+        onClick={(e) => { ui.select((e as MouseEvent).shiftKey ? [...d.selection, t.id] : [t.id]); board?.centerOn({ x: t.x, y: t.y }); }}
+        onDblClick={() => props.onEdit([t.id])}>
+        <span class="tok-av" style={{ borderColor: t.ring }}>{t.img ? <img src={t.img} alt="" loading="lazy" /> : isLightMark(t) ? '💡' : (t.name || '?').charAt(0).toUpperCase()}</span>
+        <span class="tok-name">
+          <span class={t.hidden ? 'muted' : ''}>{t.name || 'Unnamed'}</span>
+          {owner && <span class="tok-sub"><span class="dot" style={{ background: owner.color }} /> {owner.name}</span>}
+          {t.hp != null && t.maxHp != null && <span class="tok-sub"><HpBar pct={pctOf(t.hp, t.maxHp) ?? 0} width={46} /> {t.hp}/{t.maxHp}</span>}
+        </span>
+        <button class={`icon-btn ${t.hidden ? 'on' : ''}`} title={t.hidden ? 'Hidden from players. Click to reveal.' : 'Visible to players. Click to hide.'} aria-label={t.hidden ? `Show ${t.name || 'token'} to players` : `Hide ${t.name || 'token'} from players`}
+          onClick={(e) => { e.stopPropagation(); void client.updateTokens([t.id], { hidden: !t.hidden }); }}>{t.hidden ? '🙈' : '👁'}</button>
+        <button class={`icon-btn ${t.locked ? 'on' : ''}`} title={t.locked ? 'Locked. Click to unlock.' : 'Click to lock in place.'} aria-label={t.locked ? `Unlock ${t.name || 'token'}` : `Lock ${t.name || 'token'} in place`}
+          onClick={(e) => { e.stopPropagation(); void client.updateTokens([t.id], { locked: !t.locked }); }}>{t.locked ? '🔒' : '🔓'}</button>
+      </li>
+    );
+  };
+  // a search that matches a light opens the lights list so the match is not hidden
+  const open = lightsOpen || (!!q.trim() && shownLights.length > 0);
   return (
     <>
       <input type="text" placeholder={`Search ${all.length} token${all.length === 1 ? '' : 's'}…`} value={q} onInput={(e) => setQ((e.target as HTMLInputElement).value)} style={{ marginBottom: '8px' }} />
       {shown.length === 0 && <p class="muted">{all.length ? 'No tokens match.' : 'No tokens on this scene yet. Press T to add one.'}</p>}
-      <ul class="tok-list">
-        {shown.map((t) => {
-          const owner = t.ownerUid ? client.players.get(t.ownerUid) : null;
-          return (
-            <li key={t.id} class={d.selection.has(t.id) ? 'on' : ''}
-              onClick={(e) => { ui.select((e as MouseEvent).shiftKey ? [...d.selection, t.id] : [t.id]); board?.centerOn({ x: t.x, y: t.y }); }}
-              onDblClick={() => props.onEdit([t.id])}>
-              <span class="tok-av" style={{ borderColor: t.ring }}>{t.img ? <img src={t.img} alt="" loading="lazy" /> : (t.name || '?').charAt(0).toUpperCase()}</span>
-              <span class="tok-name">
-                <span class={t.hidden ? 'muted' : ''}>{t.name || 'Unnamed'}</span>
-                {owner && <span class="tok-sub"><span class="dot" style={{ background: owner.color }} /> {owner.name}</span>}
-                {t.hp != null && t.maxHp != null && <span class="tok-sub"><HpBar pct={pctOf(t.hp, t.maxHp) ?? 0} width={46} /> {t.hp}/{t.maxHp}</span>}
-              </span>
-              <button class={`icon-btn ${t.hidden ? 'on' : ''}`} title={t.hidden ? 'Hidden from players. Click to reveal.' : 'Visible to players. Click to hide.'} aria-label={t.hidden ? `Show ${t.name || 'token'} to players` : `Hide ${t.name || 'token'} from players`}
-                onClick={(e) => { e.stopPropagation(); void client.updateTokens([t.id], { hidden: !t.hidden }); }}>{t.hidden ? '🙈' : '👁'}</button>
-              <button class={`icon-btn ${t.locked ? 'on' : ''}`} title={t.locked ? 'Locked. Click to unlock.' : 'Click to lock in place.'} aria-label={t.locked ? `Unlock ${t.name || 'token'}` : `Lock ${t.name || 'token'} in place`}
-                onClick={(e) => { e.stopPropagation(); void client.updateTokens([t.id], { locked: !t.locked }); }}>{t.locked ? '🔒' : '🔓'}</button>
-            </li>
-          );
-        })}
-      </ul>
+      <ul class="tok-list">{shown.map(row)}</ul>
+      {lights.length > 0 && (
+        <div class="tok-lights">
+          <button class="btn small" aria-expanded={open} onClick={() => setLightsOpen(!lightsOpen)} title="Torches, lanterns and other lights placed on this scene">
+            {open ? '▾' : '▸'} Lights ({lights.length})
+          </button>
+          {open && (shownLights.length ? <ul class="tok-list">{shownLights.map(row)}</ul> : <p class="muted">No lights match.</p>)}
+        </div>
+      )}
     </>
   );
 }

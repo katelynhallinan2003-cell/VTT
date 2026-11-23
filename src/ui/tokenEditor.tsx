@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { groundAt, zonesOf } from '../core/height';
-import { LIGHT_PRESETS } from '../core/light';
+import { LIGHT_PRESETS, isLightMark } from '../core/light';
 import { TOKEN_SIZES } from '../core/model';
 import type { TableClient } from '../state/client';
 import type { Aura, HpShow, LabelMode, Token, TokenLight, TokenShape } from '../types';
@@ -176,13 +176,13 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
 
           {client.isDM && (
             <>
-              <Field label="Controlled by">
+              {!tokens.every((t) => isLightMark(t)) && <Field label="Controlled by">
                 <select value={ownerVal} onChange={(e) => { const v = (e.target as HTMLSelectElement).value; if (v !== '__mixed') set({ ownerUid: v === '' ? null : v }); }}>
                   {ownerVal === '__mixed' && <option value="__mixed">Mixed</option>}
                   <option value="">Nobody</option>
                   {players.map((p) => <option value={p.uid}>{p.name}{p.dm ? ' (DM)' : ''}</option>)}
                 </select>
-              </Field>
+              </Field>}
               <Toggle checked={!!(val('hidden') ?? false)} onChange={(v) => set({ hidden: v })} label="Hidden from players" />
               <Toggle checked={!!(val('locked') ?? false)} onChange={(v) => set({ locked: v })} label="Locked in place" hint="Players can't move or edit it." />
             </>

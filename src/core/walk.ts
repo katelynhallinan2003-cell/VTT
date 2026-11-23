@@ -7,13 +7,14 @@
 //   whatever is lower than the top of it (sight, walking and spells stop there) and nothing at all for what is on the high side.
 // All plain numbers, so it can be tested without a browser.
 import type { GridSettings, Vec } from '../types';
+import { STAIR_FT, heightChangeNote } from './height';
+import { currentOverlay } from './gridOverlay';
 import { cellCentersIn, cellPoly } from './cells';
 import { snapToCellCenter } from './geometry';
 import { HEX_DIRS, hexAt, hexToPx, isHex } from './hex';
 import { sideOf, type Seg } from './walls';
 
-/** The biggest step that counts as a stair, in feet. */
-export const STAIR_FT = 5;
+export { STAIR_FT };
 /** Drops of more than this many feet are cliffs unless the scene says otherwise (0 turns cliffs off). */
 export const DEFAULT_CLIFF_FT = 10;
 
@@ -22,6 +23,8 @@ export interface WalkCtx {
   ground: (p: Vec) => number;
   /** is the ground at a point difficult? */
   rough: (p: Vec) => boolean;
+  /** Continuous elevation along a freehand route. */
+  surface?: (p: Vec) => number;
 }
 
 export interface WalkExtra {
@@ -31,6 +34,9 @@ export interface WalkExtra {
   rough: number;
   /** stairs climbed or descended */
   stairs: number;
+  stairRise: number;
+  ledges: number[];
+  straightStairs: number;
 }
 
 const key = (p: Vec) => `${Math.round(p.x * 2)},${Math.round(p.y * 2)}`;
@@ -51,37 +57,55 @@ export function cellsOnLine(grid: GridSettings, a: Vec, b: Vec): Vec[] {
 }
 
 /** What walking in a straight line from `a` to `b` costs beyond its plain distance, because of stairs and difficult ground. */
-export function walkExtra(grid: GridSettings, a: Vec, b: Vec, ctx: WalkCtx): WalkExtra {
-  const cells = cellsOnLine(grid, a, b);
-  let rough = 0;
-  let stairs = 0;
-  let straightStairs = 0;
-  const hex = isHex(grid);
-  for (let i = 1; i < cells.length; i++) {
-    const p = cells[i - 1], q = cells[i];
-    if (ctx.rough(q)) rough++;
-    const rise = Math.abs(ctx.ground(q) - ctx.ground(p));
-    if (rise > 0 && rise <= STAIR_FT) {
-      stairs++;
-      // a step that already runs diagonally is already paid for as one
-      if (!hex && (Math.abs(q.x - p.x) < grid.cell * 0.5 || Math.abs(q.y - p.y) < grid.cell * 0.5)) straightStairs++;
+export function walkExtra(grid: GridSettings, a: Vec, b: Vec, ctx: WalkCtx, previousStraight = 0): WalkExtra {
+  const ex: WalkExtra = { extraFt: 0, rough: 0, stairs: 0, stairRise: 0, ledges: [], straightStairs: 0 };
+  const free = currentOverlay(grid) === 'none';
+  const length = Math.hypot(b.x - a.x, b.y - a.y);
+  if (!length) return ex;
+  const count = Math.min(4096, Math.ceil(length / (grid.cell / 8)));
+  const points = free ? Array.from({ length: count + 1 }, (_, i) => ({
+    x: a.x + (b.x - a.x) * i / count, y: a.y + (b.y - a.y) * i / count,
+  })) : cellsOnLine(grid, a, b);
+  const run = length / grid.cell * grid.ft / count;
+  const surface = ctx.surface ?? ctx.ground;
+  let prevRaw = ctx.ground(points[0]), prevSurface = free ? surface(points[0]) : prevRaw;
+  for (let i = 1; i < points.length; i++) {
+    const p = points[i - 1], q = points[i];
+    const raw = ctx.ground(q), z = free ? surface(q) : raw;
+    const jump = raw - prevRaw;
+    if (free) {
+      if (ctx.rough({ x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 })) ex.rough += run / grid.ft;
+    } else if (ctx.rough(q)) ex.rough++;
+    if (Math.abs(jump) > STAIR_FT) {
+      ex.ledges.push(jump);
+    } else {
+      const rise = Math.abs(z - prevSurface);
+      if (rise) {
+        ex.stairs++;
+        ex.stairRise += rise;
+        if (free) ex.extraFt += Math.hypot(run, rise) - run;
+        else if (!isHex(grid) && (Math.abs(q.x - p.x) < grid.cell * 0.5 || Math.abs(q.y - p.y) < grid.cell * 0.5)) {
+          ex.straightStairs++;
+          if (grid.rule === 'euclid') ex.extraFt += Math.hypot(grid.ft, rise) - grid.ft;
+        }
+      }
     }
+    prevRaw = raw; prevSurface = z;
   }
-  let stairSq = 0;
-  if (!hex) {
-    if (grid.rule === 'alt') stairSq = Math.floor(straightStairs / 2);
-    else if (grid.rule === 'euclid') stairSq = straightStairs * (Math.SQRT2 - 1);
+  if (!free && grid.rule === 'alt') {
+    ex.extraFt += (Math.floor((previousStraight + ex.straightStairs) / 2) - Math.floor(previousStraight / 2)) * grid.ft;
   }
-  return { extraFt: Math.round((rough + stairSq) * grid.ft * 10) / 10, rough, stairs };
+  ex.extraFt += ex.rough * grid.ft;
+  return ex;
 }
 
-/** "difficult ground +10 ft" and so on, for the readout of a move, or '' when nothing was extra. */
+/** Describe the terrain crossed, keeping a stair's elevation change separate from movement cost. */
 export function walkNote(grid: GridSettings, ex: WalkExtra): string {
-  const parts: string[] = [];
-  const roughFt = ex.rough * grid.ft;
-  if (roughFt) parts.push(`difficult ground +${roughFt} ft`);
-  const stairFt = Math.round((ex.extraFt - roughFt) * 10) / 10;
-  if (stairFt > 0) parts.push(`stairs +${stairFt} ft`);
+  const parts = ex.ledges.map(jump => heightChangeNote(0, jump));
+  const stairs = Math.round(ex.stairRise * 10) / 10;
+  if (stairs) parts.push(`${stairs} ft of stairs`);
+  const rough = Math.round(ex.rough * grid.ft * 10) / 10;
+  if (rough) parts.push(`difficult ground +${rough} ft`);
   return parts.join(', ');
 }
 
@@ -122,7 +146,7 @@ export function cliffSegs(grid: GridSettings, area: { x: number; y: number; w: n
     const hc = at(c);
     for (const n of laterNeighbours(grid, c)) {
       const hn = at(n);
-      if (Math.abs(hc - hn) <= cliffFt) continue;
+      if (Math.abs(hc - hn) <= Math.max(STAIR_FT, cliffFt)) continue;
       const edge = sharedEdge(grid, c, n);
       if (!edge) continue;
       const lowIsC = hc < hn;

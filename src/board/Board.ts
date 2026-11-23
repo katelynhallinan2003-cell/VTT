@@ -5,9 +5,9 @@ import {
 import { FILL_LEVEL, STROKE_CELLS, beamWidthPx, dashSegments, fitPenPoints, handlesOf, hitDrawing, pointInPoly, isTemplate, joinPts, resizeDrawing, setLineMeasurer, footprintPx, snapTemplate, templateLabel, templateWidthPx, type HandleId, type TemplateSnapState } from '../core/draw';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
-import { altitudeOf, groundAt, heightChangeNote, heightNote, isRough, roughOf, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
+import { altitudeOf, groundAt, heightNote, isRough, roughOf, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
 import { DEFAULT_CLIFF_FT, cliffSegs, rampCells, walkExtra, walkNote, type WalkExtra } from '../core/walk';
-import { EMPTY_TERRAIN, MAX_STROKE_CELLS, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, heightColor, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
+import { EMPTY_TERRAIN, MAX_STROKE_CELLS, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, heightColor, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
 import { scaleCut, type GridCut } from '../core/gridcut';
 import { AUTO_GRID_STRENGTH, detectPrintedGrid, impliedGrid } from '../core/mapgrid';
@@ -23,7 +23,7 @@ import { TokenView, isLightMark, type TokenCtx } from './TokenView';
 import { DrawLayer, paintShape } from './DrawLayer';
 import { TerrainLayer } from './TerrainLayer';
 import { WallLayer } from './WallLayer';
-import { WALL_NAME, boxSegments, chainSegments, circlePoints, distToSeg, endNear, freehandCorners, hatchTicks, moveSegs, pathBlocked, sightSegs, snapWallPoint, visibilityPolygon, wallMid, wallNear, wallVisDefault, type Seg, type Wall } from '../core/walls';
+import { WALL_NAME, boxSegments, chainSegments, circlePoints, distToSeg, endNear, freehandCorners, hatchTicks, moveSegs, rayHit, sideOf, sightSegs, snapWallPoint, visibilityPolygon, wallMid, wallNear, wallVisDefault, type Seg, type Wall } from '../core/walls';
 import { canvasTexture, loadTexture, releaseTexture, setTextureFailHandler, type LoadedTexture, gridlessTexture, readGridSample } from './textures';
 import { diagnoseImage } from '../core/images';
 import { currentOverlay, overlaySettings, type GridOverlay } from '../core/gridOverlay';
@@ -418,6 +418,7 @@ export class Board {
 
   private applyCamera() {
     this.world.scale.set(this.cam.zoom);
+    this.terrainLayer.setZoom(this.cam.zoom);
     this.world.position.set(this.cam.tx, this.cam.ty);
     if (this.sceneRef && this.mapUrl !== undefined) {
       this.cams.set(this.sceneRef.id, { camera: { ...this.cam }, mapUrl: this.mapUrl });
@@ -962,11 +963,12 @@ export class Board {
     const grid = this.client.grid;
     const base = pathFt(grid, path);
     if (fly || (!this.zones.areas.length && !this.rough.areas.length)) return { ft: base, note: '' };
-    const ctx = { ground: (p: Vec) => groundAt(this.zones, p), rough: (p: Vec) => isRough(this.rough, p) };
-    const sum: WalkExtra = { extraFt: 0, rough: 0, stairs: 0 };
+    const ctx = { ground: (p: Vec) => groundAtTerrain(this.zones, p), surface: (p: Vec) => groundAt(this.zones, p), rough: (p: Vec) => isRough(this.rough, p) };
+    const sum: WalkExtra = { extraFt: 0, rough: 0, stairs: 0, stairRise: 0, ledges: [], straightStairs: 0 };
     for (let i = 1; i < path.length; i++) {
-      const e = walkExtra(grid, path[i - 1], path[i], ctx);
+      const e = walkExtra(grid, path[i - 1], path[i], ctx, sum.straightStairs);
       sum.extraFt += e.extraFt; sum.rough += e.rough; sum.stairs += e.stairs;
+      sum.stairRise += e.stairRise; sum.straightStairs += e.straightStairs; sum.ledges.push(...e.ledges);
     }
     return { ft: Math.round((base + sum.extraFt) * 10) / 10, note: walkNote(grid, sum) };
   }
@@ -984,7 +986,7 @@ export class Board {
       const list = [...scene.walls.values()];
       const topOf = (w: Wall) => groundAt(this.zones, wallMid(w)) + w.h;
       // a big enough drop between neighbouring squares is a cliff: a wall for whatever is lower than the top of it, nothing for what stands on top
-      const cliffs = cliffSegs(this.client.grid, terrainBounds(this.zones), (p) => groundAt(this.zones, p), cliffFt);
+      const cliffs = cliffSegs(this.client.grid, terrainBounds(this.zones), (p) => groundAtTerrain(this.zones, p), cliffFt);
       this.segCache = { scene, rev: scene.wallRev, ground: gsig, sight: [...sightSegs(list, topOf), ...cliffs], move: [...moveSegs(list, topOf), ...cliffs] };
     }
     return this.segCache;
@@ -1047,8 +1049,25 @@ export class Board {
   }
 
   /** Does a step from→to go through a wall? A token already standing on a wall can still step off it. `alt` is how high it is (flyers go over low walls). */
-  private stepBlocked(from: Vec, to: Vec, segs: Seg[], alt?: number): boolean {
-    return pathBlocked(from, to, segs.filter((s) => distToSeg(from, s) > 0.75), alt);
+  private stepBlocked(from: Vec, to: Vec, segs: Seg[], id?: string): boolean {
+    const dx = to.x - from.x, dy = to.y - from.y;
+    const token = id ? this.client.scene?.tokens.get(id) : undefined;
+    for (const seg of segs) {
+      if (distToSeg(from, seg) <= 0.75) continue;
+      const t = rayHit(from, dx, dy, seg);
+      if (t > 1) continue;
+      const side = seg.one && sideOf(seg, from);
+      if (side && side !== seg.one) continue;
+      if (seg.top === undefined || !token) return true;
+      if (seg.wallHeight !== undefined) {
+        const ground = groundAt(this.zones, { x: from.x + t * dx, y: from.y + t * dy });
+        if (altitudeOf(token, ground).alt <= ground + seg.wallHeight) return true;
+      } else {
+        const approach = Math.max(0, t - 0.1 / Math.hypot(dx, dy));
+        if (this.heightOf(token, { x: from.x + approach * dx, y: from.y + approach * dy }).alt <= seg.top) return true;
+      }
+    }
+    return false;
   }
 
   /** How high a token is when it stands (or flies) at `pos`. */
@@ -1060,7 +1079,7 @@ export class Board {
   /** Whether a token may go from→to (arrow keys, jumps and the like). */
   private moveAllowed(from: Vec, to: Vec, id?: string): boolean {
     const segs = this.moveBlockers();
-    return !segs.length || !this.stepBlocked(from, to, segs, id ? this.altAt(id, from) : undefined);
+    return !segs.length || !this.stepBlocked(from, to, segs, id);
   }
 
   /**
@@ -1074,7 +1093,7 @@ export class Board {
     const origins = d.ids.map((id) => ({ id, o: d.origins.get(id) })).filter((x): x is { id: string; o: Vec } => !!x.o);
     const clear = (v: Vec) => origins.every(({ id, o }) => {
       const from = { x: o.x + cur.x, y: o.y + cur.y };
-      return !this.stepBlocked(from, { x: o.x + v.x, y: o.y + v.y }, segs, this.altAt(id, from));
+      return !this.stepBlocked(from, { x: o.x + v.x, y: o.y + v.y }, segs, id);
     });
     if (clear(want)) return want;
     const len = Math.hypot(want.x - cur.x, want.y - cur.y);
@@ -1818,10 +1837,7 @@ export class Board {
         g.moveTo(lastLeg.x, lastLeg.y).lineTo(a.display.x, a.display.y).stroke({ width: 2 / z, color: 0xffffff, alpha: 0.7 });
         const cost = this.moveCost([...before, { x: a.display.x, y: a.display.y }], a.token.fly);
         const ft = cost.ft;
-        // walking up onto a cliff or off a ledge: say so
-        const climb = a.token.fly ? '' : heightChangeNote(this.heightOf(a.token, lastLeg).alt, this.heightOf(a.token, a.display).alt);
-        const note = [climb, cost.note].filter(Boolean).join(' · ');
-        this.distText.text = note ? `${ft} ft · ${note}` : `${ft} ft`;
+        this.distText.text = cost.note ? `${ft} ft · ${cost.note}` : `${ft} ft`;
         this.distText.scale.set(1 / z);
         this.distText.position.set(a.display.x, a.display.y - (a.token.size * grid.cell) / 2 - 6 / z);
         this.distText.visible = true;
@@ -1930,11 +1946,13 @@ export class Board {
       this.plotLabel(li++, `${u.rampFrom} ft`, d.a.x, d.a.y - Math.max(grid.cell * 0.7, 18 / z), 0xffffff);
       this.plotLabel(li++, `${u.rampTo} ft`, d.b.x, d.b.y - Math.max(grid.cell * 0.7, 18 / z), 0xffffff);
     }
+    const brushLabelIndex = li;
     if (d?.kind === 'terrain') li = this.paintBrush(g, z, d.last, d, li);
     else if (!d && u.tool === 'height' && this.pointerW && this.client.isDM) {
       const mode = terrainBrushMode(u, currentOverlay(grid) === 'none');
       if (mode === 'paint' || mode === 'erase') li = this.paintBrush(g, z, this.pointerW, null, li);
     }
+    this.terrainLayer.avoidBrushReadout(li > brushLabelIndex ? this.plotLabels[brushLabelIndex] : undefined);
     if (d?.kind === 'drawmove' && d.moved) this.paintMoveGhost(g, d);
 
     // the Walls tool: the wall being drawn, the next point, a selection box
@@ -2271,11 +2289,11 @@ export class Board {
     const shown = this.heightFade > 0.001;
     this.terrainLayer.container.alpha = this.heightFade;
     const sel = new Set(this.selectedAreas().map((a) => a.id));
-    this.terrainLayer.sync(t, sel, this.textRes, shown, this.ui.data.tool === 'height');
+    this.terrainLayer.sync(t, sel, shown, this.ui.data.tool === 'height');
     // build the picture a moment after the ground changes, so it is ready when someone starts dragging (no hitch then)
     if (!shown && t.areas.length) {
       window.clearTimeout(this.warmTimer);
-      this.warmTimer = window.setTimeout(() => { if (!this.destroyed && this.heightFade <= 0.001) this.terrainLayer.sync(t, sel, this.textRes, false, false, true); }, 400);
+      this.warmTimer = window.setTimeout(() => { if (!this.destroyed && this.heightFade <= 0.001) this.terrainLayer.sync(t, sel, false, false, true); }, 400);
     }
   }
 
@@ -2447,6 +2465,7 @@ export class Board {
     };
     this.drag = d;
     this.paintTerrainAt(d, w, true);
+    this.invalidate();
   }
 
   /** Add the ground under the brush as it moves from the last spot to `w`. */
@@ -2531,7 +2550,7 @@ export class Board {
       } else if (d) g.circle(d.pts[0].x, d.pts[0].y, r).fill({ color: col, alpha: 0.45 });
       g.circle(at.x, at.y, r).stroke({ width: 1.5 / z, color: col, alpha: 0.9 });
     }
-    if (!erase && !rough) this.plotLabel(li++, areaLabelAt(add ? groundAt(this.zones, at) + h : h, h, add), at.x, at.y - Math.max(grid.cell * 0.7, 18 / z), col);
+    if (d && !erase && !rough) this.plotLabel(li++, areaLabelAt(add ? groundAt(this.zones, at) + h : h), at.x, at.y - Math.max(grid.cell * 0.7, 18 / z), col);
     return li;
   }
 

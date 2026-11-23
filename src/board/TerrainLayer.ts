@@ -1,7 +1,9 @@
 import { Container, Sprite, Text, type Texture } from 'pixi.js';
 import { cellPoly } from '../core/cells';
-import { areaLabelAt, heightColor, type Area, type Terrain } from '../core/terrain';
-import type { Vec } from '../types';
+import { areaLabelAt, heightColor, type Terrain } from '../core/terrain';
+import { terrainLabelBoxes } from '../core/terrainLabels';
+import { STAIR_FT, groundAt } from '../core/height';
+import type { Rect } from '../types';
 import { canvasTexture } from './textures';
 
 const MAX_SIDE = 2048;
@@ -11,17 +13,6 @@ const rgbOf = (h: number): [number, number, number] => {
   const c = parseInt(heightColor(h).slice(1), 16);
   return [(c >> 16) & 255, (c >> 8) & 255, c & 255];
 };
-
-/** Where an area's label goes: on a painted spot near the middle of it. */
-export function labelSpot(a: Area): Vec {
-  const pts = a.paint.flatMap((s) => (s.kind === 'rect' || s.kind === 'ellipse' ? [{ x: s.b.x + s.b.w / 2, y: s.b.y + s.b.h / 2 }] : s.pts));
-  if (!pts.length) return { x: a.b.x + a.b.w / 2, y: a.b.y + a.b.h / 2 };
-  const cx = pts.reduce((n, p) => n + p.x, 0) / pts.length;
-  const cy = pts.reduce((n, p) => n + p.y, 0) / pts.length;
-  let best = pts[0], bd = Infinity;
-  for (const p of pts) { const d = (p.x - cx) ** 2 + (p.y - cy) ** 2; if (d < bd) { bd = d; best = p; } }
-  return best;
-}
 
 /** Blur a field with a box of radius `r` (edges repeat), twice, which is close enough to a Gaussian for shading. */
 function blur(src: Float32Array, W: number, H: number, r: number): Float32Array {
@@ -60,20 +51,23 @@ export class TerrainLayer {
   private tex: Texture | null = null;
   private canvas: HTMLCanvasElement | null = null;
   private mask: HTMLCanvasElement | null = null;
-  private labels = new Map<string, Text>();
+  private labels = new Map<number, Text>();
+  private labelBoxes: (Rect & { elevation: number })[] = [];
+  private zoom = 1;
+  private coveredLabels: Text[] = [];
   private key = '';
 
   /** `selected` holds the ids of the areas to outline; `labels` says whether each area is named. Nothing is built while the layer is hidden. */
-  sync(t: Terrain, selected: Set<string>, textRes: number, show: boolean, labels = true, warm = false) {
+  sync(t: Terrain, selected: Set<string>, show: boolean, labels = true, warm = false) {
     this.container.visible = show;
     if (!show && !warm) return;
-    const key = `${t.sig}#${[...selected].sort().join(',')}#${textRes}#${labels ? 1 : 0}`;
+    const key = `${t.sig}#${[...selected].sort().join(',')}#${labels ? 1 : 0}`;
     if (key === this.key) return;
     this.key = key;
-    this.build(t, selected, textRes, labels);
+    this.build(t, selected, labels);
   }
 
-  private build(t: Terrain, selected: Set<string>, textRes: number, labels: boolean) {
+  private build(t: Terrain, selected: Set<string>, labels: boolean) {
     const areas = t.areas;
     if (!areas.length) { this.clear(); return; }
     const grid = t.grid;
@@ -133,20 +127,22 @@ export class TerrainLayer {
     }
 
     // soft shading: compare each pixel with the ground around it
-    const R = Math.max(2, Math.round(s * grid.cell * 0.16));
+    const R = Math.max(1, Math.min(MAX_SIDE / 2, Math.round(s * grid.cell * STAIR_FT / grid.ft / 4)));
     const around = blur(hgt, W, H, R);
     // a faint contour wherever the height changes, softened by a small blur
-    const rad = Math.max(1, Math.round(s * Math.max(1, grid.cell * 0.018)));
+    const rad = Math.max(1, Math.round(s * Math.max(0.5, grid.cell * 0.01)));
     const edge = new Float32Array(N);
     for (let y = rad; y < H - rad; y++) {
       for (let x = rad; x < W - rad; x++) {
         const i = y * W + x;
         if (!cov[i]) continue;
         const l = i - rad, r = i + rad, u = i - rad * W, d = i + rad * W;
-        if (!cov[l] || !cov[r] || !cov[u] || !cov[d] || Math.abs(hgt[l] - hgt[i]) > 0.01 || Math.abs(hgt[r] - hgt[i]) > 0.01 || Math.abs(hgt[u] - hgt[i]) > 0.01 || Math.abs(hgt[d] - hgt[i]) > 0.01) edge[i] = 1;
+        if (Math.max(Math.abs(hgt[l] - hgt[i]), Math.abs(hgt[r] - hgt[i]), Math.abs(hgt[u] - hgt[i]), Math.abs(hgt[d] - hgt[i])) > STAIR_FT) edge[i] = 1;
       }
     }
     const line = blur(edge, W, H, 1);
+    const nearLedge = blur(edge, W, H, R);
+    const softCover = blur(Float32Array.from(cov), W, H, R);
     const ring = new Float32Array(N); // the outline of the selected areas
     const rs = Math.max(2, Math.round(s * 2.2));
     for (let y = rs; y < H - rs; y++) {
@@ -163,12 +159,14 @@ export class TerrainLayer {
     for (let i = 0; i < N; i++) {
       // tint, only on the ground itself
       let a = 0, R_ = 0, G_ = 0, B_ = 0;
-      if (cov[i]) { const c = colour(hgt[i]); R_ = c[0]; G_ = c[1]; B_ = c[2]; a = 0.3; }
+      const sharp = nearLedge[i] > 0.00001;
+      const coverage = sharp ? cov[i] : softCover[i];
+      if (coverage) { const c = colour(sharp ? hgt[i] : around[i]); R_ = c[0]; G_ = c[1]; B_ = c[2]; a = 0.24 * coverage; }
       // shadow on the low side of a drop, light on the high side
-      const d = around[i] - hgt[i];
+      const d = sharp ? around[i] - hgt[i] : around[Math.min(N - 1, i + W)] - around[Math.max(0, i - W)];
       const k = Math.min(1, Math.abs(d) / 6) ** 0.7;
-      const sh = d > 0.05 ? 0.4 * k : 0;
-      const hi = d < -0.05 ? 0.28 * k : 0;
+      const sh = d > 0.05 ? 0.28 * k : 0;
+      const hi = d < -0.05 ? 0.18 * k : 0;
       const over = (cr: number, cg: number, cb: number, ca: number) => {
         if (ca <= 0) return;
         const oa = ca + a * (1 - ca);
@@ -177,7 +175,7 @@ export class TerrainLayer {
       };
       over(10, 12, 20, sh);
       over(255, 255, 255, hi);
-      if (cov[i] && line[i] > 0.02) { const c = colour(hgt[i]); over(c[0] * 0.4, c[1] * 0.4, c[2] * 0.4, Math.min(0.85, line[i] * 1.5)); }
+      if (cov[i] && line[i] > 0.02) { const c = colour(hgt[i]); over(c[0] * 0.4, c[1] * 0.4, c[2] * 0.4, 0.58 * line[i]); }
       if (ring[i]) over(SELECT_RGB[0], SELECT_RGB[1], SELECT_RGB[2], 1);
       const o = i * 4;
       px[o] = R_; px[o + 1] = G_; px[o + 2] = B_; px[o + 3] = Math.round(Math.min(1, a) * 255);
@@ -188,38 +186,63 @@ export class TerrainLayer {
     this.sprite!.scale.set(1 / s);
     this.sprite!.visible = true;
 
-    this.paintLabels(t, textRes, labels, (p) => {
-      const x = Math.round((p.x - bx) * s), y = Math.round((p.y - by) * s);
-      return x >= 0 && y >= 0 && x < W && y < H && cov[y * W + x] ? hgt[y * W + x] : null;
-    });
+    this.labelBoxes = labels ? terrainLabelBoxes(hgt, cov, W, H).map(box => ({
+      elevation: box.elevation, x: bx + box.x / s, y: by + box.y / s, w: box.w / s, h: box.h / s,
+    })).filter(box => groundAt(t, { x: box.x + box.w / 2, y: box.y + box.h / 2 }) === box.elevation) : [];
+    this.layoutLabels();
   }
 
-  private paintLabels(t: Terrain, textRes: number, show: boolean, totalAt: (p: Vec) => number | null) {
-    const seen = new Set<string>();
-    const fs = Math.max(9, t.grid.cell * 0.3);
-    for (const a of show ? t.areas : []) {
-      seen.add(a.id);
-      let tx = this.labels.get(a.id);
+  setZoom(zoom: number) {
+    if (this.zoom === zoom) return;
+    this.zoom = zoom;
+    this.layoutLabels();
+  }
+
+  private layoutLabels() {
+    const zoom = this.zoom;
+    const seen = new Set<number>();
+    for (let i = 0; i < this.labelBoxes.length; i++) {
+      const box = this.labelBoxes[i];
+      if (box.w * zoom < 24 || box.h * zoom < 13) continue;
+      let tx = this.labels.get(i);
       if (!tx) {
-        tx = new Text({ text: '', style: { fontFamily: 'system-ui, sans-serif', fontWeight: '700', fontSize: 20, fill: 0xffffff, stroke: { color: 0x000000, width: 4, join: 'round' } } });
+        tx = new Text({ style: { fontFamily: 'system-ui, sans-serif', fontWeight: '600', fontSize: 14, fill: 0xffffff, stroke: { color: 0x18191d, width: 3, join: 'round' } } });
         tx.anchor.set(0.5);
+        tx.resolution = Math.max(1, window.devicePixelRatio || 1);
         this.container.addChild(tx);
-        this.labels.set(a.id, tx);
+        this.labels.set(i, tx);
       }
-      const spot = labelSpot(a);
-      tx.text = areaLabelAt(totalAt(spot) ?? a.h, a.h, a.add);
-      tx.style.fontSize = fs;
-      (tx.style.stroke as { width: number }).width = Math.max(2, fs * 0.2);
-      tx.resolution = textRes;
-      tx.position.set(spot.x, spot.y);
+      tx.text = areaLabelAt(box.elevation);
+      const bounds = tx.getLocalBounds();
+      const scale = Math.min(1 / zoom, (box.w - 4 / zoom) / bounds.width, (box.h - 4 / zoom) / bounds.height);
+      if (scale * zoom < 0.75) continue;
+      tx.scale.set(scale);
+      tx.position.set(box.x + box.w / 2, box.y + box.h / 2);
+      seen.add(i);
     }
-    for (const [id, tx] of this.labels) if (!seen.has(id)) { tx.destroy(); this.labels.delete(id); }
+    for (const [i, tx] of this.labels) if (!seen.has(i)) { tx.destroy(); this.labels.delete(i); }
+  }
+
+  /** The brush readout shares world coordinates with the terrain labels and takes precedence while painting. */
+  avoidBrushReadout(readout?: Text) {
+    for (const label of this.coveredLabels) if (!label.destroyed) label.renderable = true;
+    this.coveredLabels.length = 0;
+    if (!readout) return;
+    const halfWidth = readout.width / 2 + 2 / this.zoom;
+    const top = readout.y - readout.height - 2 / this.zoom;
+    for (const label of this.labels.values()) {
+      if (Math.abs(label.x - readout.x) >= halfWidth + label.width / 2 ||
+          label.y + label.height / 2 <= top || label.y - label.height / 2 >= readout.y + 2 / this.zoom) continue;
+      label.renderable = false;
+      this.coveredLabels.push(label);
+    }
   }
 
   private clear() {
     if (this.sprite) this.sprite.visible = false;
     for (const tx of this.labels.values()) tx.destroy();
     this.labels.clear();
+    this.labelBoxes = [];
   }
 
   destroy() {

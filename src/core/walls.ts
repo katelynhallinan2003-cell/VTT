@@ -29,6 +29,8 @@ export interface Wall {
 }
 
 export interface Seg {
+  /** Height above the local ground for an authored wall. Cliffs carry only an absolute top. */
+  wallHeight?: number;
   a: Vec;
   b: Vec;
   /** one-way: stops only what is on this side */
@@ -82,7 +84,7 @@ export const segsOf = (walls: Iterable<Wall>, blocks: (w: Wall) => boolean, topO
     if (!blocks(w)) continue;
     const s: Seg = { a: w.a, b: w.b };
     if (w.one) s.one = w.one;
-    if (w.h > 0 && topOf) s.top = topOf(w);
+    if (w.h > 0 && topOf) { s.top = topOf(w); s.wallHeight = w.h; }
     out.push(s);
   }
   return out;

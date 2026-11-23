@@ -41,13 +41,18 @@ describe('stairs cost like diagonal steps', () => {
     expect(ex.extraFt).toBeCloseTo(5 * (Math.SQRT2 - 1), 1);
   });
   it('flat ground and big ledges are not stairs', () => {
-    expect(walkExtra(grid(), at(0, 0), at(4, 0), { ground: () => 0, rough: none })).toEqual({ extraFt: 0, rough: 0, stairs: 0 });
+    expect(walkExtra(grid(), at(0, 0), at(4, 0), { ground: () => 0, rough: none })).toMatchObject({ extraFt: 0, rough: 0, stairs: 0 });
     const ledge = flat({ 1: 10 });
     expect(walkExtra(grid(), at(0, 0), at(2, 0), { ground: ledge, rough: none }).stairs).toBe(0);
     expect(STAIR_FT).toBe(5);
   });
   it('going down a stair counts too', () => {
     expect(walkExtra(grid(), at(3, 0), at(0, 0), { ground: flat({ 0: 0, 1: 5, 2: 10, 3: 15 }), rough: none }).stairs).toBe(3);
+  });
+  it('distinguishes a staircase from two separate cliff drops on the same route', () => {
+    const ex = walkExtra(grid(), at(0, 0), at(3, 0), { ground: flat({ 0: 25, 1: 30, 2: 15 }), rough: none });
+    expect(ex.ledges).toEqual([-15, -15]);
+    expect(walkNote(grid(), ex)).toBe('drops 15 ft (1d6 if it falls), drops 15 ft (1d6 if it falls), 5 ft of stairs');
   });
 });
 
@@ -62,10 +67,10 @@ describe('difficult ground', () => {
     expect(walkExtra(grid(), at(4, 1), at(8, 1), { ground: () => 0, rough }).extraFt).toBe(0);
   });
   it('says what it added', () => {
-    expect(walkNote(grid(), { extraFt: 15, rough: 3, stairs: 0 })).toBe('difficult ground +15 ft');
-    expect(walkNote(grid(), { extraFt: 10, rough: 0, stairs: 4 })).toBe('stairs +10 ft');
-    expect(walkNote(grid(), { extraFt: 20, rough: 3, stairs: 2 })).toBe('difficult ground +15 ft, stairs +5 ft');
-    expect(walkNote(grid(), { extraFt: 0, rough: 0, stairs: 0 })).toBe('');
+    const flatWalk = walkExtra(grid(), at(0, 0), at(4, 0), { ground: () => 0, rough });
+    expect(walkNote(grid(), flatWalk)).toBe('difficult ground +15 ft');
+    expect(walkNote(grid(), { ...flatWalk, stairRise: 5 })).toBe('5 ft of stairs, difficult ground +15 ft');
+    expect(walkNote(grid(), { ...flatWalk, rough: 0 })).toBe('');
   });
 });
 

@@ -64,12 +64,33 @@ const labels = await dm.evaluate(() => [...window.__vtt.board.terrainLayer.label
 check('and names each area by its real height', labels.length === 2 && labels.includes('20 ft') && labels.includes('-10 ft'), JSON.stringify(labels));
 await dm.screenshot({ path: '/tmp/shots/r1-tool.png' });
 
-// ---- an area that adds shows the total, and what it adds
+// ---- overlapping strokes label the finished surface
 await dm.evaluate(() => window.__vtt.ui.set({ heightFt: 5, heightAdds: true }));
 await drag([cx(11), cy(10)], [cx(12), cy(10)]);
 await sleep(400);
 const labels2 = await dm.evaluate(() => [...window.__vtt.board.terrainLayer.labels.values()].map((t) => t.text).sort());
-check('a 5 ft step on the 20 ft ledge says 25 ft (+5)', labels2.includes('25 ft (+5)'), JSON.stringify(labels2));
+check('a 5 ft step on the 20 ft ledge says 25 ft', labels2.includes('25 ft') && labels2.every(t => /^-?\d+ ft$/.test(t)), JSON.stringify(labels2));
+await drag([cx(11), cy(10)], [cx(12), cy(10)]);
+const labelLayout = () => dm.evaluate(() => {
+  const b = window.__vtt.board;
+  return [...b.terrainLayer.labels.values()].map(label => {
+    const r = label.getBounds();
+    return { text: label.text, actual: b.groundAtPoint(label.position), x: r.x, y: r.y, w: r.width, h: r.height };
+  });
+});
+const heightsFit = rows => rows.every((a, i) => a.text === a.actual + ' ft' && rows.slice(i + 1).every(b =>
+  a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y));
+for (const factor of [1, 0.5, 4]) {
+  await dm.evaluate(f => window.__vtt.board.zoomBy(f), factor);
+  const rows = await labelLayout();
+  check('labels fit distinct visible elevations at zoom factor ' + factor, heightsFit(rows) && rows.filter(r => r.text === '30 ft').length <= 1 && !rows.some(r => r.text === '25 ft'));
+}
+const close = await labelLayout();
+check('the stacked plateau has one compact 30 ft label at close zoom', close.filter(r => r.text === '30 ft' && r.h <= 24).length === 1);
+await dm.screenshot({ path: '/tmp/shots/r-stacked-labels.png' });
+await dm.evaluate(() => window.__vtt.board.zoomBy(0.5));
+await dm.keyboard.press('Control+z');
+await sleep(350);
 await dm.evaluate(() => window.__vtt.ui.selectDrawings([]));
 check('the card calls it "On top of ground" and the field "Raise by"', (await dm.locator('.ht-card .seg button.on', { hasText: 'Added on top' }).count()) === 1);
 
@@ -179,6 +200,23 @@ await elevBox.fill('25');
 await dm.getByRole('button', { name: 'Save', exact: true }).click();
 await sleep(500);
 check('saving 25 puts it 25 above that ground', (await tok(bird)).elev === g + 25 && (await alt(bird)).clear === 25, JSON.stringify(await tok(bird)));
+
+// Reproduce a pile of overlapping round strokes on a gridless map.
+await dm.keyboard.press('h');
+await dm.evaluate(async ([x, y, cell]) => {
+  const { board, ui } = window.__vtt;
+  await board.chooseGridOverlay('none');
+  ui.selectDrawings([]);
+  ui.set({ heightMode: 'paint', heightFt: 5, heightAdds: true, heightBrush: 3 });
+  board.zoomBy(75 / (cell * board.cam.zoom));
+  board.centerOn({ x, y });
+}, [cx(16), cy(5), cell]);
+for (const offset of [0, 0.35, 0.7, 0.35, 0]) {
+  await drag([cx(14) + offset * cell, cy(5) + offset * cell], [cx(18) - offset * cell, cy(5) - offset * cell]);
+}
+const stacked = await labelLayout();
+check('gridless brush passes share one 25 ft plateau label', stacked.filter(r => r.text === '25 ft' && r.y >= 265 && r.y < 585).length === 1 && heightsFit(stacked));
+await dm.screenshot({ path: '/tmp/shots/r-gridless-heights.png', clip: { x: 380, y: 265, width: 640, height: 320 } });
 
 const bad = errors.filter((e) => !/GPU stall|ReadPixels|willReadFrequently/.test(e));
 if (bad.length) console.log('ERRORS:\n' + bad.join('\n'));

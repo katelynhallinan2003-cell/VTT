@@ -98,11 +98,29 @@ check('a wider ramp, going down, fills the width', col[0] === col[1] && col[1] =
 await dm.evaluate(() => window.__vtt.client.updateScene({ grid: { rule: 'alt' } }));
 await sleep(300);
 const stairs = await dm.evaluate(() => { const g = window.__vtt.client.grid; const p = (i) => ({ x: g.ox + (i + 0.5) * g.cell, y: g.oy + 9.5 * g.cell }); return window.__vtt.board.moveCost([p(7), p(12)], false); });
-check('five stairs up cost like diagonals (5-10-5: every second one costs more)', /stairs \+10 ft/.test(stairs.note) && stairs.ft === 35, JSON.stringify(stairs));
+check('four 5 ft stairs report their rise once and follow the diagonal rule', stairs.note === '20 ft of stairs' && stairs.ft === 35, JSON.stringify(stairs));
 await dm.evaluate(() => window.__vtt.client.updateScene({ grid: { rule: 'chebyshev' } }));
 await sleep(300);
 const st2 = await dm.evaluate(() => { const g = window.__vtt.client.grid; const p = (i) => ({ x: g.ox + (i + 0.5) * g.cell, y: g.oy + 9.5 * g.cell }); return window.__vtt.board.moveCost([p(7), p(12)], false); });
-check('on the 5-5-5 rule they cost nothing extra', st2.note === '' && st2.ft === 25, JSON.stringify(st2));
+check('on the 5-5-5 rule stairs still show their rise and cost nothing extra', st2.note === '20 ft of stairs' && st2.ft === 25, JSON.stringify(st2));
+const gradeAndWall = await dm.evaluate(async ({ from, to, id }) => {
+  const { client, board } = window.__vtt;
+  await board.chooseGridOverlay('none');
+  const mid = { x: (from.x + to.x) / 2, y: from.y };
+  const slope = [from, mid, to].map(p => board.groundAtPoint(p));
+  const cost = board.moveCost([from, to], false);
+  const open = board.moveAllowed(from, to, id);
+  const walls = await client.addWalls([{ a: { x: mid.x, y: mid.y - 25 }, b: { x: mid.x, y: mid.y + 25 }, k: 'wall', h: 5, one: 0, open: false, vis: true }]);
+  const blocked = !board.moveAllowed(from, to, id);
+  await client.updateTokens([id], { fly: true, elev: 20 });
+  const fliesOver = board.moveAllowed(from, to, id);
+  await client.removeWalls(walls);
+  await client.updateTokens([id], { fly: false, elev: 0 });
+  await board.chooseGridOverlay('square');
+  return { slope, cost, open, blocked, fliesOver };
+}, { from: C(8, 9), to: C(9, 9), id: tok });
+check('a 5 ft rise has a halfway elevation and one diagonal distance', gradeAndWall.slope[0] === 0 && Math.abs(gradeAndWall.slope[1] - 2.5) <= 0.1 && gradeAndWall.slope[2] === 5 && gradeAndWall.cost.note === '5 ft of stairs' && gradeAndWall.cost.ft === 7.1, JSON.stringify(gradeAndWall));
+check('an authored 5 ft wall on the slope blocks walkers and clears high flyers', gradeAndWall.open && gradeAndWall.blocked && gradeAndWall.fliesOver, JSON.stringify(gradeAndWall));
 await dm.evaluate(() => window.__vtt.client.updateScene({ grid: { rule: 'alt' } }));
 
 // ---- cliffs

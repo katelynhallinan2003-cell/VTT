@@ -48,6 +48,8 @@ Read `CLAUDE.md` (this file) and `WIP.md` before doing anything else in a sessio
 
 ## Design precedents
 
+- **Terrain elevation.** Label connected patches by their finished height when the text fits. Changes of up to 5 ft form a grade across 5 horizontal feet. Movement reports the rise as stairs. Authored walls still block on a slope up to their height above the ground at the crossing.
+
 - **Terrain brushes.** In Paint, choosing Added on top starts a fresh stroke above existing ground. Each gesture adds its height once where it passes. Gridless scenes use round brushes sized in calibrated feet for height, difficult ground and erasing.
 
 - **Printed square grids.** Learn the ink's RGB shift from repeated strokes and nearby terrain. On dotted JPEGs, account for the recurring light and dark fringes around the dots. Check the rendered result at native-pixel zoom on both smooth ground and painted edges.

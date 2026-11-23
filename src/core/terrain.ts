@@ -239,10 +239,9 @@ export const newAreaId = (): string => Math.random().toString(36).slice(2, 10) +
 /** The outline of one cell of the grid, for drawing the cells a stroke covers. */
 export const strokeCellPolys = (s: TStroke, grid: GridSettings): Vec[][] => s.pts.map((c) => cellPoly(grid, c));
 
-/** What a label on an area says: how high the ground really is there ("20 ft", "-10 ft"), with what the area itself adds when it stacks ("30 ft (+10)"). */
-export function areaLabelAt(total: number, h: number, add: boolean): string {
-  const t = `${Math.round(total)} ft`;
-  return add && h !== 0 ? `${t} (${h > 0 ? '+' : ''}${h})` : t;
+/** The resulting ground elevation shown on the map. */
+export function areaLabelAt(total: number): string {
+  return `${Math.round(total)} ft`;
 }
 
 /** The total at a spot when an area of height `h` is added or set there, `below` being the ground under it. */

@@ -180,12 +180,10 @@ describe('the brush cells', () => {
 });
 
 describe('what an area is called on the map', () => {
-  it('shows the real height of the ground, with what an adding area contributes', () => {
-    expect(areaLabelAt(20, 20, false)).toBe('20 ft');
-    expect(areaLabelAt(-10, -10, false)).toBe('-10 ft');
-    expect(areaLabelAt(25, 5, true)).toBe('25 ft (+5)');
-    expect(areaLabelAt(15, -5, true)).toBe('15 ft (-5)');
-    expect(areaLabelAt(20, 0, true)).toBe('20 ft'); // adding nothing changes nothing
+  it('shows only the resulting elevation', () => {
+    expect(areaLabelAt(25)).toBe('25 ft');
+    expect(areaLabelAt(-10)).toBe('-10 ft');
+    expect(areaLabelAt(0)).toBe('0 ft');
   });
   it('adds or sets over the ground below', () => {
     expect(totalWith(20, 5, true)).toBe(25);

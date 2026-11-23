@@ -20,8 +20,8 @@ An issue the user says is still broken moves back up to *Open* with a note on wh
 Carried over from the old `TASKS.md` on 2026-11-22 (asked 2026-11-21, before this file existed):
 
 - [ ] **#4 Players get "permission denied" when drawing or placing a template** (waiting on user) (added 2026-11-21):
-  a template permission was added in round 7a, but the exact failing message was never seen. Verify with the user once
-  #3 is done.
+  a template permission was added in round 7a, but the exact failing message was never seen. #3 is done (rules
+  republished 2026-11-22), so the user can try it again.
 - [ ] **#5 Tell me the exact wording if "permission denied" still appears** (waiting on user) (added 2026-11-21): for a
   player drawing or placing a template, after #3. Needed to finish #4 if it is still broken.
 - [ ] **#6 Handout pop-up for players** (waiting on user) (added 2026-11-21): two causes were fixed in round 7a.

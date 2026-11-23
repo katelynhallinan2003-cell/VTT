@@ -11,6 +11,7 @@ export const P = {
   tableChars: (tid: string, rid: string) => `tables/${tid}/chars/${rid}`,
   dmChars: (tid: string) => `tables/${tid}/dm/chars`,
   userSetting: (uid: string, key: string) => `users/${uid}/settings/${key}`,
+  imageCleanup: (uid: string, kind: string) => `users/${uid}/imageCleanup/${kind}`,
 
   table: (tid: string) => `tables/${tid}`,
   owner: (tid: string) => `tables/${tid}/owner`,

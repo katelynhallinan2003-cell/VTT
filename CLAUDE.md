@@ -52,7 +52,7 @@ Read `CLAUDE.md` (this file) and `WIP.md` before doing anything else in a sessio
 
 - **Map scans and display resolution.** Detect printed grids on a bounded sample of the original picture. A device can shrink the displayed texture independently. Store the detected spacing in original picture pixels.
 
-- **Library picture deletion.** Keep ImgBB's private deletion link with the owning DM's library item. Campaign exports and shared scene and token data carry only picture URLs. The DM confirms hosted deletion on ImgBB before finishing removal in the VTT.
+- **Library picture deletion.** One click removes the entry. In the same write, move any private ImgBB deletion link to the owning DM's cleanup list under My library. Hosted deletion is optional. Campaign exports and shared scenes and tokens carry only picture URLs.
 
 - **Maps without a clear printed grid.** Start gridless with free movement and straight-line measurement. The DM can calibrate ten feet with two points, then choose squares, hex rows, hex columns or no overlay. Changing the overlay preserves the map scale.
 

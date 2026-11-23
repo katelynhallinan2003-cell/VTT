@@ -1,41 +1,45 @@
-import { useState } from 'preact/hooks';
-import type { LibraryItem } from '../types';
-import { Modal } from './common';
+import { useEffect, useState } from 'preact/hooks';
+import type { LibraryItem, LibraryKind } from '../types';
+import { removeLibraryItem, watchImageCleanup, type ImageCleanupLink } from '../state/account';
+import type { TableClient } from '../state/client';
+import { P } from '../state/paths';
+import { toast } from './common';
 
-export function PictureTrash(props: { name: string; disabled?: boolean; onClick: () => void }) {
-  const label = 'Delete ' + props.name;
-  return <button type="button" class="picture-trash" aria-label={label} title={label} disabled={props.disabled} onClick={props.onClick}>
+export function PictureTrash({ client, kind, item, disabled }: { client: TableClient; kind: LibraryKind; item: LibraryItem; disabled?: boolean }) {
+  const [busy, setBusy] = useState(false);
+  async function remove() {
+    setBusy(true);
+    try {
+      await removeLibraryItem(client.backend, client.uid, kind, item);
+      toast(item.name + ' removed from library.', 'ok');
+    } catch (e) {
+      toast('Could not remove ' + item.name + '. ' + String(e), 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+  const label = 'Delete ' + item.name;
+  return <button type="button" class="picture-trash" aria-label={label} title={label} disabled={disabled || busy} onClick={remove}>
     <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
       <path d="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7" />
     </svg>
   </button>;
 }
 
-export function DeletePictureDialog(props: { item: LibraryItem; onClose: () => void; onRemove: () => Promise<void> }) {
-  const { item } = props;
-  const [opened, setOpened] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  async function remove() {
-    if (busy) return;
-    setBusy(true);
-    try { await props.onRemove(); }
-    catch (e) { setError((e as Error).message); setBusy(false); }
+export function ImageCleanup({ client, kind }: { client: TableClient; kind: LibraryKind }) {
+  const [links, setLinks] = useState<ImageCleanupLink[]>([]);
+  useEffect(() => watchImageCleanup(client.backend, client.uid, kind, setLinks), [client, kind]);
+  async function dismiss(id: string) {
+    try { await client.backend.remove(P.imageCleanup(client.uid, kind) + '/' + id); }
+    catch (e) { toast('Could not dismiss the link. ' + String(e), 'error'); }
   }
-  return <Modal title="Delete picture" width={450} onClose={() => { if (!busy) props.onClose(); }}
-    footer={<>
-      <button class="btn" disabled={busy} onClick={props.onClose}>Cancel</button>
-      <button class="btn danger" disabled={busy} onClick={() => void remove()}>
-        {busy ? 'Removing…' : item.deleteUrl && !opened ? 'Remove from library only' : 'Remove from library'}
-      </button>
-    </>}>
-    <strong>{item.name}</strong>
-    {item.deleteUrl ? <>
-      <p>Confirm deletion on ImgBB, then return here to remove this library entry. Scenes and tokens that use the hosted picture will lose their artwork.</p>
-      <a class="btn" href={item.deleteUrl} target="_blank" rel="noopener noreferrer" onClick={() => setOpened(true)}>Open ImgBB deletion page ↗</a>
-    </> : <p>{/^https?:\/\/i\.ibb\.co\//i.test(item.url)
-      ? 'This entry has no saved ImgBB deletion link. You can remove it from your library here and manage the hosted picture in your ImgBB account.'
-      : 'Remove this picture from your library? The original picture stays at its source.'}</p>}
-    {error && <p role="alert">{error}</p>}
-  </Modal>;
+  if (!links.length) return null;
+  return <details>
+    <summary>ImgBB cleanup ({links.length})</summary>
+    <p class="muted">Open a link to delete its hosted picture on ImgBB. Scenes and tokens using that picture will lose their artwork. Dismiss removes the link from this list.</p>
+    {links.map(link => <div key={link.id} class="row wrap">
+      <a class="grow" href={link.deleteUrl} target="_blank" rel="noopener noreferrer">{link.name} ↗</a>
+      <button class="btn small" aria-label={'Dismiss link for ' + link.name} onClick={() => dismiss(link.id)}>Dismiss</button>
+    </div>)}
+  </details>;
 }

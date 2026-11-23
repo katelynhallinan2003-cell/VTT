@@ -40,18 +40,8 @@ try {
   const scene = dm.getByRole('dialog', { name: 'New scene' });
   await scene.getByRole('button', { name: 'Winter', exact: true }).click();
   await button('Delete Winter').click();
-  await button('Cancel').click();
-  assert.equal(await scene.locator('.thumb.on').count(), 1);
-  await button('Delete Winter').click();
-  const link = dm.getByRole('link', { name: /Open ImgBB deletion page/ });
-  assert.equal(await link.getAttribute('href'), deleteUrl);
-  const [host] = await Promise.all([context.waitForEvent('page'), link.click()]);
-  await host.waitForLoadState();
-  assert.equal(host.url(), deleteUrl);
-  await host.close();
-  await button('Remove from library').click();
-  await scene.waitFor();
-  assert.equal(await scene.locator('.thumb').count(), 0);
+  await scene.locator('.thumb').waitFor({ state: 'detached' });
+  assert.equal(context.pages().length, 1);
   await button('Create scene').click();
   await dm.waitForFunction(() => window.__vtt.client.scene?.meta && !window.__vtt.client.scene.meta.mapUrl);
   await dm.evaluate(async url => {
@@ -59,12 +49,22 @@ try {
     await c.backend.set('users/' + c.uid + '/library/tokens/old', { name: 'Old token', url, addedAt: 1 });
   }, imageUrl);
   await button('Library').click();
+  await dm.getByText('ImgBB cleanup (1)', { exact: true }).click();
+  const link = dm.getByRole('link', { name: /Winter/ });
+  assert.equal(await link.getAttribute('href'), deleteUrl);
+  const after = await dm.evaluate(() => window.__vtt.client.exportCampaign({ library: true }));
+  assert.ok(!JSON.stringify(after).includes('testDeleteToken'));
+  const [host] = await Promise.all([context.waitForEvent('page'), link.click()]);
+  await host.waitForLoadState();
+  assert.equal(host.url(), deleteUrl);
+  await host.close();
+  await button('Dismiss link for Winter').click();
+  await link.waitFor({ state: 'detached' });
   await button('Token art').click();
   await button('Delete Old token').click();
-  assert.equal(await link.count(), 0);
-  await button('Remove from library').click();
   await dm.getByRole('dialog', { name: 'My library' }).waitFor();
-  assert.equal(await button('Delete Old token').count(), 0);
+  await button('Delete Old token').waitFor({ state: 'detached' });
+  assert.equal(await dm.getByText(/ImgBB cleanup/).count(), 0);
   assert.deepEqual(errors, []);
-  console.log('PASS  Private ImgBB handoff, cancel, selected map removal, campaign export and older token art');
+  console.log('PASS  One-click removal, selected map clearing, optional private cleanup, export privacy and older token art');
 } finally { await browser.close(); }

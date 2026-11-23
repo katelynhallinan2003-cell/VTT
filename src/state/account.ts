@@ -2,6 +2,7 @@ import type { Backend } from '../backend/types';
 import { SERVER_TS } from '../backend/types';
 import { emailKey, randomId } from '../core/ids';
 import { normalizeLibraryItem } from '../core/model';
+import { imgbbDeleteUrl } from '../core/imgbb';
 import { cleanSavedName, normalizeSavedToken, type SavedToken } from '../core/tokenlib';
 import { PRESETS } from '../core/permissions';
 import type { AuthUser, LibraryItem, LibraryKind, UserTableEntry } from '../types';
@@ -96,8 +97,24 @@ export async function removeTokenFromLib(backend: Backend, path: string, id: str
   await backend.remove(`${path}/${id}`);
 }
 
-export async function removeLibraryItem(backend: Backend, uid: string, kind: LibraryKind, id: string) {
-  await backend.remove(`${P.userLibrary(uid, kind)}/${id}`);
+export async function removeLibraryItem(backend: Backend, uid: string, kind: LibraryKind, item: LibraryItem) {
+  const updates: Record<string, unknown> = { [`${P.userLibrary(uid, kind)}/${item.id}`]: null };
+  const deleteUrl = imgbbDeleteUrl(item.deleteUrl);
+  if (deleteUrl) updates[`${P.imageCleanup(uid, kind)}/${item.id}`] = { name: item.name, deleteUrl };
+  await backend.update(updates);
+}
+
+export interface ImageCleanupLink { id: string; name: string; deleteUrl: string }
+
+export function watchImageCleanup(backend: Backend, uid: string, kind: LibraryKind, cb: (items: ImageCleanupLink[]) => void) {
+  return backend.listen(P.imageCleanup(uid, kind), raw => {
+    const links: ImageCleanupLink[] = [];
+    for (const [id, item] of Object.entries<any>(raw ?? {})) {
+      const deleteUrl = imgbbDeleteUrl(item?.deleteUrl);
+      if (deleteUrl) links.push({ id, name: typeof item.name === 'string' ? item.name : 'Picture', deleteUrl });
+    }
+    cb(links);
+  });
 }
 
 export async function getSavedUploadKey(backend: Backend, uid: string): Promise<string | null> {

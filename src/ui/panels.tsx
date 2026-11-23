@@ -57,12 +57,14 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
   const multi = tokens.length > 1;
   const editable = tokens.every((t) => client.canDo('edit', t));
   const allHidden = tokens.every((t) => t.hidden);
-  const sizeLabel = TOKEN_SIZES.find((s) => s.size === t0.size)?.label ?? `${t0.size} squares`;
+  // a light is not a creature: no size, effects, aura or library, just what it shines
+  const lights = tokens.every((t) => isLightMark(t));
+  const sizeLabel = lights ? (t0.light ? `${t0.light.b} ft bright, ${t0.light.d} ft dim` : 'Light') : TOKEN_SIZES.find((s) => s.size === t0.size)?.label ?? `${t0.size} squares`;
   const viewerSeesState = !client.isDM && !multi && t0.hpShow !== 'off' && t0.hpPct != null && healthState(t0.hpPct) !== 'ok';
   const viewerSeesNumbers = !client.isDM && !multi && t0.hpShow === 'numbers' && t0.hpNow != null && t0.hpCap != null;
-  const sub = multi ? '' : [sizeLabel, viewerSeesNumbers ? `${t0.hpNow}/${t0.hpCap} HP` : '', viewerSeesState ? HEALTH_LABEL[healthState(t0.hpPct)] : '', t0.hidden ? 'hidden' : '', t0.locked ? 'locked' : '', t0.fx.map((e) => e.n).join(', ')].filter(Boolean).join(' · ');
+  const sub = multi ? (lights ? `${tokens.length} lights` : '') : [sizeLabel, viewerSeesNumbers ? `${t0.hpNow}/${t0.hpCap} HP` : '', viewerSeesState ? HEALTH_LABEL[healthState(t0.hpPct)] : '', t0.hidden ? 'hidden' : '', t0.locked ? 'locked' : '', t0.fx.map((e) => e.n).join(', ')].filter(Boolean).join(' · ');
   const tracked = client.isDM ? tokens.filter((t) => t.hp != null && t.maxHp != null) : [];
-  const canAura = !multi && editable;
+  const canAura = !multi && editable && !lights;
   const zones = zonesOf(client.scene?.draws.values() ?? [], client.grid);
   const alts = tokens.map((t) => altitudeOf(t, groundAt(zones, t)));
   const a0 = alts[0];
@@ -73,7 +75,7 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
       {auraOpen && canAura && <AuraPop key={t0.id} client={client} token={t0} />}
       {heightOpen && editable && <HeightPop key={ids.join(',')} client={client} tokens={tokens} zones={zones} />}
       <div>
-        <div class="tt-name">{multi ? `${tokens.length} tokens` : t0.name || 'Unnamed token'}</div>
+        <div class="tt-name">{multi ? `${tokens.length} ${lights ? 'lights' : 'tokens'}` : t0.name || (lights ? 'Light' : 'Unnamed token')}</div>
         {sub && <div class="tt-sub">{sub}</div>}
       </div>
       {!multi && t0.fx.length > 0 && <FxIcons fx={t0.fx} max={6} />}
@@ -82,13 +84,13 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
       {!client.isDM && !multi && client.canDo('claim', t0) && (
         <button class="btn small" onClick={() => void client.updateToken(t0.id, { ownerUid: client.uid })}>Take control</button>
       )}
-      {editable && (client.isDM || tokens.every((t) => t.ownerUid === client.uid)) && (
+      {editable && !lights && (client.isDM || tokens.every((t) => t.ownerUid === client.uid)) && (
         <button class="btn small" title={client.isDM ? 'Keep this token, with all its settings, in your library to drop into any scene later' : 'Keep this character: its look and conditions follow you to every scene'}
           onClick={() => void saveTokensToLibrary(client, ids)}>
           {client.isDM ? 'Save to library' : !multi && t0.cid && client.tokenLib.some((e) => e.id === t0.cid) ? 'Update saved' : 'Save character'}
         </button>
       )}
-      {editable && (
+      {editable && !lights && (
         <button class="btn small" title="Poisoned, blessed, or anything you make up: with or without a timer" onClick={() => props.onEffects(ids)}>
           Effects{!multi && t0.fx.length ? ` (${t0.fx.length})` : ''}
         </button>
@@ -309,7 +311,7 @@ function MapGridCut(props: { client: TableClient; board: Board | null; meta: Sce
   );
 }
 
-export function ScenePanel(props: { client: TableClient; ui: UiState; board: Board | null; onNewScene: () => void }) {
+export function ScenePanel(props: { client: TableClient; ui: UiState; board: Board | null; onNewScene: () => void; onAutoLights?: () => void }) {
   const { client, ui, board } = props;
   useClient(client);
   const d = useUi(ui);
@@ -421,7 +423,7 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
       </Section>
 
       <Section id="light" title="Light and darkness" defaultOpen={false}>
-        <LightingSection client={client} ui={ui} board={board} meta={meta} />
+        <LightingSection client={client} ui={ui} board={board} meta={meta} onAutoLights={props.onAutoLights} />
       </Section>
     </>
   );
@@ -434,7 +436,7 @@ const AMBIENT_HINT = {
 } as const;
 
 /** How bright the scene is, and the lights you can place in it. */
-function LightingSection(props: { client: TableClient; ui: UiState; board: Board | null; meta: SceneMeta }) {
+function LightingSection(props: { client: TableClient; ui: UiState; board: Board | null; meta: SceneMeta; onAutoLights?: () => void }) {
   const { client, ui, board, meta } = props;
   const [preset, setPreset] = useState('Torch');
   useRerender((fn) => subscribeLights(fn), []);
@@ -473,6 +475,7 @@ function LightingSection(props: { client: TableClient; ui: UiState; board: Board
           {lightChoices.map((l) => <option key={l.name} value={l.name}>{l.name} ({l.light.b} + {l.light.d} ft)</option>)}
         </select>
         <button class="btn small" disabled={!board} onClick={() => void place()}>Place a light</button>
+        {props.onAutoLights && <button class="btn small" title="Work out where lights belong (lamps on the picture, unlit rooms) and add them all at once" onClick={props.onAutoLights}>Auto-add lights…</button>}
       </div>
       <p class="hint">Everyone sees a placed light unless you hide it. A token can carry a light too: Edit token, then Sight and lights.</p>
     </>
@@ -574,7 +577,7 @@ export function Rail(props: { client: TableClient; ui: UiState }) {
 const DOCK_TITLES: Record<DockTab, string> = { scene: 'Scene', tokens: 'Tokens', players: 'Players' };
 
 /** The panel that opens beside the tabs. */
-export function Dock(props: { client: TableClient; ui: UiState; board: Board | null; onNewScene: () => void; onEdit: (ids: string[]) => void }) {
+export function Dock(props: { client: TableClient; ui: UiState; board: Board | null; onNewScene: () => void; onAutoLights?: () => void; onEdit: (ids: string[]) => void }) {
   const { client, ui } = props;
   useClient(client);
   const d = useUi(ui);
@@ -587,7 +590,7 @@ export function Dock(props: { client: TableClient; ui: UiState; board: Board | n
         <h3>{DOCK_TITLES[tab]}{tab === 'scene' && sceneName ? <span class="muted"> · {sceneName}</span> : null}</h3>
         <button class="icon-btn" title="Fold this panel away" aria-label="Hide panel" onClick={() => ui.set({ dockTab: null })}>⟩</button>
       </div>
-      {tab === 'scene' && <ScenePanel client={client} ui={ui} board={props.board} onNewScene={props.onNewScene} />}
+      {tab === 'scene' && <ScenePanel client={client} ui={ui} board={props.board} onNewScene={props.onNewScene} onAutoLights={props.onAutoLights} />}
       {tab === 'tokens' && <TokenList client={client} ui={ui} board={props.board} onEdit={props.onEdit} />}
       {tab === 'players' && <PlayersPanel client={client} />}
     </aside>

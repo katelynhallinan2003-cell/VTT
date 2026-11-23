@@ -597,6 +597,28 @@ export class TableClient {
     return id;
   }
 
+  /** Add several tokens in one write and one undo step (DM only: used by auto-lights). */
+  async addTokens(partials: (Partial<Token> & { x: number; y: number })[], label = 'Add tokens'): Promise<string[]> {
+    const sid = this.viewSceneId;
+    if (!sid) throw new Error('No scene is open');
+    if (!this.isDM) throw new Error('Only the DM can add tokens in bulk.');
+    if (!partials.length) return [];
+    let z = Math.max(0, ...[...(this.scene?.tokens.values() ?? [])].map((t) => t.z));
+    const updates: Record<string, any> = {};
+    const made: Token[] = [];
+    for (const p of partials) {
+      const id = this.backend.newKey();
+      const token = normalizeToken(id, { ...p, z: ++z }, !!p.hidden);
+      Object.assign(token, publicHp(token.hpShow, token.hp, token.maxHp));
+      updates[this.tokenPath(token)] = tokenToWire(token);
+      if (token.hp != null && token.maxHp != null) updates[this.hpPath(id)] = hpWire(token.hp, token.maxHp, token.tempHp);
+      made.push(token);
+    }
+    await this.backend.update(updates);
+    this.recordCreated(made, label);
+    return made.map((t) => t.id);
+  }
+
   /** Write tokens back exactly as they were (used by undo and by paste). */
   async restoreTokens(tokens: Token[]): Promise<void> {
     const updates: Record<string, any> = {};

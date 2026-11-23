@@ -16,6 +16,7 @@ import { SceneBar } from './sceneBar';
 import { saveTokensToLibrary } from './tokenLib';
 import { droppedImage } from './uploads';
 import { ColorHeightsModal } from './colorHeights';
+import { AutoLightsModal } from './autoLights';
 import { DetectWallsModal } from './detectWalls';
 import { DrawFlyout, DrawInspector, HeightFlyout, RulerFlyout, TemplateFlyout, TestMoveBar, TextEditor, WallFlyout } from './drawTools';
 import { Dock, Rail, TokenTag } from './panels';
@@ -30,6 +31,7 @@ type ModalState =
   | { kind: 'scenes' }
   | { kind: 'newFolder' }
   | { kind: 'detectWalls' }
+  | { kind: 'autoLights' }
   | { kind: 'colorHeights' }
   | { kind: 'library' }
   | { kind: 'settings'; tab?: SettingsTab }
@@ -292,11 +294,13 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
     if (menuToken) {
       const ids = selectedIds.length && d.selection.has(menuToken.id) ? selectedIds : [menuToken.id];
       const toks = ids.map((i) => scene?.tokens.get(i)).filter((t): t is Token => !!t);
-      if (toks.every((t) => client.canDo('edit', t))) menuItems.push({ label: 'Edit token…', onClick: () => setModal({ kind: 'editToken', ids }) });
-      if (toks.every((t) => client.canDo('edit', t))) menuItems.push({ label: 'Effects…', onClick: () => setFxWin(ids) });
-      if (client.isDM || toks.every((t) => t.ownerUid === client.uid)) menuItems.push({ label: client.isDM ? 'Save to library' : 'Save as my character', onClick: () => void saveTokensToLibrary(client, ids) });
+      // a light has its own short menu: no effects, library or stacking order
+      const lightsOnly = toks.every((t) => isLightMark(t));
+      if (toks.every((t) => client.canDo('edit', t))) menuItems.push({ label: lightsOnly ? 'Edit light…' : 'Edit token…', onClick: () => setModal({ kind: 'editToken', ids }) });
+      if (!lightsOnly && toks.every((t) => client.canDo('edit', t))) menuItems.push({ label: 'Effects…', onClick: () => setFxWin(ids) });
+      if (!lightsOnly && (client.isDM || toks.every((t) => t.ownerUid === client.uid))) menuItems.push({ label: client.isDM ? 'Save to library' : 'Save as my character', onClick: () => void saveTokensToLibrary(client, ids) });
       if (client.canDo('create')) menuItems.push({ label: 'Duplicate', onClick: () => void client.duplicateTokens(ids, client.grid.cell).then((n) => ui.select(n)) });
-      if (toks.every((t) => client.canDo('edit', t))) {
+      if (!lightsOnly && toks.every((t) => client.canDo('edit', t))) {
         menuItems.push({ label: 'Bring to front', onClick: () => void client.bringToFront(ids) });
         menuItems.push({ label: 'Send to back', onClick: () => void client.sendToBack(ids) });
       }
@@ -433,7 +437,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
 
       {/* ---------------- right side: little tabs, and the panel that opens beside them */}
       <Rail client={client} ui={ui} />
-      <Dock client={client} ui={ui} board={board} onNewScene={() => setModal({ kind: 'newScene' })} onEdit={(ids) => setModal({ kind: 'editToken', ids })} />
+      <Dock client={client} ui={ui} board={board} onNewScene={() => setModal({ kind: 'newScene' })} onAutoLights={() => setModal({ kind: 'autoLights' })} onEdit={(ids) => setModal({ kind: 'editToken', ids })} />
       <InitStrip client={client} ui={ui} board={board} />
       <InitPopup client={client} ui={ui} board={board} onEdit={(ids) => setModal({ kind: 'editToken', ids })} onEffects={(ids) => setFxWin(ids)} />
       {mySel && <TokenTag client={client} ui={ui} onEdit={(ids) => setModal({ kind: 'editToken', ids })} onEffects={(ids) => setFxWin(ids)} />}
@@ -495,6 +499,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {modal?.kind === 'addToken' && <AddTokenModal client={client} at={modal.at} initialFile={modal.file} onClose={() => setModal(null)} onCreated={(id) => ui.select([id])} />}
       {modal?.kind === 'newScene' && <NewSceneModal client={client} initialFile={modal.file} folder={['all', 'none'].includes(d.sceneFolder) ? null : d.sceneFolder} onClose={() => setModal(null)} onCreated={() => ui.set({ dockTab: 'scene' })} />}
       {modal?.kind === 'newFolder' && <NewFolderModal client={client} onClose={() => setModal(null)} onCreated={(id) => ui.set({ sceneFolder: id })} />}
+      {modal?.kind === 'autoLights' && <AutoLightsModal client={client} board={board} onClose={() => setModal(null)} />}
       {modal?.kind === 'detectWalls' && <DetectWallsModal client={client} board={board} onClose={() => setModal(null)} />}
       {modal?.kind === 'colorHeights' && <ColorHeightsModal client={client} board={board} onClose={() => setModal(null)} />}
       {modal?.kind === 'scenes' && <ScenesModal client={client} onClose={() => setModal(null)} onNew={() => setModal({ kind: 'newScene' })} onNewFolder={() => setModal({ kind: 'newFolder' })} />}

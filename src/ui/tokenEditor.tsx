@@ -47,6 +47,8 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
 
   const editable = useMemo(() => tokens.length > 0 && tokens.every((t) => client.canDo('edit', t)), [client.rev, props.ids.join()]);
   if (!t0) return null;
+  // a light (a torch, a lantern, a light spell) is its own kind of token with its own short editor: no picture, ring, size, sight, initiative or aura
+  const lightOnly = tokens.every((t) => isLightMark(t));
 
   const same = <K extends keyof Token>(k: K): Token[K] | null => (tokens.every((t) => t[k] === t0[k]) ? t0[k] : null);
   const val = <K extends keyof Token>(k: K): Token[K] | null => (k in draft ? (draft[k] as Token[K]) : same(k));
@@ -103,6 +105,92 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
   }
 
   const players = [...client.players.values()];
+  /** the parts a light shares with every other token */
+  const hideLockBlock = client.isDM ? (
+    <>
+      <Toggle checked={!!(val('hidden') ?? false)} onChange={(v) => set({ hidden: v })} label="Hidden from players" />
+      <Toggle checked={!!(val('locked') ?? false)} onChange={(v) => set({ locked: v })} label="Locked in place" hint="Players can't move or edit it." />
+    </>
+  ) : null;
+  const healthBlock = client.isDM ? (
+    <>
+      <h4>Health</h4>
+      {!multi && (
+        <div class="row">
+          <Field label="Hit points now">
+            <input type="number" min={0} value={hpVal ?? ''} placeholder="Not tracked" disabled={!editable}
+              onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ hp: v === '' ? null : Number(v) }); }} />
+          </Field>
+          <Field label="Maximum">
+            <input type="number" min={1} value={maxHpVal ?? ''} placeholder="Max" disabled={!editable}
+              onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ maxHp: v === '' ? null : Number(v) }); }} />
+          </Field>
+          <Field label="Temp HP" hint="Soaks up damage first. Can go past the maximum.">
+            <input type="number" min={0} value={tempVal || ''} placeholder="0" disabled={!editable || hpVal == null}
+              onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ tempHp: v === '' ? 0 : Math.max(0, Number(v)) }); }} />
+          </Field>
+        </div>
+      )}
+      <Field label="What players see of its health">
+        <select disabled={!editable} value={val('hpShow') ?? ''} onChange={(e) => set({ hpShow: (e.target as HTMLSelectElement).value as HpShow })}>
+          {val('hpShow') === null && <option value="">Mixed</option>}
+          <option value="off">Nothing at all</option>
+          <option value="state">Colour only (orange when bloodied, red near death)</option>
+          <option value="bar">Colour and a health bar</option>
+          <option value="numbers">Colour, a health bar and the numbers (12/30)</option>
+        </select>
+      </Field>
+    </>
+  ) : null;
+  const labelBlock = (
+    <Field label="Name shown on the board">
+      <select disabled={!editable} value={val('label') ?? ''} onChange={(e) => set({ label: (e.target as HTMLSelectElement).value as LabelMode })}>
+        {val('label') === null && <option value="">Mixed</option>}
+        <option value="all">Everyone can see it</option>
+        <option value="dm">Only the DM</option>
+        <option value="none">Nobody (hidden)</option>
+      </select>
+    </Field>
+  );
+  const heightBlock = (
+    <>
+      <h4>Height</h4>
+      <Toggle checked={val('fly') === true} onChange={(v) => set({ fly: v, ...(v && !(((val('elev') ?? 0) as number) > g0) ? { elev: g0 + 10 } : {}) })} label="Flying" disabled={!editable}
+        hint="Off the ground. A flyer keeps its height when the ground under it rises or falls." />
+      {val('fly') !== false && (
+        <Field label={sameGround ? 'Height above the ground (feet)' : 'Elevation (feet above the map base)'}
+          hint={sameGround ? 'Measured from the ground right under it.' : 'These tokens are over different ground, so this is measured from the map base level.'}>
+          <input type="number" class="num" step={5} min={sameGround ? 0 : -1000} max={5000} disabled={!editable || val('fly') !== true} value={elevShown}
+            placeholder={val('elev') === null ? 'Mixed' : '0'}
+            onInput={(e) => { const v = (e.target as HTMLInputElement).value; const n = v === '' ? 0 : Math.round(Number(v)); set({ elev: sameGround ? g0 + Math.max(0, n) : n }); }} />
+        </Field>
+      )}
+    </>
+  );
+
+  if (lightOnly) {
+    return (
+      <Modal title={multi ? `Edit ${tokens.length} lights` : `Edit light${t0.name ? ': ' + t0.name : ''}`} onClose={props.onClose} width={520}
+        footer={<>
+          <button class="btn" onClick={props.onClose}>Cancel</button>
+          <button class="btn primary" disabled={!editable || !dirty || busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
+        </>}>
+        {!editable && <p class="muted">You can't edit {multi ? 'all of these lights' : 'this light'}.</p>}
+        {!multi && (
+          <Field label="Name">
+            <input type="text" value={name} disabled={!editable} onInput={(e) => set({ name: (e.target as HTMLInputElement).value })} />
+          </Field>
+        )}
+        <SightLights lightOnly editable={editable} sight={null} dv={null} light={lightNow} sameLight={sameLight}
+          onSight={() => undefined} onDv={() => undefined} onLight={(l) => set({ light: l })} />
+        {hideLockBlock}
+        {labelBlock}
+        {heightBlock}
+        {healthBlock}
+      </Modal>
+    );
+  }
+
   const ownerVal = 'ownerUid' in draft ? (draft.ownerUid ?? '') : tokens.every((t) => t.ownerUid === t0.ownerUid) ? (t0.ownerUid ?? '') : '__mixed';
 
   return (
@@ -175,69 +263,20 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; on
           )}
 
           {client.isDM && (
-            <>
-              {!tokens.every((t) => isLightMark(t)) && <Field label="Controlled by">
-                <select value={ownerVal} onChange={(e) => { const v = (e.target as HTMLSelectElement).value; if (v !== '__mixed') set({ ownerUid: v === '' ? null : v }); }}>
-                  {ownerVal === '__mixed' && <option value="__mixed">Mixed</option>}
-                  <option value="">Nobody</option>
-                  {players.map((p) => <option value={p.uid}>{p.name}{p.dm ? ' (DM)' : ''}</option>)}
-                </select>
-              </Field>}
-              <Toggle checked={!!(val('hidden') ?? false)} onChange={(v) => set({ hidden: v })} label="Hidden from players" />
-              <Toggle checked={!!(val('locked') ?? false)} onChange={(v) => set({ locked: v })} label="Locked in place" hint="Players can't move or edit it." />
-            </>
-          )}
-          {client.isDM && (
-            <>
-              <h4>Health</h4>
-              {!multi && (
-                <div class="row">
-                  <Field label="Hit points now">
-                    <input type="number" min={0} value={hpVal ?? ''} placeholder="Not tracked" disabled={!editable}
-                      onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ hp: v === '' ? null : Number(v) }); }} />
-                  </Field>
-                  <Field label="Maximum">
-                    <input type="number" min={1} value={maxHpVal ?? ''} placeholder="Max" disabled={!editable}
-                      onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ maxHp: v === '' ? null : Number(v) }); }} />
-                  </Field>
-                  <Field label="Temp HP" hint="Soaks up damage first. Can go past the maximum.">
-                    <input type="number" min={0} value={tempVal || ''} placeholder="0" disabled={!editable || hpVal == null}
-                      onInput={(e) => { const v = (e.target as HTMLInputElement).value; set({ tempHp: v === '' ? 0 : Math.max(0, Number(v)) }); }} />
-                  </Field>
-                </div>
-              )}
-              <Field label="What players see of its health">
-                <select disabled={!editable} value={val('hpShow') ?? ''} onChange={(e) => set({ hpShow: (e.target as HTMLSelectElement).value as HpShow })}>
-                  {val('hpShow') === null && <option value="">Mixed</option>}
-                  <option value="off">Nothing at all</option>
-                  <option value="state">Colour only (orange when bloodied, red near death)</option>
-                  <option value="bar">Colour and a health bar</option>
-                  <option value="numbers">Colour, a health bar and the numbers (12/30)</option>
-                </select>
-              </Field>
-            </>
-          )}
-
-          <Field label="Name shown on the board">
-            <select disabled={!editable} value={val('label') ?? ''} onChange={(e) => set({ label: (e.target as HTMLSelectElement).value as LabelMode })}>
-              {val('label') === null && <option value="">Mixed</option>}
-              <option value="all">Everyone can see it</option>
-              <option value="dm">Only the DM</option>
-              <option value="none">Nobody (hidden)</option>
-            </select>
-          </Field>
-
-          <h4>Height</h4>
-          <Toggle checked={val('fly') === true} onChange={(v) => set({ fly: v, ...(v && !(((val('elev') ?? 0) as number) > g0) ? { elev: g0 + 10 } : {}) })} label="Flying" disabled={!editable}
-            hint="Off the ground. A flyer keeps its height when the ground under it rises or falls." />
-          {val('fly') !== false && (
-            <Field label={sameGround ? 'Height above the ground (feet)' : 'Elevation (feet above the map base)'}
-              hint={sameGround ? 'Measured from the ground right under it.' : 'These tokens are over different ground, so this is measured from the map base level.'}>
-              <input type="number" class="num" step={5} min={sameGround ? 0 : -1000} max={5000} disabled={!editable || val('fly') !== true} value={elevShown}
-                placeholder={val('elev') === null ? 'Mixed' : '0'}
-                onInput={(e) => { const v = (e.target as HTMLInputElement).value; const n = v === '' ? 0 : Math.round(Number(v)); set({ elev: sameGround ? g0 + Math.max(0, n) : n }); }} />
+            <Field label="Controlled by">
+              <select value={ownerVal} onChange={(e) => { const v = (e.target as HTMLSelectElement).value; if (v !== '__mixed') set({ ownerUid: v === '' ? null : v }); }}>
+                {ownerVal === '__mixed' && <option value="__mixed">Mixed</option>}
+                <option value="">Nobody</option>
+                {players.map((p) => <option value={p.uid}>{p.name}{p.dm ? ' (DM)' : ''}</option>)}
+              </select>
             </Field>
           )}
+          {hideLockBlock}
+          {healthBlock}
+
+          {labelBlock}
+
+          {heightBlock}
 
           {client.isDM && (
             <>
@@ -262,6 +301,8 @@ const DV_DEFAULT = 60;
 
 /** Sight, darkvision and light, the things about a token that matter once the scene is dim or dark. null values: the tokens being edited disagree. */
 function SightLights(props: {
+  /** a light on its own: no sight, no darkvision, and no way to switch the light off (a light that gives none is nothing) */
+  lightOnly?: boolean;
   editable: boolean;
   sight: number | null; dv: number | null; light: TokenLight | null | undefined;
   sameLight: (a: TokenLight | null, b: TokenLight | null) => boolean;
@@ -283,6 +324,8 @@ function SightLights(props: {
   ));
   return (
     <div>
+      {!props.lightOnly && (
+        <>
       <h4 style={{ marginTop: 0 }}>Sight</h4>
       <Field label="Sees as far as (feet)" hint="Clears fog this far when “Tokens clear the fog around them” is on (Scene tab). 0: it clears none.">
         <div class="row wrap" style={{ marginBottom: 0 }}>
@@ -305,9 +348,14 @@ function SightLights(props: {
         </Field>
       )}
 
-      <h4>Lights</h4>
-      <Toggle checked={light != null} disabled={!editable} onChange={(v) => props.onLight(v ? { ...LIGHT_PRESETS[1].light } : null)} label="Gives off light"
-        hint="Bright for the first distance, then dim for the second (a torch: 20 + 20 ft). It only matters in a twilight or dark scene." />
+        </>
+      )}
+      <h4 style={props.lightOnly ? { marginTop: 0 } : undefined}>{props.lightOnly ? 'Light' : 'Lights'}</h4>
+      {!props.lightOnly && (
+        <Toggle checked={light != null} disabled={!editable} onChange={(v) => props.onLight(v ? { ...LIGHT_PRESETS[1].light } : null)} label="Gives off light"
+          hint="Bright for the first distance, then dim for the second (a torch: 20 + 20 ft). It only matters in a twilight or dark scene." />
+      )}
+      {props.lightOnly && <p class="hint">Bright for the first distance, then dim for the second (a torch: 20 + 20 ft). It only matters in a twilight or dark scene.</p>}
       {light === undefined && <p class="hint">These tokens have different lights. Pick one to give them all the same.</p>}
       {light !== null && (
         <>

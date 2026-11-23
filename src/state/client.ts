@@ -56,7 +56,7 @@ export interface SceneState {
 
 /** A drawing as the caller describes it; the text styling and the fill colour are optional. */
 export type NewDrawing = Omit<Drawing, 'id' | 'uid' | 't' | 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc' | 'dt'> & Partial<Pick<Drawing, 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc' | 'dt'>>;
-export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'hg' | 'ha' | 'he' | 'hc'>>;
+export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'hg' | 'ha' | 'he' | 'hc' | 'td'>>;
 
 export type ScenePatch = Partial<Omit<SceneMeta, 'grid' | 'fog' | 'light'>> & {
   grid?: Partial<GridSettings>;

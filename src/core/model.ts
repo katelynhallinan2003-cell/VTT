@@ -4,7 +4,7 @@ import type {
 } from '../types';
 import { cleanHp, emptyInit, orderOf } from './combat';
 import { imgbbDeleteUrl } from './imgbb';
-import { FONT_KEYS } from './draw';
+import { FONT_KEYS, isTemplate } from './draw';
 import { fxToWire, normalizeFx } from './effects';
 
 /** Token movement is saved to a tenth of a map pixel. Test collisions at that same position. */
@@ -224,6 +224,7 @@ export function normalizeDrawing(id: string, raw: any): Drawing | null {
     of: Math.min(400, Math.max(0, num(raw.of, 0))),
     hz: typeof raw.hz === 'number' && Number.isFinite(raw.hz) && (raw.k === 'rect' || raw.k === 'ellipse' || raw.k === 'terrain') ? Math.min(5000, Math.max(-1000, Math.round(raw.hz))) : null,
     ...(raw.pv === true ? { pv: true } : {}),
+    ...(raw.td === true && isTemplate(raw.k) ? { td: true } : {}),
     ...(raw.k === 'terrain' ? { hg: typeof raw.hg === 'string' ? raw.hg.slice(0, 24) : '', ha: bool(raw.ha, false), he: bool(raw.he, false), hc: bool(raw.hc, false), ...(raw.dt === true ? { dt: true } : {}) } : {}),
     t: num(raw.t, 0),
   };
@@ -237,6 +238,7 @@ export function drawingToWire(d: Omit<Drawing, 'id'> | Drawing): Record<string, 
     hz: rest.hz ?? undefined,
     of: rest.of || undefined,
     pv: rest.pv || undefined,
+    td: rest.td || undefined,
     hg: rest.hg || undefined, ha: rest.ha || undefined, he: rest.he || undefined, hc: rest.hc || undefined, dt: rest.dt || undefined,
   });
 }

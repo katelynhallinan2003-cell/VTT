@@ -1,8 +1,9 @@
 import { Application, Container, Graphics, Sprite, Text, Texture } from 'pixi.js';
 import {
-  clamp, distanceFt, fitCamera, pathFt, gridFromRect, mapRect, normRect, sceneRect, pointInToken, rectContains, snapTokenCenter, snapToCellCenter, snapToCorner, zoomAt,
+  clamp, cornerTotals, distanceFt, fitCamera, pathFt, gridFromRect, mapRect, normRect, sceneRect, pointInToken, rectContains, snapTokenCenter, snapToCellCenter, snapToCorner, zoomAt,
 } from '../core/geometry';
 import { FILL_LEVEL, STROKE_CELLS, beamWidthPx, dashSegments, fitPenPoints, handlesOf, hitDrawing, pointInPoly, isTemplate, joinPts, resizeDrawing, setLineMeasurer, footprintPx, snapTemplate, templateLabel, templateWidthPx, type HandleId, type TemplateSnapState } from '../core/draw';
+import { templateRoughDraws } from '../core/templaterough';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
 import { altitudeOf, groundAt, heightNote, isRough, roughOf, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
@@ -507,8 +508,7 @@ export class Board {
       this.seenZoneRev = scene.drawRev;
       const next = zonesOf(scene.draws.values(), this.client.grid);
       if (next.sig !== this.zones.sig) { this.zones = next; this.seenTokensRev = -1; this.refreshDraws(); }
-      const nextRough = roughOf(scene.draws.values(), this.client.grid);
-      if (nextRough.sig !== this.rough.sig) { this.rough = nextRough; this.paintRough(); }
+      this.refreshRough();
     }
     if (scene.tokensRev !== this.seenTokensRev) {
       this.seenTokensRev = scene.tokensRev;
@@ -528,6 +528,7 @@ export class Board {
     }
     if (scene.wallRev !== this.seenWallRev) {
       this.seenWallRev = scene.wallRev;
+      this.refreshRough(); // a wall can cut a difficult spell template short
       this.onWallsChanged();
     }
     if (scene.initRev !== this.seenInitRev) { this.seenInitRev = scene.initRev; this.dirty = true; }
@@ -960,6 +961,17 @@ export class Board {
   }
 
   // ------------------------------------------------------------------ difficult ground and what moving costs
+  /** Difficult ground = what was painted as such, plus the squares of every spell template marked difficult (what a wall lets the spell reach). */
+  private refreshRough() {
+    const scene = this.client.scene;
+    if (!scene) return;
+    const grid = this.client.grid;
+    const w = this.wallsForSpells();
+    const spell = templateRoughDraws(scene.draws.values(), grid, w.segs, w.ground);
+    const next = roughOf(spell.length ? [...scene.draws.values(), ...spell] : scene.draws.values(), grid);
+    if (next.sig !== this.rough.sig) { this.rough = next; this.paintRough(); }
+  }
+
   /** Hatch every square of difficult ground. */
   private paintRough() {
     const g = this.roughG;
@@ -1914,11 +1926,11 @@ export class Board {
       this.plotLabel(li++, `${name ? name + ': ' : ''}${ft} ft${heightNote(flat, up)}`, r.b.x, r.b.y - 12 / z, color);
       return li;
     }
-    // several legs: the distance so far at every corner, and the whole at the end
-    for (let i = 2; i < pts.length; i++) {
-      const total = pathFt(grid, pts.slice(0, i + 1), rise.slice(0, i));
+    // several legs: the distance so far at every corner (the first leg's end too), and the whole at the end
+    cornerTotals(grid, pts, rise).forEach((total, k) => {
+      const i = k + 1;
       this.plotLabel(li++, i === pts.length - 1 ? `${name ? name + ': ' : ''}${total} ft` : `${total} ft`, pts[i].x, pts[i].y - 12 / z, color);
-    }
+    });
     return li;
   }
 
@@ -2741,6 +2753,7 @@ export class Board {
       k, p: joinPts(pts), color: u.drawColor, w: isT ? Math.max(2, stroke) : stroke,
       fill: !isT && closed ? FILL_LEVEL[u.drawFillMode] : 0, fc: closed ? u.drawFillColor : '',
       dash: !isT && u.drawDash, txt: '', fs: 28, bw: u.tplWidth, of: k === 'emanation' && d.of ? d.of : undefined, pv: isT && !u.tplShare ? true : undefined,
+      td: isT && u.tplRough ? true : undefined,
     }, { onId: (id) => { if (closed || k === 'line' || k === 'arrow' || k === 'pen') this.ui.selectDrawings([id]); } }).catch((err: Error) => this.cb.onNotice(err.message, 'error'));
   }
 

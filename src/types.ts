@@ -261,6 +261,8 @@ export interface Drawing {
   hc?: boolean;
   /** a stroke of difficult ground (costs extra to walk through), not of height */
   dt?: boolean;
+  /** a spell template: the ground it covers counts as difficult while it is on the map */
+  td?: boolean;
   /** private: only the person who made it (and the DM) can see it */
   pv?: boolean;
   t: number;

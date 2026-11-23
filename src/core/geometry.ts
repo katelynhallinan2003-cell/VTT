@@ -88,6 +88,13 @@ export function pathFt(grid: GridSettings, pts: Vec[], rise: number[] = []): num
   return Math.round(total * 10) / 10;
 }
 
+/** The distance so far at every corner after the first: entry `i` is the length of the path from the start to point `i + 1`. */
+export function cornerTotals(grid: GridSettings, pts: Vec[], rise: number[] = []): number[] {
+  const out: number[] = [];
+  for (let i = 1; i < pts.length; i++) out.push(pathFt(grid, pts.slice(0, i + 1), rise.slice(0, i)));
+  return out;
+}
+
 /**
  * Derive grid settings from a rectangle the DM dragged over a block of squares.
  * `cols` x `rows` is how many squares the rectangle covers (1x1 by default).

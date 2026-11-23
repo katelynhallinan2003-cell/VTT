@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { distanceFt, pathFt } from '../src/core/geometry';
+import { cornerTotals, distanceFt, pathFt } from '../src/core/geometry';
 import { MAX_VIA, normalizeLive, viaFromWire, viaToWire } from '../src/core/model';
 import type { GridSettings } from '../src/types';
 
@@ -7,6 +7,28 @@ const grid = (over: Partial<GridSettings> = {}): GridSettings => ({
   shape: 'square', cell: 100, ox: 0, oy: 0, visible: true, color: '#000', opacity: 0.3, ft: 5, rule: 'alt', snap: true, ...over,
 });
 const at = (i: number, j: number) => ({ x: i * 100 + 50, y: j * 100 + 50 });
+
+describe('cornerTotals: the distance so far at every corner', () => {
+  it('gives one total per point after the start, the first leg\'s end included', () => {
+    const g = grid({ rule: 'chebyshev' });
+    const path = [at(0, 0), at(3, 0), at(3, 4), at(0, 4)];
+    expect(cornerTotals(g, path)).toEqual([15, 35, 50]);
+    expect(cornerTotals(g, path).at(-1)).toBe(pathFt(g, path));
+  });
+  it('counts a diagonal across legs once, like pathFt does', () => {
+    expect(cornerTotals(grid({ rule: 'alt' }), [at(0, 0), at(1, 1), at(2, 2), at(3, 3)])).toEqual([5, 15, 20]);
+  });
+  it('carries each leg\'s climb', () => {
+    const g = grid({ rule: 'chebyshev' });
+    const t = cornerTotals(g, [at(0, 0), at(2, 0), at(4, 0)], [20, 0]);
+    expect(t[0]).toBe(distanceFt(g, at(0, 0), at(2, 0), 'chebyshev', 20));
+    expect(t[1]).toBe(pathFt(g, [at(0, 0), at(2, 0), at(4, 0)], [20, 0]));
+  });
+  it('a path with fewer than two points has none', () => {
+    expect(cornerTotals(grid(), [])).toEqual([]);
+    expect(cornerTotals(grid(), [at(0, 0)])).toEqual([]);
+  });
+});
 
 describe('pathFt: the length of a path in several legs', () => {
   it('one leg is the same as the plain distance', () => {

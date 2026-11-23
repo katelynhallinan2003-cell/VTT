@@ -67,6 +67,8 @@ export interface UiData {
   sharePlot: boolean;
   /** spell templates I place can be seen by everyone (on), or only by me and the DM (off) */
   tplShare: boolean;
+  /** the next spell templates placed count as difficult ground */
+  tplRough: boolean;
   /** test move: each drag adds a leg to the move instead of replacing it */
   testMulti: boolean;
   /** ruler: each drag adds a leg to the measurement instead of starting again */
@@ -168,6 +170,7 @@ export class UiState {
     drawSel: new Set(), testMove: false, testCount: 0,
     sharePlot: readFlag('vtt-share-plot', false),
     tplShare: readFlag('vtt-tpl-share', true),
+    tplRough: false,
     testMulti: readFlag('vtt-test-multi', false),
     rulerMulti: readFlag('vtt-ruler-multi', false),
     autoGrid: readFlag('vtt-auto-grid', true),

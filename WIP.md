@@ -27,6 +27,36 @@ Carried over from the old `TASKS.md` on 2026-11-22 (asked 2026-11-21, before thi
 - [ ] **#6 Handout pop-up for players** (waiting on user) (added 2026-11-21): two causes were fixed in round 7a.
   #3 is done (rules republished 2026-11-22), so the user can check it now.
 
+Asked 2026-11-23, all in one message (the user also attached `SeasideMap.jpg` and `tunnel.webp` as maps the wall detector handles badly):
+
+- [ ] **#35 Delete a table from the list of your tables** (added 2026-11-23): "There should be a button to delete a table on the list of your tables." Needs a confirmation, because it is not undoable.
+- [ ] **#36 Deleting an uploaded picture in the VTT should also delete it from ImgBB if possible** (added 2026-11-23): "IDK if youve done this already, but when you delete a uploaded image in the VTT, it should also delete it from IMGBB if possible." #18 and #22 only keep the private deletion link for the DM to use by hand; check what a browser can really do and make it automatic where it can.
+- [ ] **#37 Tables should be renamable** (added 2026-11-23).
+- [ ] **#38 Remove "paste a link to a picture"** (added 2026-11-23): "Remove the paste a link to a picture option, i dont think its needed." Scene and picture pickers; the token maker is #58.
+- [ ] **#39 No "bring players to it as soon as it's made" tick on a first table** (added 2026-11-23): "On first table creation, i dont think theres any way for a player to be existent since they didnt have the add player link yet, so there shouldnt be a 'summon players to it as soon as its made' check."
+- [ ] **#40 Library maps: expandable, searchable, hover preview** (added 2026-11-23): "From your library when looking through map options should be expandable and searchable if you want to look through things in the library. Maybe even a hover preview of the full image."
+- [ ] **#41 Grid colour shows white when black is selected** (added 2026-11-23): "Grid color is showing as white when black is selected? white default."
+- [ ] **#42 Detect walls does not help on `SeasideMap.jpg`** (added 2026-11-23): "attached is a map that it is really struggling to auto add walls to in a useful way." Add the map to `tests/walltrace.test.ts` as a drawn case before fixing.
+- [ ] **#43 Detect walls is poor on the much simpler `tunnel.webp`** (added 2026-11-23): "it also didnt do a good job on guessing walls for the much more straightforward tunnel.webp file. So that tool needs a lot of work."
+- [ ] **#44 Paint height from colour: a plus button to add another colour at the same height** (added 2026-11-23): "you should be able to add a color for that same height so a plus button."
+- [ ] **#45 Heights: select a section and edit its height in one click** (added 2026-11-23): "Heights should have a way to select a section and edit its height after its been placed in one click."
+- [ ] **#46 Paint height from colour: only the patch I clicked is on by default** (added 2026-11-23).
+- [ ] **#47 "Private scene, players can't see this yet" goes to the lower left corner** (added 2026-11-23): "instead of the top middle".
+- [ ] **#48 Height tools: the "On this map" toggles can be collapsed** (added 2026-11-23): "more something you set once and leave for long periods of time."
+- [ ] **#49 Windows can be opened and closed, closed by default** (added 2026-11-23): "Windows should be openable and closable as well, closed by default."
+- [ ] **#50 Remove the line "Walls shape what tokens can see once their sight is on."** (added 2026-11-23).
+- [ ] **#51 "I can walk through walls" becomes "DM can move tokens through walls"** (added 2026-11-23): and remove the "only for you" text under it.
+- [ ] **#52 Remove the text "Paint high and low ground. A token that walks onto it stands at that height; flyers keep their own."** (added 2026-11-23).
+- [ ] **#53 "Cliffs: drops over X ft" is unclear** (added 2026-11-23): "I see a 'cliffs: drops over x ft' but im not sure what that means mechnanically." Make the label and hint say what it does (a walker cannot climb a rise bigger than this within 10 ft; see *Walking up painted cliffs* in `CLAUDE.md`).
+- [ ] **#54 Rename "Rub out" to "Erase"** (added 2026-11-23).
+- [ ] **#55 Rename the "Move" tool** (added 2026-11-23): "Move should be called select or something better."
+- [ ] **#56 A spell template can be marked as difficult terrain and counts when moving tokens** (added 2026-11-23): "calcualted in moving tokens."
+- [ ] **#57 Ruler: show the distance at every step, including the first two** (added 2026-11-23): "it shows all but the first 2 distances, it should show those too when doing several steps."
+- [ ] **#58 Token maker: remove the add-picture-by-pasted-link option** (added 2026-11-23).
+- [ ] **#59 "Add light sources" button that places them smartly** (added 2026-11-23): "i would like a auto add light sources button that places them smartly."
+- [ ] **#60 Light source tokens are their own kind of token** (added 2026-11-23): "remove all the stuff a light source would never need" (keep things like flying and hit points, since a light can be a spell effect; drop what only a creature or character would use).
+- [ ] **#61 Top-right dropdown menus are as wide as their words** (added 2026-11-23): "so they arent unecessarily long."
+
 ## Ideas (not requested)
 
 Suggestions nobody has asked for, carried over from the old `TASKS.md`. Do not build these unless the user asks; if

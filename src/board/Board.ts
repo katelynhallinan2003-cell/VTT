@@ -7,13 +7,14 @@ import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
 import { altitudeOf, groundAt, heightNote, isRough, roughOf, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
 import { DEFAULT_CLIFF_FT, cliffSegs, rampCells, walkExtra, walkNote, type WalkExtra } from '../core/walk';
+import { paintedCliffBlocks } from '../core/terrainMovement';
 import { EMPTY_TERRAIN, MAX_STROKE_CELLS, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, heightColor, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
 import { scaleCut, type GridCut } from '../core/gridcut';
 import { AUTO_GRID_STRENGTH, detectPrintedGrid, impliedGrid } from '../core/mapgrid';
 import { lightOf, viewerOf, type LightSrc, type Viewer } from '../core/light';
 import { LightLayer } from './LightLayer';
-import { DEFAULT_GRID, MAX_VIA } from '../core/model';
+import { DEFAULT_GRID, MAX_VIA, tokenCoordinate } from '../core/model';
 import { pctOf, toPub, visionCircles, withoutLights } from '../core/combat';
 import type { DrawingPatch, TableClient } from '../state/client';
 import { terrainBrushMode, type StrokeSize, type UiState } from '../state/ui';
@@ -989,7 +990,7 @@ export class Board {
       const topOf = (w: Wall) => groundAt(this.zones, wallMid(w)) + w.h;
       // a big enough drop between neighbouring squares is a cliff: a wall for whatever is lower than the top of it, nothing for what stands on top
       const cliffs = cliffSegs(this.client.grid, terrainBounds(this.zones), (p) => groundAtTerrain(this.zones, p), cliffFt);
-      this.segCache = { scene, rev: scene.wallRev, ground: gsig, sight: [...sightSegs(list, topOf), ...cliffs], move: [...moveSegs(list, topOf), ...cliffs] };
+      this.segCache = { scene, rev: scene.wallRev, ground: gsig, sight: [...sightSegs(list, topOf), ...cliffs], move: moveSegs(list, topOf) };
     }
     return this.segCache;
   }
@@ -1041,35 +1042,31 @@ export class Board {
     return best;
   }
 
-  /** The wall pieces that hold tokens back right now (the DM can walk through them, and W also lets them pass). */
-  private moveBlockers(): Seg[] {
+  /** Null when this move bypasses both walls and painted cliffs. */
+  private moveBlockers(): Seg[] | null {
     const meta = this.client.scene?.meta;
-    if (!meta) return [];
-    if (this.client.isDM) { if (this.ui.data.wallIgnore || this.teleportHeld) return []; }
-    else if (!meta.wallStop) return [];
+    if (!meta) return null;
+    if (this.client.isDM) { if (this.ui.data.wallIgnore || this.teleportHeld) return null; }
+    else if (!meta.wallStop) return null;
     return this.wallSegs().move;
   }
 
   /** Does a step from→to go through a wall? A token already standing on a wall can still step off it. `alt` is how high it is (flyers go over low walls). */
-  private stepBlocked(from: Vec, to: Vec, segs: Seg[], id?: string): boolean {
+  private stepBlocked(start: Vec, end: Vec, segs: Seg[], id?: string): boolean {
+    const from = { x: tokenCoordinate(start.x), y: tokenCoordinate(start.y) };
+    const to = { x: tokenCoordinate(end.x), y: tokenCoordinate(end.y) };
     const dx = to.x - from.x, dy = to.y - from.y;
     const token = id ? this.client.scene?.tokens.get(id) : undefined;
     for (const seg of segs) {
-      if (distToSeg(from, seg) <= 0.75) continue;
       const t = rayHit(from, dx, dy, seg);
       if (t > 1) continue;
       const side = seg.one && sideOf(seg, from);
       if (side && side !== seg.one) continue;
-      if (seg.top === undefined || !token) return true;
-      if (seg.wallHeight !== undefined) {
-        const ground = groundAt(this.zones, { x: from.x + t * dx, y: from.y + t * dy });
-        if (altitudeOf(token, ground).alt <= ground + seg.wallHeight) return true;
-      } else {
-        const approach = Math.max(0, t - 0.1 / Math.hypot(dx, dy));
-        if (this.heightOf(token, { x: from.x + approach * dx, y: from.y + approach * dy }).alt <= seg.top) return true;
-      }
+      if (seg.wallHeight === undefined || !token) return true;
+      const ground = groundAt(this.zones, { x: from.x + t * dx, y: from.y + t * dy });
+      if (altitudeOf(token, ground).alt <= ground + seg.wallHeight) return true;
     }
-    return false;
+    return paintedCliffBlocks(this.zones, from, to, this.client.scene?.meta?.cliff ?? DEFAULT_CLIFF_FT, token?.fly ? token.elev : undefined);
   }
 
   /** How high a token is when it stands (or flies) at `pos`. */
@@ -1081,7 +1078,7 @@ export class Board {
   /** Whether a token may go from→to (arrow keys, jumps and the like). */
   private moveAllowed(from: Vec, to: Vec, id?: string): boolean {
     const segs = this.moveBlockers();
-    return !segs.length || !this.stepBlocked(from, to, segs, id);
+    return !segs || !this.stepBlocked(from, to, segs, id);
   }
 
   /**
@@ -1091,7 +1088,7 @@ export class Board {
   private wallStep(d: Extract<Drag, { kind: 'tokens' }>, want: Vec, snap: ((v: Vec) => Vec) | null): Vec {
     const segs = this.moveBlockers();
     const cur = d.cur ?? { x: 0, y: 0 };
-    if (!segs.length) return want;
+    if (!segs || (!segs.length && !this.zones.areas.length)) return want;
     const origins = d.ids.map((id) => ({ id, o: d.origins.get(id) })).filter((x): x is { id: string; o: Vec } => !!x.o);
     const clear = (v: Vec) => origins.every(({ id, o }) => {
       const from = { x: o.x + cur.x, y: o.y + cur.y };
@@ -1099,10 +1096,18 @@ export class Board {
     });
     if (clear(want)) return want;
     const len = Math.hypot(want.x - cur.x, want.y - cur.y);
+    if (!snap) {
+      let lo = 0, hi = 1;
+      while ((hi - lo) * len > 0.25) {
+        const mid = (lo + hi) / 2;
+        if (clear({ x: cur.x + (want.x - cur.x) * mid, y: cur.y + (want.y - cur.y) * mid })) lo = mid;
+        else hi = mid;
+      }
+      return { x: cur.x + (want.x - cur.x) * lo, y: cur.y + (want.y - cur.y) * lo };
+    }
     const n = Math.min(200, Math.max(4, Math.ceil(len / 3)));
     for (let k = n - 1; k >= 1; k--) {
-      let v = { x: cur.x + ((want.x - cur.x) * k) / n, y: cur.y + ((want.y - cur.y) * k) / n };
-      if (snap) v = snap(v);
+      const v = snap({ x: cur.x + ((want.x - cur.x) * k) / n, y: cur.y + ((want.y - cur.y) * k) / n });
       if (clear(v)) return v;
     }
     return cur;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { cliffSegs, cellsOnLine, rampCells, walkExtra, walkNote, STAIR_FT } from '../src/core/walk';
 import { sideOf, segsFrom } from '../src/core/walls';
+import { paintedCliffBlocks } from '../src/core/terrainMovement';
 import { roughOf, isRough, zonesOf, groundAt } from '../src/core/height';
 import type { Drawing, GridSettings } from '../src/types';
 
@@ -104,6 +105,39 @@ describe('cliffs', () => {
     const segs = cliffSegs(g, { x: 0, y: 0, w: 500, h: 500 }, (p) => (p.x > 250 ? 30 : 0), 10);
     expect(segs.length).toBeGreaterThan(0);
     for (const s of segs) { expect(s.one === 1 || s.one === -1).toBe(true); expect(s.top).toBe(30); }
+  });
+});
+
+describe('walking over painted contours', () => {
+  const p = (x: number, y = 0) => ({ x, y });
+  const circles = (spacing: number, width: number) => zonesOf(Array.from({ length: 6 }, (_, i) => ({
+    id: String(i), hg: String(i), k: 'terrain', t: i, hz: 5, ha: true,
+    p: [i * spacing, 0].join(','), w: width,
+  } as Drawing)), grid());
+  const hill = circles(3, 100);
+  it('blocks at the first contour, even inching forward or crossing the entire hill in one jump', () => {
+    expect(paintedCliffBlocks(hill, p(-80), p(100), 10)).toBe(true);
+    expect(paintedCliffBlocks(hill, p(-50.01), p(-50), 10)).toBe(true);
+    expect(paintedCliffBlocks(hill, p(-50.01), p(-50.001), 10)).toBe(false);
+    expect(paintedCliffBlocks(hill, p(-49), p(-48), 10)).toBe(false);
+    expect(paintedCliffBlocks(hill, p(0), p(-90), 10)).toBe(false);
+    expect(paintedCliffBlocks(hill, p(-80, 51), p(90, 51), 10)).toBe(false);
+  });
+  it('uses the configured limit and flying altitude against the finished height', () => {
+    expect(paintedCliffBlocks(hill, p(-80), p(3), 10, 20)).toBe(true);
+    expect(paintedCliffBlocks(hill, p(-80), p(3), 10, 35)).toBe(false);
+    expect(paintedCliffBlocks(hill, p(-80), p(3), 30)).toBe(false);
+    expect(paintedCliffBlocks(hill, p(-80), p(3), 0)).toBe(false);
+  });
+  it('allows a 30 ft staircase with five horizontal feet between rises', () => {
+    expect(paintedCliffBlocks(circles(100, 1400), p(-800), p(-100), 10)).toBe(false);
+  });
+  it('detects the side of a narrow brush stroke and leaves a rubbed-out passage open', () => {
+    const ridge = { id: 'ridge', hg: 'ridge', k: 'terrain', t: 1, hz: 30, p: '0,-100,0,100', w: 2 } as Drawing;
+    const opening = { ...ridge, id: 'gap', he: true, t: 2, p: '0,0', w: 20 };
+    const zones = zonesOf([ridge, opening], grid());
+    expect(paintedCliffBlocks(zones, p(-500, 12), p(500, 12), 10)).toBe(true);
+    expect(paintedCliffBlocks(zones, p(-500), p(500), 10)).toBe(false);
   });
 });
 

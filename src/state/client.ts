@@ -1,7 +1,7 @@
 import type { Backend, Unsub } from '../backend/types';
 import { SERVER_TS } from '../backend/types';
 import {
-  drawingToWire, handoutToWire, initPubToWire, initToWire, normalizeDrawing, normalizeFogOp, normalizeHandout, normalizeInit, normalizeInitPub, normalizeLive, normalizeMeta,
+  drawingToWire, handoutToWire, initPubToWire, initToWire, normalizeDrawing, normalizeFogOp, normalizeHandout, normalizeInit, normalizeInitPub, normalizeLive, normalizeMeta, tokenCoordinate,
   normalizeLibraryItem, normalizePlayer, normalizeSceneMeta, normalizeSettings, normalizeToken, stripUndefined, tokenToWire, viaToWire, DEFAULT_GRID, DM_COLOR, MAX_EXTRA_MAPS, mapsToWire,
 } from '../core/model';
 import {
@@ -682,8 +682,8 @@ export class TableClient {
       const t = this.scene?.tokens.get(m.id);
       if (!t) continue;
       const base = this.tokenPath(t);
-      updates[`${base}/x`] = Math.round(m.x * 10) / 10;
-      updates[`${base}/y`] = Math.round(m.y * 10) / 10;
+      updates[`${base}/x`] = tokenCoordinate(m.x);
+      updates[`${base}/y`] = tokenCoordinate(m.y);
     }
     try { if (Object.keys(updates).length) await this.backend.update(updates); } finally { if (opts.teleport) for (const m of moves) this.noTrail.delete(m.id); }
     if (before?.length) {

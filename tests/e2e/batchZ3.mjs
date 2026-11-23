@@ -131,7 +131,7 @@ await dm.evaluate(async (c) => {
   await window.__vtt.client.addDrawing({ k: 'terrain', p: pts.join(','), color: '#aa8855', w: g.cell, fill: 0, fc: '', dash: false, txt: '', fs: 28, bw: 5, hz: 30, hg: 'plateau', ha: false, he: false, hc: true });
 }, 0);
 await sleep(600);
-const nSeg = await dm.evaluate(() => window.__vtt.board.wallSegs().move.length);
+const nSeg = await dm.evaluate(() => window.__vtt.board.wallSegs().sight.length);
 check('the edge of the plateau is a cliff (a wall piece for every square along it)', nSeg >= 12, `${nSeg}`);
 const mv = (from, to) => dm.evaluate(([f, t]) => window.__vtt.board.moveAllowed(f, t), [from, to]);
 check('walking from the low ground into the cliff is stopped', (await mv(C(15, 4), C(16, 4))) === false);
@@ -140,14 +140,48 @@ check('walking off the top is not stopped (it is a fall)', (await mv(C(16, 4), C
 check('walking about on top is fine', (await mv(C(16, 4), C(17, 4))) === true);
 await dm.evaluate(() => window.__vtt.client.updateScene({ cliff: 40 }));
 await sleep(500);
-check('with cliffs set above the drop, there is no wall', (await dm.evaluate(() => window.__vtt.board.wallSegs().move.length)) === 0 && (await mv(C(15, 4), C(16, 4))) === true);
+check('with cliffs set above the drop, there is no wall', (await dm.evaluate(() => window.__vtt.board.wallSegs().sight.length)) === 0 && (await mv(C(15, 4), C(16, 4))) === true);
 await dm.evaluate(() => window.__vtt.client.updateScene({ cliff: 10 }));
 await sleep(500);
-check('and it is back at 10 ft', (await dm.evaluate(() => window.__vtt.board.wallSegs().move.length)) >= 12);
+check('and it is back at 10 ft', (await dm.evaluate(() => window.__vtt.board.wallSegs().sight.length)) >= 12 && !(await mv(C(15, 4), C(16, 4))));
 await dm.keyboard.press('Escape');
 await dm.keyboard.press('h');
 await sleep(300);
 check('the Cliffs setting is in the Heights panel', (await dm.locator('.flyout', { hasText: 'Cliffs' }).count()) === 1);
+
+// Six staggered, additive round brushes. The entire hill fits between grid centres.
+await dm.keyboard.press('Escape');
+await dm.keyboard.press('v');
+const stack = await dm.evaluate(async id => {
+  const { board, client } = window.__vtt;
+  await board.chooseGridOverlay('none');
+  const g = client.grid, x = g.ox + 12 * g.cell, y = g.oy + 4 * g.cell;
+  const base = { x: x - g.cell, y }, top = { x: x + g.cell * 0.12, y };
+  for (let i = 0; i < 6; i++) {
+    await client.addDrawing({ k: 'terrain', hg: 'brush-cliff-' + i, hz: 5, ha: true,
+      p: [x + i * g.cell * 0.04, y].join(','), w: g.cell, color: '#aa8855', fill: 0, fc: '', dash: false, txt: '', fs: 28, bw: 5 });
+  }
+  await client.updateToken(id, base);
+  return { base, top, edge: x - g.cell / 2 };
+}, tok);
+await dm.waitForFunction(({top}) => window.__vtt.board.groundAtPoint(top) === 30, stack);
+await dragTo(stack.base, stack.top);
+const position = () => dm.evaluate(id => { const { x, y } = window.__vtt.client.scene.tokens.get(id); return { x, y }; }, tok);
+const atFoot = p => Math.hypot(p.x - stack.edge - cell / 2, p.y - stack.base.y) > cell / 2 && Math.abs(p.x - stack.edge) < 3;
+const stopped = await position();
+check('a drag stops at the foot of a 30 ft brush stack', atFoot(stopped), JSON.stringify({stopped, ...stack}));
+const edgeScreen = await screen(stopped), summit = await screen(stack.top);
+await dm.mouse.move(edgeScreen.x, edgeScreen.y);
+await dm.mouse.down();
+await dm.mouse.move(summit.x, summit.y, { steps: Math.ceil(summit.x - edgeScreen.x) });
+await dm.mouse.up();
+await sleep(300);
+const retried = await position();
+check('a second slow drag cannot creep through the face', atFoot(retried), JSON.stringify(retried));
+await dm.keyboard.down('q');
+await dragTo(retried, stack.top);
+await dm.keyboard.up('q');
+check('holding Q teleports the same walker onto the plateau', near(await dm.evaluate(id => window.__vtt.client.scene.tokens.get(id), tok), stack.top));
 
 console.log(errors.length ? errors.join('\n') : 'no console problems');
 await browser.close();

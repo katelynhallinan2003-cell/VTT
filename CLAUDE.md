@@ -49,6 +49,7 @@ Read `CLAUDE.md` (this file) and `WIP.md` before doing anything else in a sessio
 ## Design precedents
 
 - **Terrain elevation.** Label connected patches by their finished height when the text fits. Changes of up to 5 ft form a grade across 5 horizontal feet. Movement reports the rise as stairs. Authored walls still block on a slope up to their height above the ground at the crossing.
+- **Walking up painted cliffs.** Use the finished painted contours. At the default cliff setting, more than 10 ft of consecutive rise within 10 horizontal feet stops a walker. Changing the cliff limit scales that distance with it. Walking downhill, flying above the top, and DM teleport still work.
 
 - **Terrain brushes.** In Paint, choosing Added on top starts a fresh stroke above existing ground. Each gesture adds its height once where it passes. Gridless scenes use round brushes sized in calibrated feet for height, difficult ground and erasing.
 

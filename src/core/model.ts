@@ -7,6 +7,9 @@ import { imgbbDeleteUrl } from './imgbb';
 import { FONT_KEYS } from './draw';
 import { fxToWire, normalizeFx } from './effects';
 
+/** Token movement is saved to a tenth of a map pixel. Test collisions at that same position. */
+export const tokenCoordinate = (value: number) => Math.round(value * 10) / 10;
+
 export const DEFAULT_GRID: GridSettings = {
   shape: 'square', cell: 70, ox: 0, oy: 0, visible: true, color: '#000000', opacity: 0.35,
   ft: 5, rule: 'chebyshev', snap: true,

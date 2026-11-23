@@ -268,7 +268,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient }) {
       {rough && <p class="hint">{mode === 'paint' ? 'Paint or drag across the map.' : 'Rubs out difficult ground wherever you drag.'}</p>}
       {!rough && client.isDM && (
         <div style={{ margin: '8px 0' }}>
-          <NumField label="Cliffs: drops over" value={cliff} min={0} max={1000} step={5} unit="ft" title="A drop of more than this between neighbouring squares is a cliff: it stops sight, spells and walking from below, and is no obstacle from the top. A 5 ft step is a stair and costs like a diagonal move. 0 turns cliffs off."
+          <NumField label="Cliffs: drops over" value={cliff} min={0} max={1000} step={5} unit="ft" title="At 10 ft, a rise of more than 10 ft within 10 horizontal feet stops a walker. This includes overlapping brushes. A single 5 ft step is walkable. Set to 0 to turn off automatic cliffs."
             onCommit={(v) => void client.updateScene({ cliff: Math.max(0, Math.round(v)) })} />
         </div>
       )}

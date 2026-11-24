@@ -122,7 +122,7 @@ export function AddTokenModal(props: { client: TableClient; at: Vec; initialFile
         await loadImage(img, true).catch(() => { throw new Error('That picture link could not be loaded.'); });
         addRecent({ url: img, name: name || 'token' });
       }
-      const grid = client.grid;
+      const grid = client.gridAt(props.at);
       const p = grid.snap ? snapTokenCenter(grid, size, props.at) : props.at;
       const id = await client.addToken({
         x: p.x, y: p.y, name, img, size, shape, ring, ringW, ...fr, imgBg, hidden: client.isDM && hidden,

@@ -4,6 +4,7 @@ import {
   drawingToWire, handoutToWire, initPubToWire, initToWire, normalizeDrawing, normalizeFogOp, normalizeHandout, normalizeInit, normalizeInitPub, normalizeLive, normalizeMeta, tokenCoordinate,
   normalizeLibraryItem, normalizePlayer, normalizeSceneMeta, normalizeSettings, normalizeToken, stripUndefined, tokenToWire, viaToWire, DEFAULT_GRID, DEFAULT_BG, DM_COLOR, MAX_EXTRA_MAPS, mapsToWire,
 } from '../core/model';
+import { gridAtPoint, mapCell, ownGrids, type MapGrid } from '../core/mapgrids';
 import { BLANK_BG, BLANK_COLS, BLANK_MAP, BLANK_ROWS, blankSpot, clampSquares, isBlankMap, isBlankPage } from '../core/blankgrid';
 import {
   applyDamage, cleanHp, withoutLights, EXPLORE_MIN_CELLS, EXPLORE_JUMP_CELLS, EXPLORE_TELEPORT_CELLS, EXPLORE_TELEPORT_MS, emptyInit, moveEntry, nextTurn, orderOf, pctOf, prevTurn, publicHp, sightRadiusPx, sortByInit, toPub,
@@ -75,6 +76,8 @@ const UNDOABLE_SCENE_KEYS = new Set(['mapX', 'mapY', 'mapScale', 'mapLocked', 'm
  */
 /** What is stored for a token's hit points (temporary hit points only when there are some). */
 const hpWire = (hp: number, max: number, tmp: number) => ({ hp, max, ...(tmp > 0 ? { tmp } : {}) });
+
+const NO_MAP_GRIDS: MapGrid[] = [];
 
 export class TableClient {
   meta: TableMeta | null = null;
@@ -567,6 +570,20 @@ export class TableClient {
   get activeSceneId() { return this.meta?.activeScene ?? null; }
   get sceneIsActive() { return !!this.viewSceneId && this.viewSceneId === this.activeSceneId; }
   get grid(): GridSettings { return this.scene?.meta?.grid ?? DEFAULT_GRID; }
+  private ownGridsCache: { meta: unknown; list: MapGrid[] } | null = null;
+  /** The grid that counts at a spot: an added map may have its own squares, colour and switch. The scene's own grid object when none does. */
+  gridAt(p: Vec): GridSettings {
+    const meta = this.scene?.meta;
+    const own = this.mapGrids;
+    return meta && own.length ? gridAtPoint(meta.grid, own, p) : this.grid;
+  }
+  /** The added maps that have a grid of their own (none for most scenes). */
+  get mapGrids(): MapGrid[] {
+    const meta = this.scene?.meta;
+    if (!meta || !meta.maps.length) return NO_MAP_GRIDS;
+    if (this.ownGridsCache?.meta !== meta) this.ownGridsCache = { meta, list: ownGrids(meta.grid, meta.maps) };
+    return this.ownGridsCache.list;
+  }
 
   canDo(action: Action, token?: Token): boolean {
     return can({ role: this.role, uid: this.uid, perm: this.settings.perm, sceneActive: this.sceneIsActive }, action, token);
@@ -770,7 +787,7 @@ export class TableClient {
       let x = t.x + offsetPx;
       let y = t.y + offsetPx;
       // a diagonal step of one square lands between hexes, so put it on the nearest one
-      if (this.grid.snap && isHex(this.grid)) ({ x, y } = snapTokenCenter(this.grid, t.size, { x, y }));
+      { const gg = this.gridAt({ x, y }); if (gg.snap && isHex(gg)) ({ x, y } = snapTokenCenter(gg, t.size, { x, y })); }
       const nid = await this.addToken({ ...rest, name, x, y, ownerUid: this.isDM ? null : this.uid }, { record: false });
       out.push(nid);
       const made1 = this.scene?.tokens.get(nid);
@@ -801,7 +818,7 @@ export class TableClient {
       const { id: _id, ...rest } = t;
       let x = at.x + (t.x - cx);
       let y = at.y + (t.y - cy);
-      if (g.snap) ({ x, y } = snapTokenCenter(g, t.size, { x, y }));
+      { const gg = this.gridAt({ x, y }); if (gg.snap) ({ x, y } = snapTokenCenter(gg, t.size, { x, y })); }
       const baseName = t.name.replace(/\s+\d+$/, '');
       const siblings = [...(this.scene?.tokens.values() ?? [])].filter((o) => baseName && o.name.replace(/\s+\d+$/, '') === baseName);
       const name = baseName ? `${baseName} ${siblings.length + 1}` : '';
@@ -1100,23 +1117,33 @@ export class TableClient {
    * Temporary hit points soak up damage first. Healing never touches them and never goes past the maximum.
    */
   async damage(ids: string[], amount: number): Promise<void> {
-    if (!this.isDM || !Number.isFinite(amount) || amount === 0) return;
+    if (!Number.isFinite(amount) || amount === 0) return;
+    await this.hurt(ids.map((id) => ({ id, amount })), amount > 0 ? 'Damage' : 'Healing');
+  }
+
+  /** The same, with an amount for each token (a spell that those who saved only half-feel). One undo step. Returns what each token ended up with. */
+  async hurt(list: { id: string; amount: number }[], label = 'Damage'): Promise<{ id: string; name: string; hp: number; tempHp: number }[]> {
+    if (!this.isDM) return [];
     const before: { id: string; hp: number; tempHp: number }[] = [];
     const after: { id: string; hp: number; tempHp: number }[] = [];
-    for (const id of ids) {
+    const out: { id: string; name: string; hp: number; tempHp: number }[] = [];
+    for (const { id, amount } of list) {
       const t = this.scene?.tokens.get(id);
-      if (!t || t.hp == null || t.maxHp == null) continue;
+      if (!t || t.hp == null || t.maxHp == null || !Number.isFinite(amount) || amount === 0) continue;
       before.push({ id, hp: t.hp, tempHp: t.tempHp });
-      after.push({ id, ...applyDamage(t.hp, t.maxHp, t.tempHp, Math.round(amount)) });
+      const now = applyDamage(t.hp, t.maxHp, t.tempHp, Math.round(amount));
+      after.push({ id, ...now });
+      out.push({ id, name: t.name || 'Token', ...now });
     }
-    if (!after.length) return;
-    const apply = (list: { id: string; hp: number; tempHp: number }[]) => Promise.all(list.map((x) => this.updateToken(x.id, { hp: x.hp, tempHp: x.tempHp }))).then(() => undefined);
+    if (!after.length) return [];
+    const apply = (l: { id: string; hp: number; tempHp: number }[]) => Promise.all(l.map((x) => this.updateToken(x.id, { hp: x.hp, tempHp: x.tempHp }))).then(() => undefined);
     await apply(after);
     this.history.push({
-      label: amount > 0 ? 'Damage' : 'Healing', // no coalescing key: every hit is its own undo step
+      label, // no coalescing key: every hit is its own undo step
       undo: () => apply(before),
       redo: () => apply(after),
     });
+    return out;
   }
 
   /** Give temporary hit points. The rules say you keep whichever is higher, the old or the new; pass `replace` to set it outright. */
@@ -1919,15 +1946,27 @@ export class TableClient {
     await this.updateScene({ mapW: clampSquares(cols) * meta.grid.cell, mapH: clampSquares(rows) * meta.grid.cell });
   }
 
-  /** Move, resize, rename, show or hide one of the extra maps. */
-  async updateExtraMap(id: string, patch: Partial<Omit<ExtraMap, 'id' | 'url'>>): Promise<void> {
+  /** Move, resize, rename, show or hide one of the extra maps, or give it a grid of its own. */
+  async updateExtraMap(id: string, patch: Partial<Omit<ExtraMap, 'id' | 'url' | 'gs' | 'gv' | 'gc' | 'gp'>> & { gs?: number | null; gv?: boolean | null; gc?: string | null; gp?: string | null }): Promise<void> {
     const meta = this.scene?.meta;
     if (!this.isDM || !meta || !meta.maps.some((m) => m.id === id)) return;
-    // a picture has the size it was made with; only an empty grid is told how many squares it has
     await this.updateScene({ maps: meta.maps.map((m) => {
       if (m.id !== id) return m;
-      const { w, h, ...rest } = patch;
-      return { ...m, ...rest, ...(isBlankMap(m.url) ? { ...(w != null ? { w: clampSquares(w / meta.grid.cell) * meta.grid.cell } : {}), ...(h != null ? { h: clampSquares(h / meta.grid.cell) * meta.grid.cell } : {}) } : {}) };
+      const { w, h, gs, gv, gc, gp, ...rest } = patch;
+      const next: ExtraMap = { ...m, ...rest };
+      // a grid of its own can be put back to the scene's by passing null
+      if (gs !== undefined) { if (gs === null) delete next.gs; else next.gs = Math.max(4, Math.min(2000, gs)); }
+      if (gv !== undefined) { if (gv === null) delete next.gv; else next.gv = gv; }
+      if (gc !== undefined) { if (gc === null) delete next.gc; else next.gc = gc; }
+      if (gp !== undefined) { if (gp === null) delete next.gp; else next.gp = gp; }
+      // a picture has the size it was made with; only an empty grid is told how many squares it has, and keeps them when its squares change
+      if (isBlankMap(m.url)) {
+        const was = mapCell(meta.grid, m), now = mapCell(meta.grid, next);
+        const cols = w != null ? clampSquares(w / now) : clampSquares(m.w / was), rows = h != null ? clampSquares(h / now) : clampSquares(m.h / was);
+        next.w = cols * now;
+        next.h = rows * now;
+      }
+      return next;
     }) });
   }
 

@@ -132,7 +132,6 @@ check('the button goes away once they match', (await dm.getByRole('button', { na
 await dm.screenshot({ path: '/tmp/shots/o2-aligned.png' });
 
 // ---- adjusting the width redraws it
-await dm.locator('.sect-head', { hasText: 'Adjust the hiding' }).click();
 await dm.evaluate(() => window.__vtt.client.updateScene({ mapGrid: { ...window.__vtt.client.scene.meta.mapGrid, t: 6 } }));
 await sleep(800);
 check('a different width is saved and the picture is redone', (await meta()).cut.t === 6 && (await showing(dm)) === 'cut');

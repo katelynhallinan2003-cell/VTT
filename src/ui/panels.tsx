@@ -2,7 +2,9 @@ import { isLightMark } from '../core/light';
 import { useMemo, useRef, useState } from 'preact/hooks';
 import { healthState, HEALTH_LABEL, pctOf } from '../core/combat';
 import { MAX_EXTRA_MAPS, TOKEN_SIZES, gridColorToSave } from '../core/model';
-import { MAX_BLANK_SQUARES, clampSquares, isBlankMap, isBlankPage } from '../core/blankgrid';
+import { MAX_BLANK_SQUARES, clampSquares, isBlankMap, isBlankPage, paperColour } from '../core/blankgrid';
+import { colorNum } from '../core/colornum';
+import { mapCell } from '../core/mapgrids';
 import { gridPeriod, isHex } from '../core/hex';
 import { currentOverlay } from '../core/gridOverlay';
 import { GridChoices } from './GridChoices';
@@ -15,13 +17,14 @@ import type { TableClient } from '../state/client';
 import type { DockTab, UiState } from '../state/ui';
 import type { GridCut } from '../core/gridcut';
 import { gridMatches, impliedGrid } from '../core/mapgrid';
-import type { Aura, GridSettings, LabelMode, SceneMeta, Token, TokenShape } from '../types';
+import type { Aura, ExtraMap, GridSettings, LabelMode, SceneMeta, Token, TokenShape } from '../types';
 import { Field, Section, SliderField, Toggle, toast, useClient, useRerender, useUi } from './common';
 import { uploadImage } from './uploads';
 import { HpBar, parseDamage, tellTemp, tempPct } from './initiative';
 import { saveTokensToLibrary } from './tokenLib';
 import { FxIcons } from './effects';
 import { AuraEditor } from './auraEditor';
+import { GroupHpPop } from './groupHp';
 import { PlayersPanel } from './modals';
 
 
@@ -51,6 +54,7 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
   const d = useUi(ui);
   const [auraOpen, setAuraOpen] = useState(false);
   const [heightOpen, setHeightOpen] = useState(false);
+  const [hpOpen, setHpOpen] = useState(false);
   const tokens = [...d.selection].map((id) => client.scene?.tokens.get(id)).filter((t): t is Token => !!t);
   if (!tokens.length) return null;
   const ids = tokens.map((t) => t.id);
@@ -75,12 +79,17 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
     <div class="tokentag" onMouseDown={(e) => e.stopPropagation()}>
       {auraOpen && canAura && <AuraPop key={t0.id} client={client} token={t0} />}
       {heightOpen && editable && <HeightPop key={ids.join(',')} client={client} tokens={tokens} zones={zones} />}
+      {hpOpen && tracked.length > 1 && <GroupHpPop key={tracked.map((t) => t.id).join(',')} client={client} tokens={tracked} />}
       <div>
         <div class="tt-name">{multi ? `${tokens.length} ${lights ? 'lights' : 'tokens'}` : t0.name || (lights ? 'Light' : 'Unnamed token')}</div>
         {sub && <div class="tt-sub">{sub}</div>}
       </div>
       {!multi && t0.fx.length > 0 && <FxIcons fx={t0.fx} max={6} />}
       {tracked.length > 0 && <HpControl client={client} tokens={tracked} />}
+      {tracked.length > 1 && (
+        <button class={`btn small ${hpOpen ? 'primary' : ''}`} aria-expanded={hpOpen} title="Damage, heal or give temporary hit points to the selected tokens, with a half for those that saved"
+          onClick={() => { setHpOpen(!hpOpen); setHeightOpen(false); setAuraOpen(false); }}>Group HP</button>
+      )}
       <button class="btn small primary" disabled={!editable} title="Edit token (E)" onClick={() => props.onEdit(ids)}>Edit</button>
       {!client.isDM && !multi && client.canDo('claim', t0) && (
         <button class="btn small" onClick={() => void client.updateToken(t0.id, { ownerUid: client.uid })}>Take control</button>
@@ -98,12 +107,12 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
       )}
       {editable && (
         <button class={`btn small ${heightOpen ? 'primary' : ''}`} title="How high it is: flying, or standing on high ground. ] and [ raise and lower it."
-          onClick={() => { setHeightOpen(!heightOpen); setAuraOpen(false); }}>
+          onClick={() => { setHeightOpen(!heightOpen); setAuraOpen(false); setHpOpen(false); }}>
           Height{altText ? ` ${altText}` : ''}
         </button>
       )}
       {canAura && (
-        <button class={`btn small ${auraOpen ? 'primary' : ''}`} title="Coloured areas that follow this token" onClick={() => { setAuraOpen(!auraOpen); setHeightOpen(false); }}>
+        <button class={`btn small ${auraOpen ? 'primary' : ''}`} title="Coloured areas that follow this token" onClick={() => { setAuraOpen(!auraOpen); setHeightOpen(false); setHpOpen(false); }}>
           Aura{t0.auras.length ? ` (${t0.auras.length})` : ''}
         </button>
       )}
@@ -218,7 +227,6 @@ function ExtraMaps(props: { client: TableClient; meta: SceneMeta; ui: UiState; o
   const { client, meta, ui } = props;
   const d = useUi(ui);
   const scaleT = useThrottled((a: { id: string; scale: number }) => { void client.updateExtraMap(a.id, { scale: a.scale }); });
-  const cell = meta.grid.cell;
   return (
     <>
       {meta.maps.map((m, i) => {
@@ -233,8 +241,9 @@ function ExtraMaps(props: { client: TableClient; meta: SceneMeta; ui: UiState; o
             <Toggle checked={m.locked} onChange={(v) => { void client.updateExtraMap(m.id, { locked: v }); if (v && d.extraSel === m.id) ui.set({ extraSel: null }); else if (!v) ui.set({ extraSel: m.id }); }}
               label="Locked in place" hint={m.locked ? undefined : 'Drag it on the board to move it.'} />
             {blank
-              ? <GridSquares cols={Math.round(m.w / cell)} rows={Math.round(m.h / cell)} onChange={(cols, rows) => void client.updateExtraMap(m.id, { w: cols * cell, h: rows * cell })} />
+              ? <GridSquares cols={Math.round(m.w / mapCell(meta.grid, m))} rows={Math.round(m.h / mapCell(meta.grid, m))} onChange={(cols, rows) => void client.updateExtraMap(m.id, { w: cols * mapCell(meta.grid, m), h: rows * mapCell(meta.grid, m) })} />
               : !m.locked && <SliderField label="Size" value={Math.round(m.scale * 100)} min={10} max={400} step={1} unit="%" onInput={(v) => scaleT({ id: m.id, scale: v / 100 })} />}
+            <MapGridControls client={client} meta={meta} m={m} blank={blank} />
           </div>
         );
       })}
@@ -245,6 +254,47 @@ function ExtraMaps(props: { client: TableClient; meta: SceneMeta; ui: UiState; o
       )}
       {!meta.maps.length && <p class="hint">For another floor, the next room, an overlay, or an empty grid beside the map.</p>}
     </>
+  );
+}
+
+const hex6 = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
+
+/** The grid on one added map: shown or hidden on its own, with its own square size and colour (and paper, for an empty grid). */
+function MapGridControls(props: { client: TableClient; meta: SceneMeta; m: ExtraMap; blank: boolean }) {
+  const { client, meta, m, blank } = props;
+  const base = meta.grid;
+  const on = m.gv ?? base.visible;
+  const sizeT = useThrottled((v: number) => { void client.updateExtraMap(m.id, { gs: v }); });
+  const colourT = useThrottled((v: string) => { void client.updateExtraMap(m.id, { gc: v }); });
+  const paperT = useThrottled((v: string) => { void client.updateExtraMap(m.id, { gp: v }); });
+  const colour = m.gc ?? base.color;
+  const paper = m.gp ?? hex6(paperColour(colour));
+  return (
+    <div class="map-grid" aria-label="Grid on this map">
+      {/* same as the scene's switch means "unset", so a map that was never touched keeps following the scene */}
+      <Toggle checked={on} onChange={(v) => void client.updateExtraMap(m.id, { gv: v === base.visible ? null : v })} label="Show the grid here"
+        hint={m.gv == null ? undefined : 'This map has its own switch, apart from the rest of the scene.'} />
+      {on && (
+        <>
+          <SliderField label={isHex(base) ? 'Hex size here' : 'Square size here'} value={mapCell(base, m)} min={10} max={300} step={0.1} unit="px" onInput={(v) => sizeT(Math.round(v * 10) / 10)} />
+          <Field label="Grid colour here">
+            <div class="row" style={{ gap: '6px', alignItems: 'center' }}>
+              <input type="color" value={hex6(colorNum(colour))} aria-label="Grid colour on this map" onInput={(e) => colourT((e.target as HTMLInputElement).value)} />
+              {m.gc && <button class="btn small" onClick={() => void client.updateExtraMap(m.id, { gc: null })}>Same as the scene</button>}
+            </div>
+          </Field>
+          {m.gs != null && <div class="row"><button class="btn small" onClick={() => void client.updateExtraMap(m.id, { gs: null })}>Same square size as the scene</button></div>}
+        </>
+      )}
+      {blank && (
+        <Field label="Paper colour">
+          <div class="row" style={{ gap: '6px', alignItems: 'center' }}>
+            <input type="color" value={paper} aria-label="Paper colour of this empty grid" onInput={(e) => paperT((e.target as HTMLInputElement).value)} />
+            {m.gp && <button class="btn small" onClick={() => void client.updateExtraMap(m.id, { gp: null })}>Pick it to suit the lines</button>}
+          </div>
+        </Field>
+      )}
+    </div>
   );
 }
 
@@ -262,14 +312,16 @@ function GridSquares(props: { cols: number; rows: number; onChange: (cols: numbe
   );
 }
 
-function MapGridCut(props: { client: TableClient; board: Board | null; meta: SceneMeta; ui: UiState }) {
+/** Matching the grid to the map: find the one printed on the picture, or set it from a few clicks. */
+function FitGrid(props: { client: TableClient; board: Board | null; meta: SceneMeta; ui: UiState }) {
   const { client, board, meta, ui } = props;
   const d = useUi(ui);
   const [busy, setBusy] = useState(false);
   const cut = meta.mapGrid;
   const g = meta.grid;
+  const hex = isHex(g);
   const adjT = useThrottled((c: GridCut) => { void client.updateScene({ mapGrid: c }); });
-  if (!meta.mapUrl) return <p class="hint">Add a map picture first.</p>;
+  const hasPic = !!meta.mapUrl;
   const k = meta.mapScale;
   const cutPer = cut ? gridPeriod({ cell: cut.p, shape: cut.hex ?? 'square' }) : { x: 1, y: 1 };
   /** where the app's grid would sit to land exactly on the printed lines */
@@ -293,14 +345,18 @@ function MapGridCut(props: { client: TableClient; board: Board | null; meta: Sce
 
   return (
     <>
-      <p class="hint">Finds a grid that is drawn on the map picture, hides it, and sets your own grid to match. The picture file itself is not changed.</p>
-      <Toggle checked={d.autoGrid} onChange={(v) => ui.set({ autoGrid: v })} label="Look for a printed grid when I add a map"
-        hint="Ctrl+Z undoes it. This switch is only for you." />
-      <div class="row wrap">
-        <button class="btn small primary" disabled={busy || !board} onClick={() => void find()}>{busy ? 'Looking…' : cut ? 'Look again' : 'Find and hide it'}</button>
-        {cut && <button class="btn small" onClick={() => void client.updateScene({ mapGrid: null })}>Forget it</button>}
+      <div class="field" role="group" aria-label="Fit the grid to the map">
+        <span class="field-label">Fit the grid to the map</span>
+        <div class="row wrap">
+          {hasPic && <button class="btn small primary" disabled={busy || !board} onClick={() => void find()}>{busy ? 'Looking…' : cut ? 'Look again' : 'Find and hide it'}</button>}
+          {hasPic && <button class={`btn small ${d.tool === 'scale' ? 'primary' : ''}`} onClick={() => ui.set({ tool: d.tool === 'scale' ? 'select' : 'scale' })}>Set scale with two points</button>}
+          <button class={`btn small ${d.tool === 'grid' ? 'primary' : ''}`} onClick={() => ui.set({ tool: d.tool === 'grid' ? 'select' : 'grid' })}>
+            {d.tool === 'grid' ? (hex ? 'Drag a box around some hexes…' : 'Drag a box over the grid squares…') : 'Draw a box to set the grid'}
+          </button>
+        </div>
+        <span class="hint">{hasPic ? 'Find reads a grid that is drawn on the picture and hides it. The other two work from a few clicks.' : 'Add a map picture to find a printed grid or set the scale from it.'}</span>
       </div>
-      {cut && (
+      {hasPic && cut && (
         <>
           <Toggle checked={cut.on} onChange={(v) => { void client.updateScene({ mapGrid: { ...cut, on: v } }); }} label="Hide the map's grid lines"
             hint={cut.hex ? `${cut.hex === 'pointy' ? 'Point-up' : 'Flat-top'} hexes ${round2(cut.p)} px apart, lines about ${round2(cut.t)} px thick. Hidden for your players too.` : `A line every ${round2(cut.p)} px, about ${round2(cut.t)} px thick. Hidden for your players too.`} />
@@ -310,13 +366,24 @@ function MapGridCut(props: { client: TableClient; board: Board | null; meta: Sce
                 onClick={() => { void client.updateScene({ grid: implied }); toast('Your grid now sits on the printed one', 'ok', 2500); }}>Line my grid up with it</button>
             </div>
           )}
-          <Section id="mapgrid-adjust" title="Adjust the hiding" defaultOpen={false}>
-            <SliderField label="Line width" value={cut.t} min={1} max={12} step={0.5} unit="px" onInput={(v) => adjT({ ...cut, t: v })} hint="Make this a little wider if a faint edge of a line is still showing." />
-            <SliderField label="Lines shift left / right" value={round2(cut.x)} min={0} max={Math.max(1, Math.round(cutPer.x))} step={0.1} unit="px" onInput={(v) => adjT({ ...cut, x: v })} />
-            <SliderField label="Lines shift up / down" value={round2(cut.y)} min={0} max={Math.max(1, Math.round(cutPer.y))} step={0.1} unit="px" onInput={(v) => adjT({ ...cut, y: v })} />
-            {cut.hex && <SliderField label="Hex size" value={round2(cut.p)} min={Math.max(8, Math.round(cut.p * 0.85))} max={Math.round(cut.p * 1.15)} step={0.05} unit="px" onInput={(v) => adjT({ ...cut, p: v })} hint="Distance between hex centres. Only needed if the lines drift away from the hexes towards the edges." />}
-          </Section>
         </>
+      )}
+      {hasPic && (
+        <Section id="mapgrid" title="Grid printed on the map" defaultOpen={false}>
+          <Toggle checked={d.autoGrid} onChange={(v) => ui.set({ autoGrid: v })} label="Look for a printed grid when I add a map"
+            hint="Ctrl+Z undoes it. This switch is only for you." />
+          {cut ? (
+            <>
+              <div class="row wrap">
+                <button class="btn small" onClick={() => void client.updateScene({ mapGrid: null })}>Forget it</button>
+              </div>
+              <SliderField label="Line width" value={cut.t} min={1} max={12} step={0.5} unit="px" onInput={(v) => adjT({ ...cut, t: v })} hint="Make this a little wider if a faint edge of a line is still showing." />
+              <SliderField label="Lines shift left / right" value={round2(cut.x)} min={0} max={Math.max(1, Math.round(cutPer.x))} step={0.1} unit="px" onInput={(v) => adjT({ ...cut, x: v })} />
+              <SliderField label="Lines shift up / down" value={round2(cut.y)} min={0} max={Math.max(1, Math.round(cutPer.y))} step={0.1} unit="px" onInput={(v) => adjT({ ...cut, y: v })} />
+              {cut.hex && <SliderField label="Hex size" value={round2(cut.p)} min={Math.max(8, Math.round(cut.p * 0.85))} max={Math.round(cut.p * 1.15)} step={0.05} unit="px" onInput={(v) => adjT({ ...cut, p: v })} hint="Distance between hex centres. Only needed if the lines drift away from the hexes towards the edges." />}
+            </>
+          ) : <p class="hint">Nothing found yet. Press Find and hide it above.</p>}
+        </Section>
       )}
     </>
   );
@@ -382,11 +449,9 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
         </div>
         <Toggle checked={g.visible} onChange={(v) => setGrid({ visible: v })} label="Show grid" />
         <Toggle checked={g.snap} onChange={(v) => setGrid({ snap: v })} label="Snap tokens to grid" hint="Hold Alt while dragging to skip snapping." />
-        {meta.mapUrl && <button class="btn" onClick={() => ui.set({ tool: 'scale' })}>Set scale with two points</button>}
-        <button class={`btn ${d.tool === 'grid' ? 'primary' : ''}`} onClick={() => ui.set({ tool: d.tool === 'grid' ? 'select' : 'grid' })}>
-          {d.tool === 'grid' ? (hex ? 'Drag a box around some hexes…' : 'Drag a box over the grid squares…') : 'Draw a box to set the grid'}
-        </button>
         <Field label="Grid colour"><input type="color" value={g.color} onInput={(e) => gridT({ color: gridColorToSave((e.target as HTMLInputElement).value) })} /></Field>
+
+        <FitGrid client={client} board={board} meta={meta} ui={ui} />
 
         <Section id="grid-fine" title="Fine tune grid" defaultOpen={false}>
           <SliderField label={hex ? 'Hex size (side to side)' : 'Square size'} value={g.cell} min={10} max={300} step={0.1} unit="px" onInput={(v) => gridT({ cell: v })} />
@@ -406,10 +471,6 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
             </Field>
           </div>
         </Section>
-      </Section>
-
-      <Section id="mapgrid" title="Grid printed on the map" defaultOpen={false}>
-        <MapGridCut client={client} board={board} meta={meta} ui={ui} />
       </Section>
 
       <Section id="fog" title="Fog of war">
@@ -498,7 +559,7 @@ function LightingSection(props: { client: TableClient; ui: UiState; board: Board
 }
 
 const LIGHT_BRUSH_FT = [5, 10, 20, 40, 80];
-const SOFT_EDGE_FT = [0, 5, 10, 20, 40];
+const SOFT_EDGE_FT = [0, 10, 20, 40, 80];
 
 /** Paint daylight and dim light straight onto the map, like a light with no source: a bright middle that fades out softly. */
 function PaintedLightCard(props: { client: TableClient; ui: UiState; meta: SceneMeta }) {
@@ -580,7 +641,7 @@ export function TokenList(props: { client: TableClient; ui: UiState; board: Boar
     const owner = t.ownerUid ? client.players.get(t.ownerUid) : null;
     return (
       <li key={t.id} class={d.selection.has(t.id) ? 'on' : ''}
-        onClick={(e) => { ui.select((e as MouseEvent).shiftKey ? [...d.selection, t.id] : [t.id]); board?.centerOn({ x: t.x, y: t.y }); }}
+        onClick={(e) => { const m = e as MouseEvent; if (m.shiftKey || m.ctrlKey || m.metaKey) ui.select(d.selection.has(t.id) ? [...d.selection].filter((x) => x !== t.id) : [...d.selection, t.id]); else { ui.select([t.id]); board?.centerOn({ x: t.x, y: t.y }); } }}
         onDblClick={() => props.onEdit([t.id])}>
         <span class="tok-av" style={{ borderColor: t.ring }}>{t.img ? <img src={t.img} alt="" loading="lazy" /> : isLightMark(t) ? '💡' : (t.name || '?').charAt(0).toUpperCase()}</span>
         <span class="tok-name">

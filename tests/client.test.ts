@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MockBackend } from '../src/backend/mock';
 import { createTable } from '../src/state/account';
+import { snapTokenCenter } from '../src/core/geometry';
 import { TableClient } from '../src/state/client';
 import { P } from '../src/state/paths';
 import type { AuthUser } from '../src/types';
@@ -285,6 +286,28 @@ describe('TableClient over the mock backend', () => {
     await waitFor(() => pl.scene?.tokens.get(id)?.hpPct === 0, 'down for players');
   });
 
+  it('hurts several tokens at once, each by its own amount, in one undo step', async () => {
+    const { dm } = await setup();
+    const a = await dm.addToken({ x: 35, y: 35, name: 'Goblin', hp: 20, maxHp: 20 });
+    const b = await dm.addToken({ x: 135, y: 35, name: 'Wolf', hp: 20, maxHp: 20 });
+    const c = await dm.addToken({ x: 235, y: 35, name: 'Statue' }); // no hit points
+    await waitFor(() => dm.scene?.tokens.get(b)?.hp === 20, 'tokens');
+    await dm.giveTemp([b], 4);
+    await waitFor(() => dm.scene?.tokens.get(b)?.tempHp === 4, 'temporary hit points');
+    const r = await dm.hurt([{ id: a, amount: 14 }, { id: b, amount: 7 }, { id: c, amount: 9 }], 'Fireball');
+    expect(r.map((x) => [x.name, x.hp, x.tempHp])).toEqual([['Goblin', 6, 0], ['Wolf', 17, 0]]);
+    await waitFor(() => dm.scene?.tokens.get(a)?.hp === 6 && dm.scene?.tokens.get(b)?.hp === 17, 'both hurt');
+    expect(dm.scene!.tokens.get(b)!.tempHp).toBe(0); // the temporary points soaked up the first four
+    await dm.history.undo();
+    await waitFor(() => dm.scene?.tokens.get(a)?.hp === 20 && dm.scene?.tokens.get(b)?.hp === 20, 'one undo takes back both');
+    expect(dm.scene!.tokens.get(b)!.tempHp).toBe(4);
+    await dm.history.redo();
+    await waitFor(() => dm.scene?.tokens.get(a)?.hp === 6, 'redo');
+    // healing by its own amount, never past the maximum
+    await dm.hurt([{ id: a, amount: -100 }, { id: b, amount: -1 }], 'Healing');
+    await waitFor(() => dm.scene?.tokens.get(a)?.hp === 20 && dm.scene?.tokens.get(b)?.hp === 18, 'healed');
+  });
+
   it('shows players the real numbers only when asked to, and keeps them current', async () => {
     const { dm, pl } = await setup();
     const id = await dm.addToken({ x: 35, y: 35, name: 'Orc', hp: 30, maxHp: 30, hpShow: 'bar' });
@@ -487,5 +510,42 @@ describe('initiative and light sources', () => {
     await dm.initStep(1);
     await waitFor(() => dm.scene!.init.entries.length === 1, 'the light is dropped when the turn moves');
     expect(dm.scene!.init.entries[0].n).toBe('Goblin');
+  });
+});
+
+describe('a grid of its own on an added empty grid', () => {
+  it('keeps its squares when their size changes, shows to players, and a token snaps to them', async () => {
+    const { dm, pl } = await setup();
+    const id = (await dm.addBlankGrid(6, 4))!;
+    await waitFor(() => dm.scene!.meta!.maps.length === 1, 'the empty grid');
+    const m0 = dm.scene!.meta!.maps[0];
+    expect(m0.w).toBe(6 * 70);
+    expect(dm.mapGrids).toEqual([]);
+    expect(dm.gridAt({ x: m0.x + 10, y: m0.y + 10 })).toBe(dm.grid);
+
+    await dm.updateExtraMap(id, { gs: 35 });
+    await waitFor(() => dm.scene!.meta!.maps[0].gs === 35, 'the squares');
+    const m1 = dm.scene!.meta!.maps[0];
+    expect([m1.w, m1.h]).toEqual([6 * 35, 4 * 35]); // still six by four squares
+    await waitFor(() => pl.scene?.meta?.maps[0]?.gs === 35, 'the players to see it');
+    expect(pl.gridAt({ x: m1.x + 10, y: m1.y + 10 }).cell).toBe(35);
+    expect(pl.gridAt({ x: 5, y: 5 })).toBe(pl.grid);
+
+    // a token put down on it is centred in one of its squares, not the scene's
+    const spot = { x: m1.x + 40, y: m1.y + 40 };
+    const sn = snapTokenCenter(dm.gridAt(spot), 1, spot);
+    expect([(sn.x - m1.x) / 35, (sn.y - m1.y) / 35]).toEqual([1.5, 1.5]);
+
+    await dm.updateExtraMap(id, { gv: false, gc: '#ff0000', gp: '#202020' });
+    await waitFor(() => dm.scene!.meta!.maps[0].gv === false, 'the switch');
+    expect(dm.scene!.meta!.maps[0]).toMatchObject({ gv: false, gc: '#ff0000', gp: '#202020', gs: 35 });
+    expect(dm.gridAt({ x: m1.x + 10, y: m1.y + 10 }).visible).toBe(false);
+
+    await dm.updateExtraMap(id, { gs: null, gv: null, gc: null, gp: null });
+    await waitFor(() => dm.scene!.meta!.maps[0].gs === undefined, 'the reset');
+    const m2 = dm.scene!.meta!.maps[0];
+    expect([m2.gs, m2.gv, m2.gc, m2.gp]).toEqual([undefined, undefined, undefined, undefined]);
+    expect([m2.w, m2.h]).toEqual([6 * 70, 4 * 70]);
+    expect(dm.mapGrids).toEqual([]);
   });
 });

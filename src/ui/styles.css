@@ -512,6 +512,15 @@ input[type=text], input[type=number], input[type=password], select { border-radi
 .chip.on { background: var(--accent); color: var(--on-accent, #fff); border-color: var(--accent) !important; }
 .chip .dot { margin-right: 5px; vertical-align: -1px; }
 .height-pop { min-width: 430px; max-width: 470px; }
+.group-hp { min-width: 440px; max-width: 520px; }
+.group-hp .num { width: 96px; text-align: center; }
+.group-hp-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: 240px; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+.group-hp-list li { display: flex; align-items: center; gap: 8px; padding: 3px 4px; border-radius: 8px; }
+.group-hp-list li.off { opacity: 0.45; }
+.group-hp-list .gh-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.group-hp-list .gh-now { font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 52px; text-align: right; }
+.group-hp-list .gh-next { font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 50px; color: var(--accent); font-weight: 700; }
+.group-hp .hint { margin: 8px 0 0; font-size: 12px; }
 .height-pop .hint { margin: 6px 0 0; font-size: 12px; }
 
 /* ---------- the Effects window: floats over the board so the token stays in view */
@@ -593,6 +602,7 @@ input[type=text], input[type=number], input[type=password], select { border-radi
 /* extra maps in the Scene panel */
 .extra-map { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
 .extra-map.on { border-color: var(--accent); }
+.extra-map .map-grid { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
 
 /* scene folders */
 .folder-select { max-width: 130px; }

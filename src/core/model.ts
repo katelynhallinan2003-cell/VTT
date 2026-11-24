@@ -10,6 +10,10 @@ import { fxToWire, normalizeFx } from './effects';
 /** Token movement is saved to a tenth of a map pixel. Test collisions at that same position. */
 export const tokenCoordinate = (value: number) => Math.round(value * 10) / 10;
 
+/** How far painted light fades out beyond the paint, in feet: the start and the most. */
+export const DEFAULT_SOFT_EDGE_FT = 20;
+export const MAX_SOFT_EDGE_FT = 100;
+
 export const DEFAULT_GRID: GridSettings = {
   shape: 'square', cell: 70, ox: 0, oy: 0, visible: true, color: '#ffffff', opacity: 0.35,
   ft: 5, rule: 'chebyshev', snap: true,
@@ -74,6 +78,10 @@ export function normalizeMaps(raw: any): ExtraMap[] {
     out.push({
       id, url: m.u, w: Math.max(1, num(m.w, 1)), h: Math.max(1, num(m.h, 1)), x: num(m.x, 0), y: num(m.y, 0),
       scale: Math.max(0.01, num(m.s, 1)), name: str(m.n, '').slice(0, 60), show: bool(m.v, true), locked: bool(m.l, true),
+      ...(typeof m.gs === 'number' && m.gs >= 4 && m.gs <= 2000 ? { gs: m.gs } : {}),
+      ...(typeof m.gv === 'boolean' ? { gv: m.gv } : {}),
+      ...(typeof m.gc === 'string' && /^#[0-9a-f]{3,8}$/i.test(m.gc) ? { gc: m.gc } : {}),
+      ...(typeof m.gp === 'string' && /^#[0-9a-f]{3,8}$/i.test(m.gp) ? { gp: m.gp } : {}),
     });
     if (out.length >= MAX_EXTRA_MAPS) break;
   }
@@ -83,7 +91,7 @@ export function normalizeMaps(raw: any): ExtraMap[] {
 export function mapsToWire(maps: ExtraMap[]): Record<string, unknown> | null {
   if (!maps.length) return null;
   const out: Record<string, unknown> = {};
-  for (const m of maps.slice(0, MAX_EXTRA_MAPS)) out[m.id] = { u: m.url, w: m.w, h: m.h, x: Math.round(m.x * 100) / 100, y: Math.round(m.y * 100) / 100, s: Math.round(m.scale * 10000) / 10000, n: m.name || null, v: m.show, l: m.locked };
+  for (const m of maps.slice(0, MAX_EXTRA_MAPS)) out[m.id] = { u: m.url, w: m.w, h: m.h, x: Math.round(m.x * 100) / 100, y: Math.round(m.y * 100) / 100, s: Math.round(m.scale * 10000) / 10000, n: m.name || null, v: m.show, l: m.locked, ...(m.gs != null ? { gs: Math.round(m.gs * 100) / 100 } : {}), ...(m.gv != null ? { gv: m.gv } : {}), ...(m.gc ? { gc: m.gc } : {}), ...(m.gp ? { gp: m.gp } : {}) };
   return out;
 }
 
@@ -123,7 +131,7 @@ export function normalizeSceneMeta(raw: any): SceneMeta {
     },
     light: {
       ambient: m.light?.ambient === 'dim' || m.light?.ambient === 'dark' ? m.light.ambient : 'bright',
-      edge: Math.max(0, Math.min(60, Math.round(num(m.light?.edge, 10)))),
+      edge: Math.max(0, Math.min(MAX_SOFT_EDGE_FT, Math.round(num(m.light?.edge, DEFAULT_SOFT_EDGE_FT)))),
     },
     createdAt: num(m.createdAt, 0),
   };

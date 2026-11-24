@@ -274,7 +274,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
   /** Drop a saved token onto the board where the view is centred. */
   async function addSavedToken(entry: SavedToken) {
     const at = viewCenter();
-    const grid = client.grid;
+    const grid = client.gridAt(at);
     const p = grid.snap ? snapTokenCenter(grid, 1, at) : at;
     try {
       const id = await client.addSavedToken(entry.id, p);
@@ -284,7 +284,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
 
   async function addLibraryToken(item: LibraryItem) {
     const at = viewCenter();
-    const grid = client.grid;
+    const grid = client.gridAt(at);
     const p = grid.snap ? snapTokenCenter(grid, 1, at) : at;
     const id = await client.addToken({ x: p.x, y: p.y, name: item.name, img: item.url, size: 1 });
     ui.select([id]);
@@ -304,7 +304,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       if (toks.every((t) => client.canDo('edit', t))) menuItems.push({ label: lightsOnly ? 'Edit light…' : 'Edit token…', onClick: () => setModal({ kind: 'editToken', ids }) });
       if (!lightsOnly && toks.every((t) => client.canDo('edit', t))) menuItems.push({ label: 'Effects…', onClick: () => setFxWin(ids) });
       if (!lightsOnly && (client.isDM || toks.every((t) => t.ownerUid === client.uid))) menuItems.push({ label: client.isDM ? 'Save to library' : 'Save as my character', onClick: () => void saveTokensToLibrary(client, ids) });
-      if (client.canDo('create')) menuItems.push({ label: 'Duplicate', onClick: () => void client.duplicateTokens(ids, client.grid.cell).then((n) => ui.select(n)) });
+      if (client.canDo('create')) menuItems.push({ label: 'Duplicate', onClick: () => void client.duplicateTokens(ids, client.gridAt(menuToken).cell).then((n) => ui.select(n)) });
       if (!lightsOnly && toks.every((t) => client.canDo('edit', t))) {
         menuItems.push({ label: 'Bring to front', onClick: () => void client.bringToFront(ids) });
         menuItems.push({ label: 'Send to back', onClick: () => void client.sendToBack(ids) });

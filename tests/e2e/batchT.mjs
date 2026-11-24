@@ -151,7 +151,6 @@ check('the button goes away once they match', (await dm.getByRole('button', { na
 await dm.screenshot({ path: '/tmp/shots/t2-aligned.png' });
 
 // the hex size slider is there and redoes the picture
-await dm.locator('.sect-head', { hasText: 'Adjust the hiding' }).click();
 check('hex scenes get a "Hex size" slider in the adjust section', (await dm.locator('.field', { hasText: 'Hex size' }).count()) >= 1);
 await dm.evaluate(() => window.__vtt.client.updateScene({ mapGrid: { ...window.__vtt.client.scene.meta.mapGrid, t: 5 } }));
 await sleep(900);

@@ -75,6 +75,14 @@ export interface ExtraMap {
   show: boolean;
   /** clicking and dragging on it does not move it */
   locked: boolean;
+  /** its own square size in pixels (unset: the scene's) */
+  gs?: number;
+  /** its grid is shown (true) or hidden (false) on this map, whatever the scene's grid does (unset: as the scene's) */
+  gv?: boolean;
+  /** the colour of its grid lines (unset: the scene's) */
+  gc?: string;
+  /** an empty grid's paper colour (unset: picked to suit the lines) */
+  gp?: string;
 }
 
 export interface SceneMeta {

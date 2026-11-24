@@ -189,7 +189,7 @@ check('and Clear still takes them all away', (await tpl()).length === 0);
 
 // ---- #66, #71-#74: paint daylight and dim light (the Light tool, in the Scene panel)
 await dm.evaluate(() => window.__vtt.ui.set({ tool: 'select' }));
-await dm.evaluate(() => window.__vtt.client.updateScene({ light: { ambient: 'dark' } }));
+await dm.evaluate(() => window.__vtt.client.updateScene({ light: { ambient: 'dark', edge: 10 } }));
 await sleep(500);
 const A = [gx(8.5), gy(8.5)], B = [gx(8.5), gy(15.5)];
 check('in the dark, the ground is black to start with', ((await shadeAt(...A)) ?? 0) > 0.8);
@@ -205,12 +205,12 @@ const paintBtn = dm.getByRole('button', { name: 'Paint light', exact: true });
 if (!(await paintBtn.isVisible().catch(() => false))) await dm.locator('.sect-head', { hasText: 'Light and darkness' }).click();
 await paintBtn.waitFor();
 check('Scene, Light and darkness has a Painted light card', (await dm.locator('.card', { hasText: 'Painted light' }).count()) >= 1);
-check('with a Soft edge choice', (await dm.locator('.card', { hasText: 'Soft edge' }).locator('.chip', { hasText: /^Hard$/ }).count()) === 1);
+check('with a Soft edge choice, 20 ft to start', (await dm.locator('.card', { hasText: 'Soft edge' }).locator('.chip', { hasText: /^Hard$/ }).count()) === 1 && (await dm.locator('.card', { hasText: 'Soft edge' }).locator('.chip', { hasText: /^80 ft$/ }).count()) >= 1);
 await paintBtn.click();
 await sleep(200);
 check('Paint light picks the Light tool', await dm.evaluate(() => window.__vtt.ui.data.tool === 'light'));
 check('and offers Daylight, Dim light and Erase', (await dm.locator('.card .seg button', { hasText: /^(Daylight|Dim light|Erase)$/ }).count()) === 3);
-check('and a brush size in feet', (await dm.locator('.card .chip', { hasText: /^80 ft$/ }).count()) === 1);
+check('and a brush size in feet', (await dm.locator('.card .field', { hasText: 'Brush' }).locator('.chip', { hasText: /^80 ft$/ }).count()) === 1);
 await dm.evaluate(() => window.__vtt.ui.set({ lightPaint: 'day', lightBrush: 10 }));
 await drag([gx(6.5), gy(8.5)], [gx(10.5), gy(8.5)]);
 const day = (await draws()).filter((d) => d.dl);
@@ -242,8 +242,8 @@ const across = await dm.evaluate(([x0, y0, y1]) => {
   return out;
 }, [gx(8.5), gy(9.5), gy(12.5)]);
 const steps = across.slice(1).map((v, i) => Math.abs(v - across[i]));
-// the painted edge goes from bright to dim over a few pixels (as a torch does); after it the light fades out smoothly
-check('the bright part meets the dim part softly, not at a line', Math.max(...steps) < 0.25, `largest step ${Math.max(...steps).toFixed(3)}`);
+// the light is as strong just outside the paint as just inside it, and then eases away
+check('the bright part meets the fade softly, not at a line', Math.max(...steps) < 0.12, `largest step ${Math.max(...steps).toFixed(3)}`);
 check('and the fade beyond it has no steps at all', Math.max(...steps.slice(Math.ceil(steps.length * 0.3))) < 0.06, `largest step ${Math.max(...steps.slice(Math.ceil(steps.length * 0.3))).toFixed(3)}`);
 const along = await dm.evaluate(([x0, x1, y]) => {
   const L = window.__vtt.board.lightLayer;
@@ -300,6 +300,24 @@ await dm.evaluate(() => { const c = window.__vtt.client; return c.removeWalls(c.
 await sleep(500);
 check('and taking the wall away shows it again', ((await seenAt(...A)) ?? 0) > 0.9);
 await dm.evaluate((id) => window.__vtt.client.removeTokens([id]), elf);
+
+// ---- #87: the soft edge stops at a wall
+await dm.evaluate(() => window.__vtt.client.updateScene({ light: { edge: 40 } }));
+await sleep(500);
+const beside = [gx(8.5), gy(11.5)], behind = [gx(8.5), gy(13.5)];
+const litBeside = (await shadeAt(...beside)) ?? 1, litBehind = (await shadeAt(...behind)) ?? 1;
+check('with no wall the soft edge reaches well below the paint', litBeside < 0.4 && litBehind < 0.7, JSON.stringify({ litBeside, litBehind }));
+await dm.evaluate((wy) => window.__vtt.client.addWalls([{ a: { x: -3000, y: wy }, b: { x: 9000, y: wy }, k: 'wall', open: false, vis: false, one: 0, h: 0 }], 'Wall'), gy(12.5));
+await sleep(700);
+const besideW = (await shadeAt(...beside)) ?? 1, behindW = (await shadeAt(...behind)) ?? 0;
+check('a wall stops it: the ground on the near side is still lit', besideW < 0.4, JSON.stringify({ besideW }));
+check('and the ground behind the wall is dark', behindW > 0.8, JSON.stringify({ behindW }));
+await dm.screenshot({ path: '/tmp/shots/z16-light-wall.png' });
+await dm.evaluate(() => { const c = window.__vtt.client; return c.removeWalls(c.wallsList().map((w) => w.id)); });
+await sleep(600);
+check('and without the wall it is lit again', ((await shadeAt(...behind)) ?? 1) < 0.7);
+await dm.evaluate(() => window.__vtt.client.updateScene({ light: { edge: 10 } }));
+await sleep(400);
 await dm.evaluate(() => window.__vtt.client.updateScene({ fog: { enabled: false } }));
 
 // twilight too
@@ -318,7 +336,7 @@ await sleep(500);
 await dm.evaluate(() => window.__vtt.ui.set({ tool: 'light', lightPaint: 'erase', lightBrush: 10 }));
 await drag([gx(8), gy(8.5)], [gx(9), gy(8.5)]);
 await sleep(300);
-check('Erase takes painted light away where it passes, and no further', ((await shadeAt(...A)) ?? 0) > 0.6 && ((await shadeAt(gx(6), gy(8.5))) ?? 1) < 0.3, JSON.stringify([await shadeAt(...A), await shadeAt(gx(6), gy(8.5))]));
+check('Erase takes painted light away where it passes, and no further', ((await shadeAt(...A)) ?? 0) > 0.5 && ((await shadeAt(gx(6), gy(8.5))) ?? 1) < 0.3, JSON.stringify([await shadeAt(...A), await shadeAt(gx(6), gy(8.5))]));
 check('an erase stroke was made for each kind of light', (await draws()).filter((d) => d.dl && d.he).length === 2);
 await dm.keyboard.press('Control+z');
 await sleep(500);

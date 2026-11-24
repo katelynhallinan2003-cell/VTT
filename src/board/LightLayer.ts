@@ -106,7 +106,7 @@ export class LightLayer {
     this.shadeKey = key;
     const f: Frame = { origin, scale, w, h };
     const painted = hasPaintedLight(o.painted) ? o.painted : null;
-    if (painted) { this.liftShade.size(w, h); paintLift(this.liftShade.ctx, f, painted, o.ambient, true, { a: this.workA, c: this.workC }); }
+    if (painted) { this.liftShade.size(w, h); paintLift(this.liftShade.ctx, f, painted, o.ambient, true, o.segs, { a: this.workA, c: this.workC }); }
     paintShade(this.shade.ctx, f, o.ambient, o.lights, o.viewers, o.segs, painted ? this.liftShade.canvas : null);
     paintGlow(this.glow.ctx, f, o.ambient === 'bright' ? [] : o.lights, o.segs);
     this.shade.upload();
@@ -140,7 +140,7 @@ export class LightLayer {
     this.seenKey = k;
     this.seenFrame = f;
     const on = hasPaintedLight(painted) ? painted : null;
-    if (on) { this.liftSeen.size(f.w, f.h); paintLift(this.liftSeen.ctx, f, on, 'dark', false, { a: this.workA, c: this.workC }); }
+    if (on) { this.liftSeen.size(f.w, f.h); paintLift(this.liftSeen.ctx, f, on, 'dark', false, segs, { a: this.workA, c: this.workC }); }
     paintSeen(this.seenPaper.ctx, this.litPaper.ctx, f, lights, viewers, segs, on ? this.liftSeen.canvas : null);
     this.seenPaper.upload();
   }

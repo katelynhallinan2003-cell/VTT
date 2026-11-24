@@ -18,6 +18,7 @@ import { LightLayer } from './LightLayer';
 import { colorNum } from '../core/colornum';
 import { DEFAULT_GRID, MAX_VIA, tokenCoordinate } from '../core/model';
 import { isBlankMap, isBlankPage, paperColour } from '../core/blankgrid';
+import { squareLines } from '../core/mapgrids';
 import { pctOf, toPub, visionCircles, withoutLights } from '../core/combat';
 import type { DrawingPatch, NewDrawing, TableClient } from '../state/client';
 import { terrainBrushMode, type StrokeSize, type UiState } from '../state/ui';
@@ -652,7 +653,7 @@ export class Board {
     const meta = this.client.scene?.meta;
     const maps = meta?.maps ?? [];
     const dmView = this.client.isDM && !this.ui.data.dmPreview;
-    const key = `${this.client.scene?.id}|${dmView}|${meta?.grid.color}|${maps.map((m) => `${m.id},${m.url},${m.w},${m.h},${m.x},${m.y},${m.scale},${m.show}`).join(';')}`;
+    const key = `${this.client.scene?.id}|${dmView}|${meta?.grid.color}|${maps.map((m) => `${m.id},${m.url},${m.w},${m.h},${m.x},${m.y},${m.scale},${m.show},${m.gc ?? ''},${m.gp ?? ''}`).join(';')}`;
     if (key === this.extrasKey) return;
     this.extrasKey = key;
     const want = new Map(maps.map((m) => [m.id, m]));
@@ -683,7 +684,7 @@ export class Board {
       e.sprite.position.set(m.x, m.y);
       if (isBlankMap(m.url)) {
         e.sprite.width = m.w * m.scale; e.sprite.height = m.h * m.scale;
-        e.sprite.tint = paperColour(meta?.grid.color ?? '#ffffff');
+        e.sprite.tint = m.gp ? num(m.gp) : paperColour(m.gc || (meta?.grid.color ?? '#ffffff'));
         e.sprite.visible = m.show || dmView;
       } else if (nat) { e.sprite.scale.set(m.scale * nat); e.sprite.visible = m.show || dmView; }
       e.sprite.alpha = m.show ? 1 : 0.45;
@@ -874,7 +875,7 @@ export class Board {
   private tokenCtx(t: Token): TokenCtx {
     const c = this.client;
     return {
-      grid: c.grid,
+      grid: c.gridAt({ x: t.x, y: t.y }),
       showLabel: t.label !== 'dm' || (c.isDM && !this.ui.data.dmPreview),
       textRes: this.textRes,
       health: this.healthFor(t),
@@ -944,11 +945,10 @@ export class Board {
   }
 
   private hitToken(p: Vec): Token | null {
-    const grid = this.client.grid;
     const list = [...this.views.values()].sort((a, b) => b.container.zIndex - a.container.zIndex);
     for (const v of list) {
       if (this.outOfSight.has(v.token.id)) continue;
-      if (pointInToken({ ...v.token, x: v.display.x, y: v.display.y }, grid, p)) return v.token;
+      if (pointInToken({ ...v.token, x: v.display.x, y: v.display.y }, this.client.gridAt(v.display), p)) return v.token;
     }
     return null;
   }
@@ -1054,7 +1054,7 @@ export class Board {
 
   /** What a walk through these points costs, counting stairs and difficult ground (a flyer is not slowed by either). */
   private moveCost(path: Vec[], fly: boolean): { ft: number; note: string } {
-    const grid = this.client.grid;
+    const grid = this.client.gridAt(path[0] ?? { x: 0, y: 0 });
     const base = pathFt(grid, path);
     if (fly || (!this.zones.areas.length && !this.rough.areas.length)) return { ft: base, note: '' };
     const ctx = { ground: (p: Vec) => groundAtTerrain(this.zones, p), surface: (p: Vec) => groundAt(this.zones, p), rough: (p: Vec) => isRough(this.rough, p) };
@@ -1503,7 +1503,6 @@ export class Board {
     if (!scene || !meta) return null;
     const ambient = meta.light.ambient;
     if (ambient === 'bright') return null;
-    const g = meta.grid;
     const lights: LightSrc[] = [];
     const viewers: Viewer[] = [];
     for (const v of this.views.values()) {
@@ -1511,6 +1510,7 @@ export class Board {
       // a token hidden from the players is gone for them, light and sight included, so it is gone here too
       if (t.hidden) continue;
       const at = v.testPos ? { x: t.x, y: t.y } : v.display;
+      const g = this.client.gridAt(at); // a map with squares of its own measures its feet in them
       const l = t.light ? lightOf(t, g, at, this.altAt(t.id, at)) : null;
       if (l) lights.push(l);
       const w = viewerOf(t, g, at, this.altAt(t.id, at));
@@ -1781,30 +1781,44 @@ export class Board {
     const g = this.gridG;
     g.clear();
     const meta = this.client.scene?.meta;
-    if (!meta || !meta.grid.visible) return;
-    const { cell, ox, oy, color, opacity } = meta.grid;
-    if (cell * this.cam.zoom < 5) return;
+    if (!meta) return;
+    const dmView = this.client.isDM && !this.ui.data.dmPreview;
+    // a map that has a grid of its own takes the scene's grid off its patch of the board (players do not see one they cannot see)
+    const own = this.client.mapGrids.filter((o) => {
+      const m = meta.maps.find((x) => x.id === o.id);
+      return !!m && (m.show || dmView);
+    });
+    if (!meta.grid.visible && !own.some((o) => o.grid.visible)) return;
     const area = sceneRect(meta) ?? { x: 0, y: 0, w: 2000, h: 1500 };
     const vis = this.visibleRect();
-    const x0 = Math.max(area.x, vis.x);
-    const x1 = Math.min(area.x + area.w, vis.x + vis.w);
-    const y0 = Math.max(area.y, vis.y);
-    const y1 = Math.min(area.y + area.h, vis.y + vis.h);
-    if (x1 <= x0 || y1 <= y0) return;
-    if (isHex(meta.grid)) {
-      // every hex draws three of its six sides, so a side shared by two hexes is drawn once (a see-through line stays an even colour)
-      const pad = cell;
-      for (const c of hexCentersIn(meta.grid, { x: x0 - pad, y: y0 - pad, w: x1 - x0 + pad * 2, h: y1 - y0 + pad * 2 })) {
-        if (c.x < area.x || c.x > area.x + area.w || c.y < area.y || c.y > area.y + area.h) continue;
-        const k = hexCorners(meta.grid, c);
-        g.moveTo(k[0].x, k[0].y).lineTo(k[1].x, k[1].y).lineTo(k[2].x, k[2].y).lineTo(k[3].x, k[3].y);
+    const lw = 1.25 / this.cam.zoom;
+    const clip = (r: Rect): Rect | null => {
+      const x0 = Math.max(r.x, vis.x), x1 = Math.min(r.x + r.w, vis.x + vis.w);
+      const y0 = Math.max(r.y, vis.y), y1 = Math.min(r.y + r.h, vis.y + vis.h);
+      return x1 > x0 && y1 > y0 ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null;
+    };
+    const drawIn = (grid: GridSettings, outer: Rect, holes: readonly Rect[]) => {
+      const { cell, ox, oy } = grid;
+      if (!grid.visible || cell * this.cam.zoom < 5) return;
+      const r = clip(outer);
+      if (!r) return;
+      const inHole = (p: Vec) => holes.some((h) => p.x > h.x && p.x < h.x + h.w && p.y > h.y && p.y < h.y + h.h);
+      if (isHex(grid)) {
+        // every hex draws three of its six sides, so a side shared by two hexes is drawn once (a see-through line stays an even colour)
+        for (const c of hexCentersIn(grid, { x: r.x - cell, y: r.y - cell, w: r.w + cell * 2, h: r.h + cell * 2 })) {
+          if (c.x < outer.x || c.x > outer.x + outer.w || c.y < outer.y || c.y > outer.y + outer.h || inHole(c)) continue;
+          const k = hexCorners(grid, c);
+          g.moveTo(k[0].x, k[0].y).lineTo(k[1].x, k[1].y).lineTo(k[2].x, k[2].y).lineTo(k[3].x, k[3].y);
+        }
+      } else {
+        const lines = squareLines(grid, r, holes);
+        for (const [x, a, b] of lines.v) g.moveTo(x, a).lineTo(x, b);
+        for (const [y, a, b] of lines.h) g.moveTo(a, y).lineTo(b, y);
       }
-      g.stroke({ width: 1.25 / this.cam.zoom, color: num(color), alpha: opacity });
-      return;
-    }
-    for (let i = Math.ceil((x0 - ox) / cell); ox + i * cell <= x1; i++) g.moveTo(ox + i * cell, y0).lineTo(ox + i * cell, y1);
-    for (let j = Math.ceil((y0 - oy) / cell); oy + j * cell <= y1; j++) g.moveTo(x0, oy + j * cell).lineTo(x1, oy + j * cell);
-    g.stroke({ width: 1.25 / this.cam.zoom, color: num(color), alpha: opacity });
+      g.stroke({ width: lw, color: num(grid.color), alpha: grid.opacity });
+    };
+    drawIn(meta.grid, area, own.map((o) => o.rect));
+    for (const o of own) drawIn(o.grid, o.rect, []);
   }
 
   // ------------------------------------------------------------------ fog
@@ -1973,7 +1987,7 @@ export class Board {
 
   /** A measurement of one or more legs. Returns the next free label slot. */
   private paintRuler(g: Graphics, z: number, r: { a: Vec; b: Vec; via?: Vec[] }, color: number, name: string, li: number): number {
-    const grid = this.client.grid;
+    const grid = this.client.gridAt(r.a);
     const pts = [r.a, ...(r.via ?? []), r.b];
     for (const [w, c, a] of [[6 / z, 0x000000, 0.35], [3 / z, color, 1]] as const) {
       g.moveTo(pts[0].x, pts[0].y);
@@ -2471,7 +2485,7 @@ export class Board {
    */
   /** Where an arrow-key step ends. On hexes it is put on the exact hex, so repeated steps never drift off the grid. */
   private nudged(_t: unknown, size: number, to: Vec): Vec {
-    const g = this.client.grid;
+    const g = this.client.gridAt(to);
     return g.snap && isHex(g) ? snapTokenCenter(g, size, to) : to;
   }
 
@@ -2490,10 +2504,10 @@ export class Board {
     const toks = [...this.ui.data.selection].map((id) => c.scene?.tokens.get(id)).filter((t): t is Token => !!t && c.canDo('move', t));
     if (!toks.length || !c.isDM) return;
     const cx = toks.reduce((a, t) => a + t.x, 0) / toks.length, cy = toks.reduce((a, t) => a + t.y, 0) / toks.length;
-    const g = c.grid;
     const before = toks.map((t) => ({ id: t.id, x: t.x, y: t.y }));
     const moves = toks.map((t) => {
       const p = { x: at.x + (t.x - cx), y: at.y + (t.y - cy) };
+      const g = c.gridAt(p);
       return { id: t.id, ...(g.snap ? snapTokenCenter(g, t.size, p) : p) };
     });
     void c.moveTokens(moves, before, { teleport: true });
@@ -3080,12 +3094,15 @@ export class Board {
     let dy = w.y - d.start.y;
     if (!d.moved && Math.hypot(dx, dy) * this.cam.zoom < 4) return;
     d.moved = true;
-    const grid = this.client.grid;
     const anchorV = this.views.get(d.anchor);
     const anchorO = d.origins.get(d.anchor);
-    const snapIt = !!anchorV && !!anchorO && grid.snap && !e.altKey;
+    // the squares that count are those of the map the token is being put down on
+    const snapIt = !!anchorV && !!anchorO && !e.altKey && this.client.gridAt({ x: anchorO.x + dx, y: anchorO.y + dy }).snap;
     const snapDelta = snapIt ? (v: Vec): Vec => {
-      const sn = snapTokenCenter(grid, anchorV!.token.size, { x: anchorO!.x + v.x, y: anchorO!.y + v.y });
+      const to = { x: anchorO!.x + v.x, y: anchorO!.y + v.y };
+      const gg = this.client.gridAt(to);
+      if (!gg.snap) return v;
+      const sn = snapTokenCenter(gg, anchorV!.token.size, to);
       return { x: sn.x - anchorO!.x, y: sn.y - anchorO!.y };
     } : null;
     if (snapDelta) { const sn = snapDelta({ x: dx, y: dy }); dx = sn.x; dy = sn.y; }
@@ -3101,7 +3118,7 @@ export class Board {
       v.display = { x: o.x + dx, y: o.y + dy };
       v.target = { ...v.display };
       moves.push({ id, x: v.display.x, y: v.display.y });
-      v.setAlt(this.heightOf(v.token, v.display), grid);
+      v.setAlt(this.heightOf(v.token, v.display), this.client.gridAt(v.display));
     }
     if (!this.ui.data.testMove) this.sendMoves(moves, this.teleportHeld);
   }

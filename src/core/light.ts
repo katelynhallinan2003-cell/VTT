@@ -241,11 +241,36 @@ export function paintStrokes(ctx: Ctx, f: Frame, t: Terrain): void {
 }
 
 /**
+ * The cells of frame `g` that a wall covers, a little thicker than the wall so light cannot slip through a corner.
+ * One-way pieces (cliff edges) are left out: the fade of painted light carries on past those. Uses `ctx` as scratch space.
+ */
+export function wallCells(ctx: Ctx, g: Frame, segs: Seg[]): Uint8Array | null {
+  const list = segs.filter((s) => !s.one);
+  if (!list.length) return null;
+  toScreen(ctx);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.clearRect(0, 0, g.w, g.h);
+  toWorld(ctx, g);
+  ctx.strokeStyle = '#fff';
+  ctx.lineCap = 'round';
+  ctx.lineWidth = 2.2 / g.scale;
+  ctx.beginPath();
+  for (const s of list) { ctx.moveTo(s.a.x, s.a.y); ctx.lineTo(s.b.x, s.b.y); }
+  ctx.stroke();
+  toScreen(ctx);
+  const px = ctx.getImageData(0, 0, g.w, g.h).data;
+  const out = new Uint8Array(g.w * g.h);
+  let any = false;
+  for (let i = 0; i < out.length; i++) if (px[i * 4 + 3] > 40) { out[i] = 1; any = true; }
+  return any ? out : null;
+}
+
+/**
  * How much of the dark the painted light lifts, as white on `ctx` (a canvas of frame `f`): see-through where it lifts nothing.
  * Daylight lifts all of it and dim light half (and only in the dark: in twilight everything is dim already); out to the soft edge
- * it fades to nothing. `graded` false gives a plain lit-or-not shape (for sight). The soft edge is worked out on a coarser grid, which also keeps it smooth.
+ * it fades to nothing, and walls (`segs`) stop that fade. `graded` false gives a plain lit-or-not shape (for sight). The soft edge is worked out on a coarser grid, which also keeps it smooth.
  */
-export function paintLift(ctx: Ctx, f: Frame, p: PaintedLight, ambient: Ambient, graded: boolean, work: { a: Scratch; c: Scratch }): void {
+export function paintLift(ctx: Ctx, f: Frame, p: PaintedLight, ambient: Ambient, graded: boolean, segs: Seg[], work: { a: Scratch; c: Scratch }): void {
   toScreen(ctx);
   ctx.globalCompositeOperation = 'source-over';
   ctx.clearRect(0, 0, f.w, f.h);
@@ -258,12 +283,13 @@ export function paintLift(ctx: Ctx, f: Frame, p: PaintedLight, ambient: Ambient,
   work.a.size(g.w, g.h);
   work.c.size(g.w, g.h);
   const total = new Float32Array(g.w * g.h);
+  const block = p.edge > 0 ? wallCells(work.a.ctx, g, segs) : null;
   for (const [t, lift] of kinds) {
     paintStrokes(work.a.ctx, g, t);
     const px = work.a.ctx.getImageData(0, 0, g.w, g.h).data;
     const cover = new Float32Array(g.w * g.h);
     for (let i = 0; i < cover.length; i++) cover[i] = px[i * 4 + 3] / 255;
-    const one = liftField(cover, g.w, g.h, p.edge * g.scale, lift, graded);
+    const one = liftField(cover, g.w, g.h, p.edge * g.scale, lift, graded, block);
     for (let i = 0; i < total.length; i++) if (one[i] > total[i]) total[i] = one[i];
   }
   const img = work.c.ctx.createImageData(g.w, g.h);

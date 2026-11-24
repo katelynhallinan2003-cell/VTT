@@ -27,23 +27,6 @@ Carried over from the old `TASKS.md` on 2026-11-22 (asked 2026-11-21, before thi
 - [ ] **#6 Handout pop-up for players** (waiting on user) (added 2026-11-21): two causes were fixed in round 7a.
   #3 is done (rules republished 2026-11-22), so the user can check it now.
 
-Asked 2026-11-23, all in one message (the user also attached `SeasideMap.jpg` and `tunnel.webp` as maps the wall detector handles badly):
-
-
-
-Asked 2026-11-23, third message (14:43):
-
-Asked 2026-11-23, fourth message (16:13):
-
-- [ ] **#87 Painted daylight is blocked by walls** (in progress) (added 2026-11-23): "painted daylight should be blocked by walls."
-- [ ] **#88 The soft edge of painted light is still very hard, make it softer** (added 2026-11-23): "Painted daylights edge from brush to soft is still very hard, can it be softer."
-- [ ] **#89 Select several tokens and apply damage, healing or temporary hit points to all of them** (added 2026-11-23): "yes to the ability to select multiple tokens and apply damage to them, or healing (maybe like, hold a button down and select multiple and it then lets you apply the effect, hp plus or minus, adding temp hp, to those selected tokens."
-- [ ] **#90 Better organisation of Grid, Grid printed on the map and Fine tune grid** (added 2026-11-23): "The organization of grid/grid printed on map/fine tune grid can be better."
-- [ ] **#91 An added second map or empty grid can have a grid of a different scale** (added 2026-11-23): "when you add a second map/empty grid, it should be able to have a different scale grid."
-- [ ] **#92 An added map or empty grid has its own grid on/off switch** (added 2026-11-23): "toggled on and off seperately from the other image on the page."
-- [ ] **#93 The colour of an added empty grid is adjustable** (added 2026-11-23): "the color of the added empty grid should be adjustable."
-
-
 ## Ideas (not requested)
 
 Suggestions nobody has asked for, carried over from the old `TASKS.md`. Do not build these unless the user asks; if
@@ -211,3 +194,10 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
 - [x] **#84 "Add a second map" is too slow ("Adding..") or does not work** (added 2026-11-23, completed 2026-11-23). Done: the cause was: the slowness was the picture upload itself. Adding a map from the library is now instant (no upload), an upload shows what it is doing ("Uploading…" then "Adding…") and the window closes when it is on the board. Saving the upload to the library is a tick.
 - [x] **#85 "Add a second map" only offers upload, not the library** (added 2026-11-23, completed 2026-11-23): "it didnt give the option to select a map from the library it only said upload so that needs to be fixed." Done: one **Add a map** window: Upload map…, **From your library** (click a picture to add it; search once there are many; hover to enlarge) and an empty grid.
 - [x] **#86 "See as this player" in the Players tab, as a plain toggle** (added 2026-11-23, completed 2026-11-23): "sure a see as this player view is an option though i want to see the player view toggle as just a toggle rather than it opening a menu, so put it inside the player tab." Done: a plain **Player view** switch at the top of the Players tab (same flag as the eye button and **O**). **Not built:** a "see as this one player" choice, because every token with sight shares one vision here, so it would look exactly like the player view you already have; say if you still want it.
+- [x] **#87 Painted daylight is blocked by walls** (added 2026-11-23, completed 2026-11-23): "painted daylight should be blocked by walls." Done: the glow beyond the paint spreads round walls instead of through them, the way a lamp's light does; one-way cliff edges do not stop it.
+- [x] **#88 The soft edge of painted light is still very hard, make it softer** (added 2026-11-23, completed 2026-11-23): "Painted daylights edge from brush to soft is still very hard, can it be softer." Done: the fade now starts at full strength right at the edge of the paint and eases away smoothly (it used to drop to half at once), the default soft edge is 20 ft (was 10) and goes up to 100 ft (was 60); the choices are 0, 10, 20, 40 and 80 ft. A scene that already has a saved soft edge keeps its number, which now looks softer.
+- [x] **#89 Select several tokens and apply damage, healing or temporary hit points to all of them** (added 2026-11-23, completed 2026-11-23): "yes to the ability to select multiple tokens and apply damage to them, or healing (maybe like, hold a button down and select multiple...". Done: select several tokens (Shift, Ctrl or Cmd-click in the Tokens tab or on the board, or drag a box) and the token bar gets a **Group HP** button: type one number, choose Damage, Heal or Temp HP, tick who is hit, mark ½ for those that made the save, and Apply. Every row shows what the token will have afterwards. It is one undo step.
+- [x] **#90 Better organisation of Grid, Grid printed on the map and Fine tune grid** (added 2026-11-23, completed 2026-11-23): "The organization of grid/grid printed on map/fine tune grid can be better." Done: Scene > Grid reads in one order: grid type, Show grid, Snap tokens, Grid colour, **Fit the grid to the map** (Find and hide it, Set scale with two points, Draw a box), then three folded sections: Grid printed on the map, Fine tune grid, Distance rules. The "Hide the map's grid lines" switch sits right under Fit.
+- [x] **#91 An added second map or empty grid can have a grid of a different scale** (added 2026-11-23, completed 2026-11-23): "when you add a second map/empty grid, it should be able to have a different scale grid." Done: each added map has **Square size here** (its own squares in pixels, with **Same square size as the scene**). Its grid starts on its top left corner and the scene's grid is left out of that patch. Tokens on it are as big as its squares and snap to them; the ruler, test-move distance and light and sight radius use them too. **Limit:** feet per square, the diagonal rule and square or hex stay the scene's, and spell templates, heights, painted ground, wall snapping and fog still use the scene's grid. An empty grid keeps its number of squares when its square size changes.
+- [x] **#92 An added map or empty grid has its own grid on/off switch** (added 2026-11-23, completed 2026-11-23): "toggled on and off seperately from the other image on the page." Done: **Show the grid here** on every added map, separate from the scene's Show grid (it can turn a grid on where the scene's is off, and off where it is on).
+- [x] **#93 The colour of an added empty grid is adjustable** (added 2026-11-23, completed 2026-11-23): "the color of the added empty grid should be adjustable." Done: **Grid colour here** (with **Same as the scene**) for the lines, and **Paper colour** for an empty grid's squares (with **Pick it to suit the lines**, which is what it did before).

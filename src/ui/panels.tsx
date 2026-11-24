@@ -67,8 +67,9 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
   const sizeLabel = lights ? (t0.light ? `${t0.light.b} ft bright, ${t0.light.d} ft dim` : 'Light') : TOKEN_SIZES.find((s) => s.size === t0.size)?.label ?? `${t0.size} squares`;
   const viewerSeesState = !client.isDM && !multi && t0.hpShow !== 'off' && t0.hpPct != null && healthState(t0.hpPct) !== 'ok';
   const viewerSeesNumbers = !client.isDM && !multi && t0.hpShow === 'numbers' && t0.hpNow != null && t0.hpCap != null;
-  const sub = multi ? (lights ? `${tokens.length} lights` : '') : [sizeLabel, viewerSeesNumbers ? `${t0.hpNow}/${t0.hpCap} HP` : '', viewerSeesState ? HEALTH_LABEL[healthState(t0.hpPct)] : '', t0.hidden ? 'hidden' : '', t0.locked ? 'locked' : '', t0.fx.map((e) => e.n).join(', ')].filter(Boolean).join(' · ');
-  const tracked = client.isDM ? tokens.filter((t) => t.hp != null && t.maxHp != null) : [];
+  const sub = multi ? (lights ? `${tokens.length} lights` : '') : [sizeLabel, viewerSeesNumbers ? `${t0.hpNow}/${t0.hpCap} HP` : '', viewerSeesState ? HEALTH_LABEL[healthState(t0.hpPct)] : '', t0.hidden ? (lights ? 'marker hidden' : 'hidden') : '', t0.locked ? 'locked' : '', t0.fx.map((e) => e.n).join(', ')].filter(Boolean).join(' · ');
+  // a light has no hit points, effects or height: only what it shines, its name, and whether its marker shows
+  const tracked = client.isDM && !lights ? tokens.filter((t) => t.hp != null && t.maxHp != null) : [];
   const canAura = !multi && editable && !lights;
   const zones = zonesOf(client.scene?.draws.values() ?? [], client.grid);
   const alts = tokens.map((t) => altitudeOf(t, groundAt(zones, t)));
@@ -105,7 +106,7 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
           Effects{!multi && t0.fx.length ? ` (${t0.fx.length})` : ''}
         </button>
       )}
-      {editable && (
+      {editable && !lights && (
         <button class={`btn small ${heightOpen ? 'primary' : ''}`} title="How high it is: flying, or standing on high ground. ] and [ raise and lower it."
           onClick={() => { setHeightOpen(!heightOpen); setAuraOpen(false); setHpOpen(false); }}>
           Height{altText ? ` ${altText}` : ''}
@@ -117,8 +118,8 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
         </button>
       )}
       {client.isDM && (
-        <button class="btn small" title={allHidden ? 'Players can not see it. Click to show it to them.' : 'Hide it from every player (you still see it, dimmed).'}
-          onClick={() => void client.updateTokens(ids, { hidden: !allHidden })}>{allHidden ? 'Show to players' : 'Hide from players'}</button>
+        <button class="btn small" title={lights ? (allHidden ? 'Players see only the light, not the marker. Click to show them the marker too.' : 'Hide the marker from players. The light it gives off still shines for them.') : allHidden ? 'Players can not see it. Click to show it to them.' : 'Hide it from every player (you still see it, dimmed).'}
+          onClick={() => void client.updateTokens(ids, { hidden: !allHidden })}>{lights ? (allHidden ? 'Show marker' : 'Hide marker') : allHidden ? 'Show to players' : 'Hide from players'}</button>
       )}
       <button class="icon-btn" title="Deselect" onClick={() => ui.select([])}>✕</button>
     </div>
@@ -526,9 +527,9 @@ function LightingSection(props: { client: TableClient; ui: UiState; board: Board
     const x = client.grid.ox + (Math.floor((at.x - client.grid.ox) / cell) + 0.5) * cell;
     const y = client.grid.oy + (Math.floor((at.y - client.grid.oy) / cell) + 0.5) * cell;
     const hex = client.grid.shape !== 'square';
-    const id = await client.addToken({ x: hex ? at.x : x, y: hex ? at.y : y, name: p.name, size: 0.5, shape: 'none', label: 'dm', light: { ...p.light } });
+    const id = await client.addToken({ x: hex ? at.x : x, y: hex ? at.y : y, name: p.name, size: 0.5, shape: 'none', label: 'dm', hidden: true, light: { ...p.light } });
     ui.select([id]);
-    toast(`${p.name} placed. Drag it where it should shine, or double-click it to change it.`, 'ok', 3500);
+    toast(`${p.name} placed. Drag it where it should shine, or double-click it to change it. Players see its light, not the marker.`, 'ok', 3500);
   }
   return (
     <>
@@ -552,7 +553,7 @@ function LightingSection(props: { client: TableClient; ui: UiState; board: Board
         <button class="btn small" disabled={!board} onClick={() => void place()}>Place a light</button>
         {props.onAutoLights && <button class="btn small" title="Work out where lights belong (lamps on the picture, unlit rooms) and add them all at once" onClick={props.onAutoLights}>Auto-add lights…</button>}
       </div>
-      <p class="hint">Everyone sees a placed light unless you hide it. A token can carry a light too: Edit token, then Sight and lights.</p>
+      <p class="hint">A placed light shines for everyone; its marker is only on your screen. A token can carry a light too: Edit token, then Sight and lights.</p>
       <PaintedLightCard client={client} ui={ui} meta={meta} />
     </>
   );
@@ -649,7 +650,7 @@ export function TokenList(props: { client: TableClient; ui: UiState; board: Boar
           {owner && <span class="tok-sub"><span class="dot" style={{ background: owner.color }} /> {owner.name}</span>}
           {t.hp != null && t.maxHp != null && <span class="tok-sub"><HpBar pct={pctOf(t.hp, t.maxHp) ?? 0} width={46} /> {t.hp}/{t.maxHp}</span>}
         </span>
-        <button class={`icon-btn ${t.hidden ? 'on' : ''}`} title={t.hidden ? 'Hidden from players. Click to reveal.' : 'Visible to players. Click to hide.'} aria-label={t.hidden ? `Show ${t.name || 'token'} to players` : `Hide ${t.name || 'token'} from players`}
+        <button class={`icon-btn ${t.hidden ? 'on' : ''}`} title={isLightMark(t) ? (t.hidden ? 'Only the light shows to players, not the marker. Click to show the marker.' : 'Players see the marker. Click to hide it (the light stays).') : t.hidden ? 'Hidden from players. Click to reveal.' : 'Visible to players. Click to hide.'} aria-label={isLightMark(t) ? (t.hidden ? `Show the marker of ${t.name || 'light'} to players` : `Hide the marker of ${t.name || 'light'} from players`) : t.hidden ? `Show ${t.name || 'token'} to players` : `Hide ${t.name || 'token'} from players`}
           onClick={(e) => { e.stopPropagation(); void client.updateTokens([t.id], { hidden: !t.hidden }); }}>{t.hidden ? '🙈' : '👁'}</button>
         <button class={`icon-btn ${t.locked ? 'on' : ''}`} title={t.locked ? 'Locked. Click to unlock.' : 'Click to lock in place.'} aria-label={t.locked ? `Unlock ${t.name || 'token'}` : `Lock ${t.name || 'token'} in place`}
           onClick={(e) => { e.stopPropagation(); void client.updateTokens([t.id], { locked: !t.locked }); }}>{t.locked ? '🔒' : '🔓'}</button>

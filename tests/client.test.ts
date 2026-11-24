@@ -549,3 +549,59 @@ describe('a grid of its own on an added empty grid', () => {
     expect(dm.mapGrids).toEqual([]);
   });
 });
+
+describe('a light whose marker is hidden from players', () => {
+  const torch = { x: 105, y: 105, name: 'Torch', size: 0.5, shape: 'none' as const, label: 'dm' as const, light: { b: 20, d: 20, c: '#ffc27a' } };
+
+  it('is kept where players can read it, so they still get its light; only the marker is hidden', async () => {
+    const { dm, pl, dmB, tid, sid } = await setup();
+    const id = await dm.addToken({ ...torch, hidden: true });
+    await waitFor(() => !!pl.scene?.tokens.get(id), 'the light on the player');
+    expect(dm.scene!.tokens.get(id)!.hidden).toBe(true);
+    expect(pl.scene!.tokens.get(id)!.hidden).toBe(true);
+    expect(pl.scene!.tokens.get(id)!.light).toEqual(torch.light);
+    const dump = dmB.dump().tables[tid];
+    expect(dump.scenes[sid].tokens[id].hide).toBe(true);
+    expect(dump.dm?.scenes?.[sid]?.tokens?.[id]).toBeUndefined();
+
+    // showing the marker only flips the flag, in the same place
+    await dm.updateToken(id, { hidden: false });
+    await waitFor(() => pl.scene?.tokens.get(id)?.hidden === false, 'the marker shown');
+    expect(dmB.dump().tables[tid].scenes[sid].tokens[id].hide).toBeUndefined();
+    await dm.updateTokens([id], { hidden: true, name: 'Lantern' });
+    await waitFor(() => pl.scene?.tokens.get(id)?.hidden === true && pl.scene?.tokens.get(id)?.name === 'Lantern', 'hidden again, with the new name');
+
+    // and it goes away for everybody when it is deleted
+    await dm.removeTokens([id]);
+    await waitFor(() => !dm.scene!.tokens.has(id) && !pl.scene!.tokens.has(id), 'the light removed');
+  });
+
+  it('is not what a hidden creature is: that is still kept from players altogether', async () => {
+    const { dm, pl, dmB, tid, sid } = await setup();
+    const id = await dm.addToken({ x: 70, y: 70, name: 'Ambusher', hidden: true, light: { b: 10, d: 10, c: '#ffffff' } });
+    await waitFor(() => !!dm.scene?.tokens.get(id), 'the creature on the DM');
+    await sleep(60);
+    expect(pl.scene!.tokens.has(id)).toBe(false);
+    expect(dmB.dump().tables[tid].dm.scenes[sid].tokens[id]).toBeTruthy();
+    expect(dmB.dump().tables[tid].scenes[sid].tokens?.[id]).toBeUndefined();
+  });
+
+  it('moves a hidden light from the DM-only part, where older tables kept it, to where players can read it', async () => {
+    const { dm, pl, dmB, tid, sid } = await setup();
+    await dmB.update({ [P.dmSceneToken(tid, sid, 'old')]: { name: 'Old torch', x: 140, y: 70, size: 0.5, shape: 'none', label: 'dm', light: { b: 20, d: 20, c: '#ffd9a0' }, z: 1 } });
+    await waitFor(() => !!pl.scene?.tokens.get('old'), 'the old light to reach the player');
+    expect(pl.scene!.tokens.get('old')!.hidden).toBe(true);
+    expect(dmB.dump().tables[tid].dm?.scenes?.[sid]?.tokens?.old).toBeUndefined();
+    expect(dm.scene!.tokens.get('old')?.hidden).toBe(true);
+  });
+
+  it('goes back to the DM-only part if it stops being a light', async () => {
+    const { dm, pl, dmB, tid, sid } = await setup();
+    const id = await dm.addToken({ ...torch, hidden: true });
+    await waitFor(() => !!pl.scene?.tokens.get(id), 'the light on the player');
+    await dm.updateToken(id, { shape: 'circle' }); // now a creature carrying a light
+    await waitFor(() => !pl.scene!.tokens.has(id), 'the creature gone from the player');
+    expect(dmB.dump().tables[tid].dm.scenes[sid].tokens[id]).toBeTruthy();
+    expect(dm.scene!.tokens.get(id)!.hidden).toBe(true);
+  });
+});

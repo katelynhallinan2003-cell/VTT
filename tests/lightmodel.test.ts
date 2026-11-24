@@ -33,3 +33,18 @@ describe('light on tokens and scenes', () => {
     expect(lit.light).toEqual({ b: 20, d: 20, c: '#ffc27a' });
   });
 });
+
+describe('the marker of a light-only mark can be hidden while the light stays public', () => {
+  const lamp = { name: 'Lamp', shape: 'none', size: 0.5, light: { b: 20, d: 20, c: '#ffc27a' } };
+  it('`hide` is read for a light-only mark, and written only for one', () => {
+    expect(normalizeToken('a', { ...lamp, hide: true }, false).hidden).toBe(true);
+    expect(normalizeToken('a', lamp, false).hidden).toBe(false);
+    // a creature, a picture or a mark with no light cannot be hidden this way: that is the DM-only part's job
+    expect(normalizeToken('a', { ...lamp, shape: 'circle', hide: true }, false).hidden).toBe(false);
+    expect(normalizeToken('a', { ...lamp, img: 'x.png', hide: true }, false).hidden).toBe(false);
+    expect(normalizeToken('a', { name: 'x', shape: 'none', hide: true }, false).hidden).toBe(false);
+    expect(tokenToWire(normalizeToken('a', { ...lamp, hide: true }, false)).hide).toBe(true);
+    expect('hide' in tokenToWire(normalizeToken('a', lamp, false))).toBe(false);
+    expect('hide' in tokenToWire(normalizeToken('a', { name: 'orc' }, true))).toBe(false);
+  });
+});

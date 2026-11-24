@@ -77,7 +77,7 @@ const pt = await dm.evaluate((id) => { const v = window.__vtt.board.views.get(id
 await dm.mouse.click(pt.x, pt.y, { button: 'right' });
 await sleep(300);
 const menu = await dm.locator('.ctx').allInnerTexts();
-check('the DM menu for a torch has no "Give to" entries', menu.length === 1 && !/Give to/.test(menu[0]) && /Hide from players|Reveal/.test(menu[0]), menu.join('|').slice(0, 200));
+check('the DM menu for a torch has no "Give to" entries', menu.length === 1 && !/Give to/.test(menu[0]) && /Hide marker from players|Show marker to players/.test(menu[0]), menu.join('|').slice(0, 200));
 await dm.keyboard.press('Escape');
 const gp = await dm.evaluate((id) => window.__vtt.board.worldToScreen({ x: window.__vtt.board.views.get(id).display.x, y: window.__vtt.board.views.get(id).display.y }), guard);
 await dm.mouse.click(gp.x, gp.y, { button: 'right' });

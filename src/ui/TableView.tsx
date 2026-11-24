@@ -311,7 +311,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       }
       if (client.isDM) {
         const hid = toks.every((t) => t.hidden);
-        menuItems.push({ label: hid ? 'Reveal to players' : 'Hide from players', onClick: () => void client.updateTokens(ids, { hidden: !hid }) });
+        menuItems.push({ label: lightsOnly ? (hid ? 'Show marker to players' : 'Hide marker from players') : hid ? 'Reveal to players' : 'Hide from players', onClick: () => void client.updateTokens(ids, { hidden: !hid }) });
         const lk = toks.every((t) => t.locked);
         menuItems.push({ label: lk ? 'Unlock' : 'Lock in place', onClick: () => void client.updateTokens(ids, { locked: !lk }) });
         if (toks.every((t) => !isLightMark(t))) for (const p of client.players.values()) menuItems.push({ label: `Give to ${p.name}`, onClick: () => void client.updateTokens(ids, { ownerUid: p.uid }) });

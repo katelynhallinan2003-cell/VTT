@@ -106,7 +106,7 @@ export function AutoLightsModal(props: { client: TableClient; board: Board | nul
   const nRooms = spots.length - nLamps;
   const add = async () => {
     if (!spots.length) return;
-    const items = spots.map((s) => ({ x: s.x, y: s.y, name: preset, size: 0.5, shape: 'none' as const, label: 'dm' as const, light: { ...light } }));
+    const items = spots.map((s) => ({ x: s.x, y: s.y, name: preset, size: 0.5, shape: 'none' as const, label: 'dm' as const, hidden: true, light: { ...light } }));
     await client.addTokens(items, 'Auto-add lights');
     toast(`Added ${noun(items.length)}. Ctrl+Z takes them all back.${meta?.light?.ambient === 'bright' ? ' The scene is in daylight, so they only show once it is Twilight or Dark.' : ''}`, 'ok', 6000);
     props.onClose();

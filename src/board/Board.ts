@@ -502,7 +502,7 @@ export class Board {
       this.seenMetaRev = scene.metaRev;
       this.onMeta();
     }
-    const gridKey = scene.meta ? `${scene.meta.grid.cell}|${scene.meta.grid.shape}` : '';
+    const gridKey = scene.meta ? `${scene.meta.grid.cell}|${scene.meta.grid.shape}|${currentOverlay(scene.meta.grid) === 'none'}` : '';
     const previewNow = this.ui.data.dmPreview;
     if (gridKey !== this.seenGridKey) {
       this.seenGridKey = gridKey;
@@ -531,7 +531,7 @@ export class Board {
     }
     if (scene.drawRev !== this.seenDrawRev) {
       this.seenDrawRev = scene.drawRev;
-      this.drawLayer.sync(this.drawingsShown(), c.grid, this.textRes, this.ui.data.tplCover, this.wallsForSpells());
+      this.drawLayer.sync(this.drawingsShown(), c.grid, this.textRes, this.coverOn(), this.wallsForSpells());
       const stale = [...this.ui.data.drawSel].filter((id) => !scene.draws.has(id));
       if (stale.length) this.ui.selectDrawings([...this.ui.data.drawSel].filter((id) => scene.draws.has(id)));
       this.dirty = true;
@@ -899,6 +899,7 @@ export class Board {
 
   /** The DM sees real health for every token that has some; everyone else sees only what the DM allows. */
   private healthFor(t: Token): TokenCtx['health'] {
+    if (isLightMark(t)) return null; // a light has no hit points
     if (this.client.isDM && !this.ui.data.dmPreview) {
       const pct = pctOf(t.hp, t.maxHp);
       return pct == null ? null : { pct, bar: true };
@@ -1507,14 +1508,22 @@ export class Board {
     const viewers: Viewer[] = [];
     for (const v of this.views.values()) {
       const t = v.token;
-      // a token hidden from the players is gone for them, light and sight included, so it is gone here too
-      if (t.hidden) continue;
+      // a creature hidden from the players is gone for them, light and sight included, so it is gone here too;
+      // a light-only mark with its marker hidden still shines
+      if (t.hidden && !isLightMark(t)) continue;
       const at = v.testPos ? { x: t.x, y: t.y } : v.display;
       const g = this.client.gridAt(at); // a map with squares of its own measures its feet in them
       const l = t.light ? lightOf(t, g, at, this.altAt(t.id, at)) : null;
       if (l) lights.push(l);
       const w = viewerOf(t, g, at, this.altAt(t.id, at));
       if (w) viewers.push(w);
+    }
+    // the marker of a light can be hidden from this viewer (so it has no view here), but its light still shines
+    for (const t of scene.tokens.values()) {
+      if (!t.hidden || !isLightMark(t) || this.views.has(t.id)) continue;
+      const at = { x: t.x, y: t.y };
+      const l = lightOf(t, this.client.gridAt(at), at, this.altAt(t.id, at));
+      if (l) lights.push(l);
     }
     const r = (n: number) => Math.round(n * 2) / 2;
     const painted = this.paintedLight();
@@ -2048,7 +2057,7 @@ export class Board {
       } else paintShape(g, {
         k: d.dk, pts: d.pts, color: u.drawColor, w: isT ? Math.max(2, this.strokePx()) : this.strokePx(),
         fill: !isT && (d.dk === 'rect' || d.dk === 'ellipse') ? FILL_LEVEL[u.drawFillMode] : 0, fc: u.drawFillColor, dash: !isT && u.drawDash, bw: u.tplWidth, of: d.of,
-      }, grid, 0.85, u.tplCover, this.wallSegs().sight, (p) => groundAt(this.zones, p));
+      }, grid, 0.85, this.coverOn(), this.wallSegs().sight, (p) => groundAt(this.zones, p));
       if (isT && d.pts.length >= 2) this.plotLabel(li++, templateLabel(d.dk, grid, d.pts[0], d.pts[1], u.tplWidth, footprintPx(grid, d.of ?? 0)), d.pts[1].x, d.pts[1].y - 12 / z, num(u.drawColor));
     }
 
@@ -2412,8 +2421,13 @@ export class Board {
     return d && pv?.id === id ? { ...d, ...pv.patch } : d;
   }
 
+  /** Are the squares a template covers lit up? Never on a gridless scene, where there are no squares to light. */
+  private coverOn(): boolean {
+    return this.ui.data.tplCover && currentOverlay(this.client.grid) !== 'none';
+  }
+
   private refreshDraws() {
-    this.drawLayer.sync(this.drawingsShown(), this.client.grid, this.textRes, this.ui.data.tplCover, this.wallsForSpells());
+    this.drawLayer.sync(this.drawingsShown(), this.client.grid, this.textRes, this.coverOn(), this.wallsForSpells());
     this.syncTerrain();
     this.invalidate();
   }

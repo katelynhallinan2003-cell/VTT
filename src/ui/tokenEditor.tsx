@@ -188,10 +188,12 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; /*
         )}
         <SightLights lightOnly editable={editable} sight={null} dv={null} light={lightNow} sameLight={sameLight}
           onSight={() => undefined} onDv={() => undefined} onLight={(l) => set({ light: l })} />
-        {hideLockBlock}
-        {labelBlock}
-        {heightBlock}
-        {healthBlock}
+        {client.isDM && !kept && (
+          <>
+            <Toggle checked={!!(val('hidden') ?? false)} onChange={(v) => set({ hidden: v })} label="Hide the marker from players" hint="They still see the light it gives off." />
+            <Toggle checked={!!(val('locked') ?? false)} onChange={(v) => set({ locked: v })} label="Locked in place" hint="Players can't move or edit it." />
+          </>
+        )}
       </Modal>
     );
   }

@@ -6,6 +6,7 @@ import { cleanHp, emptyInit, orderOf } from './combat';
 import { imgbbDeleteUrl } from './imgbb';
 import { FONT_KEYS, isTemplate } from './draw';
 import { fxToWire, normalizeFx } from './effects';
+import { isLightMark } from './light';
 
 /** Token movement is saved to a tenth of a map pixel. Test collisions at that same position. */
 export const tokenCoordinate = (value: number) => Math.round(value * 10) / 10;
@@ -139,7 +140,7 @@ export function normalizeSceneMeta(raw: any): SceneMeta {
 
 export function normalizeToken(id: string, raw: any, hidden: boolean): Token {
   const t = raw ?? {};
-  return {
+  const tok: Token = {
     id,
     name: str(t.name, ''),
     img: typeof t.img === 'string' ? t.img : null,
@@ -174,6 +175,9 @@ export function normalizeToken(id: string, raw: any, hidden: boolean): Token {
     z: num(t.z, 0),
     label: t.label === 'dm' || t.label === 'none' ? t.label : 'all',
   };
+  // a light-only mark is always kept where players can read it (they see its light); `hide` says only its marker is hidden from them
+  if (t.hide === true && isLightMark(tok)) tok.hidden = true;
+  return tok;
 }
 
 /** A light on a token: at least one of the two distances, and a colour. Anything else means no light. */
@@ -289,7 +293,7 @@ export function normalizeLive(uid: string, raw: any): LivePlot | null {
   return { uid, ruler, ghosts };
 }
 
-/** Serialise a token for the database. `hidden` is implied by which subtree it lives in. */
+/** Serialise a token for the database. `hidden` is implied by which subtree it lives in, except for a light-only mark: it always lives in the public one, and `hide` says its marker is hidden. */
 export function tokenToWire(t: Token): Record<string, unknown> {
   // hp and maxHp are deliberately left out: they live in the DM-only part of the database
   const { id: _id, hidden: _hidden, hp: _hp, maxHp: _maxHp, tempHp: _tempHp, ...rest } = t;
@@ -310,6 +314,7 @@ export function tokenToWire(t: Token): Record<string, unknown> {
     elev: t.fly && t.elev ? t.elev : undefined,
     initBonus: t.initBonus ? t.initBonus : undefined,
     fx: fxToWire(t.fx) ?? undefined,
+    hide: t.hidden && isLightMark(t) ? true : undefined,
   });
 }
 

@@ -460,13 +460,22 @@ export class TableClient {
     }, sceneFail('scene')));
 
     const tokenHandlers = (hidden: boolean) => ({
-      added: (k: string, v: any) => { if (live()) { s.tokens.set(k, this.withHp(s, normalizeToken(k, v, hidden))); s.tokensRev++; this.tokensChanged(); this.characterSeen(k); this.bump(); } },
+      added: (k: string, v: any) => {
+        if (!live()) return;
+        const t = this.withHp(s, normalizeToken(k, v, hidden));
+        s.tokens.set(k, t); s.tokensRev++; this.tokensChanged(); this.characterSeen(k); this.bump();
+        // a hidden light kept in the DM-only part (from before lights shone for players) moves to where players can read it
+        if (hidden && isLightMark(t)) this.queueLightMove(s, k);
+      },
       changed: (k: string, v: any) => { if (live()) { s.tokens.set(k, this.withHp(s, normalizeToken(k, v, hidden))); s.tokensRev++; this.tokensChanged(); this.characterSeen(k); this.bump(); } },
       removed: (k: string) => {
         if (!live()) return;
         const cur = s.tokens.get(k);
-        // ignore the "removed" half of a reveal/hide move, which arrives after the new copy was added
-        if (cur && cur.hidden === hidden) { s.tokens.delete(k); s.tokensRev++; this.tokensChanged(); this.bump(); }
+        if (!cur) return;
+        // ignore the "removed" half of a reveal/hide move, which arrives after the new copy was added;
+        // a light is kept where players read it whether its marker is hidden or not, so only that copy's removal counts
+        const here = isLightMark(cur) ? !hidden : cur.hidden === hidden;
+        if (here) { s.tokens.delete(k); s.tokensRev++; this.tokensChanged(); this.bump(); }
       },
     });
     this.sceneUnsubs.push(b.listenChildren(P.sceneTokens(tid, sid), tokenHandlers(false), sceneFail('tokens')));
@@ -601,9 +610,32 @@ export class TableClient {
     return [...(this.scene?.fogOps.entries() ?? [])].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   }
 
-  private tokenPath(token: Pick<Token, 'id' | 'hidden'>) {
+  private lightMoves = new Set<string>();
+  private lightMoveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Lights that were hidden before hidden lights shone for players are kept in the DM-only part; move them where players can read them (one write, no undo step). */
+  private queueLightMove(s: SceneState, id: string) {
+    this.lightMoves.add(id);
+    if (this.lightMoveTimer) return;
+    this.lightMoveTimer = setTimeout(() => {
+      this.lightMoveTimer = null;
+      const ids = [...this.lightMoves];
+      this.lightMoves.clear();
+      if (this.scene !== s) return;
+      const updates: Record<string, any> = {};
+      for (const k of ids) {
+        const t = s.tokens.get(k);
+        if (!t || !isLightMark(t)) continue;
+        updates[P.dmSceneToken(this.tableId, s.id, k)] = null;
+        updates[P.sceneToken(this.tableId, s.id, k)] = tokenToWire(t);
+      }
+      if (Object.keys(updates).length) void this.backend.update(updates).catch(() => undefined);
+    }, 60);
+  }
+
+  /** Where a token is kept: a hidden token in the DM-only part, except a light-only mark, which players must read (they see its light; `hide` hides its marker). */
+  private tokenPath(token: Pick<Token, 'id' | 'hidden' | 'shape' | 'img' | 'light'>) {
     const sid = this.viewSceneId!;
-    return token.hidden ? P.dmSceneToken(this.tableId, sid, token.id) : P.sceneToken(this.tableId, sid, token.id);
+    return token.hidden && !isLightMark(token) ? P.dmSceneToken(this.tableId, sid, token.id) : P.sceneToken(this.tableId, sid, token.id);
   }
 
   // ---------------------------------------------------------------- tokens
@@ -661,7 +693,7 @@ export class TableClient {
     }
     if (Object.keys(updates).length) await this.backend.update(updates);
   }
-  private async deleteTokensRaw(tokens: Pick<Token, 'id' | 'hidden'>[]): Promise<void> {
+  private async deleteTokensRaw(tokens: Pick<Token, 'id' | 'hidden' | 'shape' | 'img' | 'light'>[]): Promise<void> {
     const updates: Record<string, any> = {};
     for (const t of tokens) {
       updates[this.tokenPath(t)] = null;
@@ -681,21 +713,27 @@ export class TableClient {
   async updateToken(id: string, patch: Partial<Omit<Token, 'id'>>): Promise<void> {
     const cur = this.scene?.tokens.get(id);
     if (!cur || !this.viewSceneId) return;
-    if (patch.hidden !== undefined && patch.hidden !== cur.hidden) {
+    const nextAll: Token = { ...cur, ...patch, id: cur.id };
+    const hideChange = patch.hidden !== undefined && patch.hidden !== cur.hidden;
+    // a token that has to change place (hidden or revealed, or turned into or out of a light) is rewritten whole
+    if (this.tokenPath(nextAll) !== this.tokenPath(cur)) {
       if (!this.isDM) return;
-      const next = { ...cur, ...patch, hidden: patch.hidden };
+      const next = { ...nextAll, hidden: patch.hidden ?? cur.hidden };
       await this.backend.update({
         [this.tokenPath(cur)]: null,
         [this.tokenPath(next)]: tokenToWire(next),
       });
       return;
     }
+    if (hideChange && !this.isDM) return;
     const base = this.tokenPath(cur);
     const updates: Record<string, any> = {};
     for (const [k, v] of Object.entries(patch)) {
       if (k === 'id' || k === 'hidden' || k === 'hp' || k === 'maxHp' || k === 'tempHp' || k === 'hpPct' || k === 'hpNow' || k === 'hpCap') continue;
       updates[`${base}/${k}`] = k === 'fx' ? fxToWire((v as Effect[] | undefined) ?? []) : k === 'initBonus' ? (v ? v : null) : v === undefined ? null : v;
     }
+    // a light stays where it is when its marker is hidden or shown: only the flag changes
+    if (hideChange && isLightMark(nextAll)) updates[`${base}/hide`] = patch.hidden ? true : null;
     // hit points live in the DM-only part of the database; players only ever see a percentage
     if (this.isDM && ('hp' in patch || 'maxHp' in patch || 'tempHp' in patch || 'hpShow' in patch)) {
       const c = cleanHp('hp' in patch ? patch.hp : cur.hp, 'maxHp' in patch ? patch.maxHp : cur.maxHp);
@@ -1458,7 +1496,7 @@ export class TableClient {
     const dark = m.light.ambient === 'dark';
     const altOf = (t: Token) => (zones ? altitudeOf(t, groundAt(zones, t)).alt : undefined);
     const lights: LightSrc[] = dark
-      ? [...s.tokens.values()].filter((t) => !t.hidden && t.light).map((t) => lightOf(t, g, { x: t.x, y: t.y }, altOf(t))).filter((l): l is LightSrc => !!l)
+      ? [...s.tokens.values()].filter((t) => (!t.hidden || isLightMark(t)) && t.light).map((t) => lightOf(t, g, { x: t.x, y: t.y }, altOf(t))).filter((l): l is LightSrc => !!l)
       : [];
     for (const t of s.tokens.values()) {
       let r = sightRadiusPx(t, g);

@@ -113,7 +113,7 @@ check('Place a light adds a light', !!lightId);
 const ttag = dm.locator('.tokentag');
 await ttag.waitFor();
 const tagButtons = (await ttag.locator('button').allInnerTexts()).map((t) => t.trim());
-check('a selected light\'s tag has Edit, Height and Hide, but no Effects, Aura or Save to library', tagButtons.includes('Edit') && tagButtons.some((t) => /^Height/.test(t)) && tagButtons.includes('Hide from players') && !tagButtons.some((t) => /^(Effects|Aura|Save)/.test(t)), JSON.stringify(tagButtons));
+check('a selected light\'s tag has Edit and a marker button, but no Height, Effects, Aura or Save to library', tagButtons.includes('Edit') && tagButtons.some((t) => /marker$/i.test(t)) && !tagButtons.some((t) => /^(Height|Effects|Aura|Save)/.test(t)), JSON.stringify(tagButtons));
 check('and says what it shines instead of a size', /bright/.test(await ttag.locator('.tt-sub').innerText()));
 await ttag.getByRole('button', { name: 'Edit', exact: true }).click();
 const editor = dm.getByRole('dialog');
@@ -121,7 +121,7 @@ await editor.waitFor();
 const heads = (await editor.locator('h4').allInnerTexts()).map((t) => t.trim().toLowerCase());
 const labelsOf = (await editor.locator('.field-label, label').allInnerTexts()).join(' | ');
 check('the light editor is titled Edit light', /Edit light/.test(await editor.locator('.modal-title, h2, h3').first().innerText()));
-check('it offers the light, hiding, height and health', heads.includes('light') && heads.includes('height') && heads.includes('health') && /Hidden from players/.test(labelsOf) && /Flying/.test(labelsOf), JSON.stringify(heads));
+check('it offers only the light, hiding the marker and locking: no height or health', heads.includes('light') && !heads.includes('height') && !heads.includes('health') && /Hide the marker from players/.test(labelsOf) && !/Flying/.test(labelsOf), JSON.stringify(heads) + ' ' + labelsOf.slice(0, 200));
 check('and none of what only a creature uses: picture, ring, size, shape, sight, darkvision, initiative, auras, control', (await editor.locator('canvas').count()) === 0
   && !/Size|Ring|Shape|Sees as far|Darkvision|Initiative|Controlled by|Aura/i.test(labelsOf + ' ' + heads.join(' ')), labelsOf.slice(0, 300));
 await dm.screenshot({ path: '/tmp/shots/z15-light-editor.png' });

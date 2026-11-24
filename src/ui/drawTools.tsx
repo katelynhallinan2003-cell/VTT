@@ -433,8 +433,11 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
 export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
   const { ui, client } = props;
   const d = useUi(ui);
+  useClient(client);
   const t = TEMPLATES.find((x) => x.id === d.tplKind) ?? TEMPLATES[0];
   const hex = isHex(client.grid);
+  // with no grid there are no squares to light up, so the switch for them is not offered (and nothing is lit)
+  const gridless = currentOverlay(client.grid) === 'none';
   // on a hex grid "square" becomes "hex", and a cube or line lines up with the six directions between hexes
   const say = (x: string) => (hex ? x.replace(/\bsquares\b/g, 'hexes').replace(/\ba square\b/g, 'a hex').replace(/\bsquare\b/g, 'hex') : x);
   return (
@@ -472,7 +475,7 @@ export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
       )}
       <Toggle checked={d.tplRough} onChange={(v) => ui.set({ tplRough: v })} label="Counts as difficult ground" hint="For templates you place next: tokens pay extra to move through them." />
       <Toggle checked={d.tplShare} onChange={(v) => ui.set({ tplShare: v })} label="Show others my templates" hint="Off: only you and the DM see them." />
-      <Toggle checked={d.tplCover} onChange={(v) => ui.set({ tplCover: v })} label={hex ? 'Show the hexes it covers' : 'Show the squares it covers'} hint={hex ? 'A hex counts when its middle is inside the area.' : 'A square counts when its middle is inside the area.'} />
+      {!gridless && <Toggle checked={d.tplCover} onChange={(v) => ui.set({ tplCover: v })} label={hex ? 'Show the hexes it covers' : 'Show the squares it covers'} hint={hex ? 'A hex counts when its middle is inside the area.' : 'A square counts when its middle is inside the area.'} />}
       <p class="hint">{say(t.hint)} {say('Sizes snap to whole squares')} (hold Alt to turn that off, Shift to lock the angle).</p>
       </>}
       <div class="row wrap">

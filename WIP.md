@@ -33,6 +33,16 @@ Asked 2026-11-23, all in one message (the user also attached `SeasideMap.jpg` an
 
 Asked 2026-11-23, third message (14:43):
 
+Asked 2026-11-23, fourth message (16:13):
+
+- [ ] **#87 Painted daylight is blocked by walls** (in progress) (added 2026-11-23): "painted daylight should be blocked by walls."
+- [ ] **#88 The soft edge of painted light is still very hard, make it softer** (added 2026-11-23): "Painted daylights edge from brush to soft is still very hard, can it be softer."
+- [ ] **#89 Select several tokens and apply damage, healing or temporary hit points to all of them** (added 2026-11-23): "yes to the ability to select multiple tokens and apply damage to them, or healing (maybe like, hold a button down and select multiple and it then lets you apply the effect, hp plus or minus, adding temp hp, to those selected tokens."
+- [ ] **#90 Better organisation of Grid, Grid printed on the map and Fine tune grid** (added 2026-11-23): "The organization of grid/grid printed on map/fine tune grid can be better."
+- [ ] **#91 An added second map or empty grid can have a grid of a different scale** (added 2026-11-23): "when you add a second map/empty grid, it should be able to have a different scale grid."
+- [ ] **#92 An added map or empty grid has its own grid on/off switch** (added 2026-11-23): "toggled on and off seperately from the other image on the page."
+- [ ] **#93 The colour of an added empty grid is adjustable** (added 2026-11-23): "the color of the added empty grid should be adjustable."
+
 
 ## Ideas (not requested)
 

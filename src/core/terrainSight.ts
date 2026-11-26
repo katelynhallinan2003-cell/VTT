@@ -147,8 +147,7 @@ function project(view: Visibility, origin: Vec, n: number): Profile {
 // midpoints between them. Blend the distances to let bands split or disappear.
 function blendBands(input: Band[][], weights: number[], r: number, scale: number): Band[] {
   const first = input[0];
-  if (input.every(row => row.length === first.length &&
-    row.every(([lo,hi],j) => hi >= first[j][0] && lo <= first[j][1]))) {
+  if (matchingBands(input)) {
     return first.map((_,j) => [
       input.reduce((v,row,k) => v+row[j][0]*weights[k],0),
       input.reduce((v,row,k) => v+row[j][1]*weights[k],0)
@@ -184,6 +183,29 @@ function blendBands(input: Band[][], weights: number[], r: number, scale: number
   if (previousValue>=0 && r>start) result.push([start,r]);
   if (!result.length || result[0][0]>0) result.unshift([0,0]);
   return result;
+}
+
+// Interpolate boundaries only when each visible face AND the intervening
+// shadow have a common range in every sample. Otherwise interpolation can
+// invent a shadow between unrelated ledges, on ground all the samples see.
+function matchingBands(rows: Band[][]): boolean {
+  const count = rows[0].length;
+  if (rows.some(row => row.length!==count)) return false;
+  if (count===1) return true; // The first band always starts at the origin.
+  let previousEnd = -Infinity;
+  for (let j=0;j<count;j++) {
+    let firstStart=Infinity, lastStart=-Infinity, firstEnd=Infinity, lastEnd=-Infinity;
+    for (const row of rows) {
+      const [start,end] = row[j];
+      firstStart=Math.min(firstStart,start);
+      lastStart=Math.max(lastStart,start);
+      firstEnd=Math.min(firstEnd,end);
+      lastEnd=Math.max(lastEnd,end);
+    }
+    if (lastStart>firstEnd || previousEnd>=firstStart) return false;
+    previousEnd=lastEnd;
+  }
+  return true;
 }
 
 export function terrainSight(o: Vec, r: number, near: Edge[], eye: number, steps: number, geometry: Seg[],
@@ -273,7 +295,7 @@ function outline(o: Vec, r: number, scale: number, rows: Profile): Visibility {
   append(0,rows[0]);
   for (let i=1;i<=n;i++) {
     const prev = rows[i-1], next = rows[i%n];
-    if (prev.length!==next.length || prev.some(([lo,hi],j) => j>0 && (hi<next[j][0] || lo>next[j][1]))) {
+    if (!matchingBands([prev,next])) {
       const mid = (i-.5)*angleStep;
       append(mid,prev);
       finish();

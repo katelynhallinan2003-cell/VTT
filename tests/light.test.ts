@@ -206,4 +206,19 @@ describe('shadows at creature eye height', () => {
     // The viewer approaches each point and then recedes from it.
     for (const count of changes) expect(count).toBeLessThanOrEqual(2);
   });
+
+  it('keeps the opening between two offset pairs of ledges visible', () => {
+    const ledge = (x: number, y1: number, y2: number, low: number, top: number): Seg =>
+      ({...wall(x,y1,x,y2), one:1, low, top, terrainPxPerFt:10});
+    const ledges = [
+      ledge(100,-350,0,0,10), ledge(225,-350,0,10,20),
+      ledge(65,0,350,0,10), ledge(170,0,350,10,20)
+    ];
+    // The first viewpoint used to join unrelated shadows between neighboring
+    // rays. At the second, blending the sampled viewpoints covered the opening.
+    for (const [y,xProbe,yProbe] of [[30,171.53,97.53],[7,142.48,79.66]]) {
+      const view = visibilityPolygon({x:0,y},550,ledges,64,5);
+      expect([view.poly,...view.faces].some(poly => inPoly({x:xProbe,y:yProbe},poly))).toBe(true);
+    }
+  });
 });

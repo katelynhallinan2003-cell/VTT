@@ -1911,16 +1911,19 @@ export class TableClient {
     const prevOps: Record<string, FogOp> = Object.fromEntries(this.scene?.fogOps ?? []);
     const prevBase = this.scene?.meta?.fog.base ?? 'hidden';
     const prevEnabled = this.scene?.meta?.fog.enabled ?? false;
-    const apply = (ops: Record<string, FogOp> | null, b: 'hidden' | 'clear', enabled: boolean) => this.backend.update({
+    const prevVision = this.scene?.meta?.fog.vision ?? false;
+    const apply = (ops: Record<string, FogOp> | null, b: 'hidden' | 'clear', enabled: boolean, vision?: boolean) => this.backend.update({
       [P.sceneFog(this.tableId, sid)]: ops && Object.keys(ops).length ? ops : null,
       [`${P.sceneMeta(this.tableId, sid)}/fog/base`]: b,
       [`${P.sceneMeta(this.tableId, sid)}/fog/enabled`]: enabled,
+      ...(vision === undefined ? {} : { [`${P.sceneMeta(this.tableId, sid)}/fog/vision`]: vision }),
     });
-    await apply(null, base, true);
+    const revealSight = base === 'hidden' ? true : undefined;
+    await apply(null, base, true, revealSight);
     this.history.push({
       label: base === 'hidden' ? 'Cover the map in fog' : 'Reveal the whole map',
-      undo: () => apply(prevOps, prevBase, prevEnabled),
-      redo: () => apply(null, base, true),
+      undo: () => apply(prevOps, prevBase, prevEnabled, base === 'hidden' ? prevVision : undefined),
+      redo: () => apply(null, base, true, revealSight),
     });
   }
 

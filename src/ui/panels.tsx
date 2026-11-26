@@ -491,7 +491,7 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
           </>
         )}
         <div class="row wrap">
-          <button class="btn small" onClick={() => void client.resetFog('hidden')}>Hide everything</button>
+          <button class="btn small" title="Cover the map except where tokens can see" onClick={() => void client.resetFog('hidden')}>Hide everything</button>
           <button class="btn small" onClick={() => void client.resetFog('clear')}>Reveal everything</button>
           <button class={`btn small ${d.tool === 'fog' ? 'primary' : ''}`} onClick={() => ui.set({ tool: d.tool === 'fog' ? 'select' : 'fog' })}>Fog tool (F)</button>
         </div>

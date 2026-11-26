@@ -408,7 +408,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
           <p class="hint">{d.fogShape === 'poly' ? 'Click points, then click the first point, double-click or press Enter to finish.' : d.fogShape === 'brush' ? 'Hold and drag to paint.' : 'Drag a box.'}</p>
           <div class="row wrap">
             <button class="btn small" onClick={() => void client.undoFog()}>Undo</button>
-            <button class="btn small" onClick={() => void client.resetFog('hidden')}>Hide everything</button>
+            <button class="btn small" title="Cover the map except where tokens can see" onClick={() => void client.resetFog('hidden')}>Hide everything</button>
             <button class="btn small" onClick={() => void client.resetFog('clear')}>Reveal everything</button>
           </div>
           <label class="toggle"><input type="checkbox" checked={d.dmPreview} onChange={(e) => ui.set({ dmPreview: (e.target as HTMLInputElement).checked })} /><span class="toggle-text">Preview as players</span></label>

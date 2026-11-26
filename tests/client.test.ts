@@ -112,7 +112,7 @@ describe('TableClient over the mock backend', () => {
     await dm.addFogOp({ m: 'h', t: 'rect', p: '10,10,20,20' });
     await waitFor(() => pl.scene?.fogOps.size === 2, 'fog ops');
     expect(pl.fogOpsSorted().map(([, o]) => o.m)).toEqual(['r', 'h']);
-    expect(pl.scene!.meta!.fog).toEqual({ enabled: true, base: 'hidden', vision: false, explore: false, dim: true });
+    expect(pl.scene!.meta!.fog).toEqual({ enabled: true, base: 'hidden', vision: true, explore: false, dim: true });
     await dm.undoFog();
     await waitFor(() => pl.scene?.fogOps.size === 1, 'undo');
     await dm.resetFog('clear');

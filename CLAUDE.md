@@ -48,11 +48,13 @@ Read `CLAUDE.md` (this file) and `WIP.md` before doing anything else in a sessio
 
 ## Design precedents
 
+- **Sight across elevation.** Measure sight and carried lights from the token’s standing or flying altitude plus 5 ft per token size unit. A finite wall level with the eyes can be seen over. Painted terrain above the eyes shows a strip of its near side that gets shallower as the rise grows. Shadows narrower than 10° disappear from sight and lighting. Movement uses the ground contours.
+
 - **Hide everything.** Cover the scene and enable token sight together. Current sight still follows walls, lighting and darkvision. Undo restores the previous fog and sight settings.
 
 - **Elevation and movement.** The Heights editor tints each finished elevation and labels patches where space permits. Ctrl-click selects one connected patch at its finished height. Every painted height change is a terrain wall and charges climbing up or down. Derived boundaries follow the finished painted terrain, including additive strokes and erasers.
 - **Drawn walls and flight.** Height zero blocks movement. A finite wall can be climbed, including both faces on level ground. Closed doors and windows keep their existing movement rules. Flight counts the vertical travel required to clear the terrain and finite walls along the measured route.
-- **Test moves.** Preserve turns within a drag and send them with shared previews. Only deliberate multi-step stops receive individual distance labels.
+- **Test moves.** Count terrace heights on the ground traversed between crossings. Touching a terrace at a turn adds no climb. On square grids, give the cursor room to cross a corner diagonally. Preserve turns within a drag and send them with shared previews. Only deliberate multi-step stops receive individual distance labels.
 
 - **Terrain brushes.** In Paint, choosing Added on top starts a fresh stroke above existing ground. Each gesture adds its height once where it passes. Gridless scenes use round brushes sized in calibrated feet for height, difficult ground and erasing.
 

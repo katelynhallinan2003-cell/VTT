@@ -22,6 +22,19 @@ describe('movement over terrain', () => {
     expect(measure(plateau,[point(60),point(0)],0).ft).toBe(72.1);
     expect(measure(plateau,[point(0),point(60)],45).ft).toBe(60);
   });
+  it('counts eight 5 ft terraces as 40 ft of climbing, in either direction', () => {
+    const terraces = Array.from({length:8}, (_, i) => rect(String(i), (i+1)*5, 100-i, (i+1)*5));
+    const route = [point(0),point(45)];
+    expect(measure(terraces,route).note).toBe('45 ft normal + 40 ft climbing');
+    expect(measure(terraces,route.reverse()).note).toBe('45 ft normal + 40 ft climbing');
+  });
+  it('grazing the corner of another 5 ft step during a descent adds no climb', () => {
+    const terraces = Array.from({length:8}, (_, i) => rect(String(i), (i+1)*5, 100-i, (i+1)*5));
+    terraces.push(normalizeDrawing('lip', {k:'rect', p:'22,2,24.5,6', hz:25, t:2})!);
+    const descent = [point(45,0),point(24,2),point(0,0)];
+    expect(measure(terraces,descent).note).toMatch(/40 ft climbing$/);
+    expect(measure(terraces,[descent[0],point(24,3),descent[2]]).note).toMatch(/50 ft climbing$/);
+  });
   it('clears an intervening ridge on a flight with level endpoints', () => {
     const ridge = [rect('ridge',20,30,15)];
     expect(measure(ridge,[point(0),point(50)],0).ft).toBe(60);

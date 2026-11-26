@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clipToConvex, darkPoly, eraseStops, lightOf, lightPoly, litSeen, ringPoly, SHADE, sightPoly, viewerOf, type LightSrc } from '../src/core/light';
+import { clipToConvex, darkPoly, eraseStops, lightOf, lightPoly, litSeen, ringPoly, SHADE, sightHeight, sightPoly, viewerOf, type LightSrc } from '../src/core/light';
 import { inPoly } from '../src/core/walls';
 import type { Seg } from '../src/core/walls';
 
@@ -116,5 +116,46 @@ describe('how much a light lifts the dark', () => {
   it('the dark gets darker from daylight to night', () => {
     expect(SHADE.bright).toBe(0);
     expect(SHADE.dim).toBeLessThan(SHADE.dark);
+  });
+});
+
+
+describe('shadows at creature eye height', () => {
+  const origin = {x:0, y:0};
+  const reaches = (walls: Seg[], x: number, alt = 5) =>
+    inPoly({x, y:0}, lightPoly({...origin, alt}, 300, walls));
+
+  it('ignores a nine-degree shadow on either side of the angle wrap', () => {
+    for (const sign of [-1, 1]) {
+      const x = sign * 100, halfWidth = 100 * Math.tan(4.5 * Math.PI/180);
+      expect(reaches([wall(x,-halfWidth,x,halfWidth)], 200*sign)).toBe(true);
+    }
+  });
+
+  it('keeps a broad shadow assembled from short pieces and the wall behind a sliver', () => {
+    const pieces = Array.from({length:12}, (_, i) => wall(100,i*2-12,100,i*2-10));
+    expect(reaches(pieces, 190)).toBe(false);
+    const layered = [wall(50,-2,50,2), wall(110,-50,110,50)];
+    expect(reaches(layered, 85)).toBe(true);
+    expect(reaches(layered, 140)).toBe(false);
+  });
+
+  it('shows less of a higher terrace, up to its far edge', () => {
+    const face: Seg = {...wall(100,-100,100,100), one:1, top:15, terrainPxPerFt:10};
+    expect(reaches([face], 140)).toBe(true);
+    expect(reaches([face], 160)).toBe(false);
+    expect(reaches([{...face, top:45}], 130)).toBe(false);
+    expect(reaches([face, {...face, ...wall(125,-100,125,100), one:-1}], 135)).toBe(false);
+  });
+
+  it('sees across a level wall top at each creature size on a hill or in flight', () => {
+    for (const size of [0.5,1,2,3,4]) for (const fly of [false,true]) {
+      const altitude = sightHeight({size, fly, elev:30, shape:'circle', img:null, light:null}, 10);
+      expect(altitude).toBe((fly ? 30 : 10) + size*5);
+      const face = wall(100,-50,100,50);
+      expect(reaches([{...face, top:altitude}], 150, altitude)).toBe(true);
+      expect(reaches([{...face, top:altitude+1}], 150, altitude)).toBe(false);
+      expect(reaches([face], 150, altitude)).toBe(false);
+    }
   });
 });

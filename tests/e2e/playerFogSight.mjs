@@ -83,6 +83,44 @@ await sleep(250);
 const blocked = await samples();
 check('a closed wall still hides ground inside the token’s nominal sight distance',blocked[0] < bright[0]-15,JSON.stringify(blocked));
 await dm.evaluate(() => window.__vtt.client.history.undo()); // wall
+await player.waitForFunction(id => !window.__vtt.client.scene.walls.has(id),wall);
+async function placeWall(halfWidth, height) {
+  const id = await dm.evaluate(async ([id, width, h]) => {
+    const {client} = window.__vtt, t = client.scene.tokens.get(id), cell = client.grid.cell, x = t.x + cell;
+    return (await client.addWalls([{k:'wall', a:{x,y:t.y-width*cell}, b:{x,y:t.y+width*cell}, h}]))[0];
+  }, [tokenId, halfWidth, height]);
+  await player.waitForFunction(id => window.__vtt.client.scene.walls.has(id),id);
+  await sleep(200);
+  return id;
+}
+async function undoWall(id) {
+  await dm.evaluate(() => window.__vtt.client.history.undo());
+  await player.waitForFunction(id => !window.__vtt.client.scene.walls.has(id),id);
+}
+const sliver = await placeWall(0.06, 0);
+check('a narrow blocker casts no black band across the player map', (await samples())[0] > bright[0]-10);
+await undoWall(sliver);
+const parapet = await placeWall(1.5,10);
+check('a Medium scout is below a 10 ft wall', (await samples())[0] < bright[0]-15);
+await dm.evaluate(id => window.__vtt.client.updateTokens([id],{size:2}),tokenId);
+await player.waitForFunction(id => window.__vtt.client.scene.tokens.get(id).size === 2,tokenId);
+await sleep(200);
+check('resizing the scout to Large immediately clears that same wall', (await samples())[0] > bright[0]-10);
+await dm.evaluate(() => window.__vtt.client.history.undo());
+await undoWall(parapet);
+const hill = await dm.evaluate(id => {
+  const {client} = window.__vtt, t = client.scene.tokens.get(id), c = client.grid.cell;
+  return client.addDrawing({k:'rect',p:[t.x+c,t.y-3*c,t.x+4*c,t.y+3*c].join(','),hz:15,w:1,color:'#ffffff',fill:0});
+},tokenId);
+await player.waitForFunction(id => window.__vtt.client.scene.draws.has(id),hill);
+await sleep(200);
+check('a player below a hill sees onto its near side', (await samples())[0] > bright[0]-10);
+await dm.evaluate(id => window.__vtt.client.updateDrawings([id],{hz:65}),hill);
+await player.waitForFunction(id => window.__vtt.client.scene.draws.get(id).hz === 65,hill);
+await sleep(200);
+check('raising the same hill reduces the visible depth', (await samples())[0] < bright[0]-15);
+await dm.evaluate(() => window.__vtt.client.history.undo());
+await dm.evaluate(() => window.__vtt.client.history.undo());
 await dm.evaluate(() => window.__vtt.client.history.undo()); // hide everything
 await player.waitForFunction(() => !window.__vtt.client.scene.meta.fog.enabled);
 check('undo restores the prior token sight setting', !(await player.evaluate(() => window.__vtt.client.scene.meta.fog.vision)));

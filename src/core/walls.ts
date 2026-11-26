@@ -30,6 +30,8 @@ export interface Wall {
 }
 
 export interface Seg {
+  /** Painted terrain carries the scale used to measure how far its near face can be seen. */
+  terrainPxPerFt?: number;
   climbable?: boolean;
   /** Height above the local ground for an authored wall. Cliffs carry only an absolute top. */
   wallHeight?: number;
@@ -182,34 +184,66 @@ export interface Visibility {
   free: boolean;
 }
 
+/** Close angular gaps in the combined shadow at each distance. Neighbours still in
+ * the ring when a ray is removed reach at least as far as that ray. */
+function closeNarrowShadows(angles: number[], reach: number[]): void {
+  const n = reach.length;
+  const order = reach.map((_, i) => i).sort((a, b) => reach[a] - reach[b]);
+  const prev = order.map((_, i) => (i + n - 1) % n);
+  const next = order.map((_, i) => (i + 1) % n);
+  for (const i of order) {
+    next[prev[i]] = next[i];
+    prev[next[i]] = prev[i];
+  }
+  for (let k = n - 2; k >= 0; k--) {
+    const i = order[k], left = prev[i], right = next[i];
+    if (left === right) continue;
+    let span = angles[right] - angles[left];
+    if (span < 0) span += 2 * Math.PI;
+    if (span < Math.PI / 18) reach[i] = Math.min(reach[left], reach[right]);
+  }
+}
+
 /**
  * What a viewer at `o` can see out to distance `r`: a ring around them, cut back wherever a wall gets in the way.
  * Rays are cast at both sides of every wall end in range (so the outline hugs corners exactly) and at regular steps (so open ground stays round).
  */
 export function visibilityPolygon(o: Vec, r: number, segs: Seg[], steps = 64, alt?: number): Visibility {
-  const near = segsFrom(segs, o, alt).filter((s) => distToSeg(o, s) < r);
+  const near: { seg: Seg; inset: number }[] = [];
+  for (const seg of segs) {
+    if (distToSeg(o, seg) >= r) continue;
+    const side = seg.one ? sideOf(seg, o) : 0;
+    const back = side !== 0 && side !== seg.one;
+    let inset = 0;
+    if (seg.terrainPxPerFt !== undefined && seg.top !== undefined) {
+      const rise = seg.top - (alt ?? 0);
+      if (rise <= 0) continue;
+      // Show a strip of the near face. Its far edge, and any wall in front, still stop the ray.
+      if (!back) inset = seg.terrainPxPerFt * 10 / (1 + rise / 10);
+    } else if (back || (alt !== undefined && seg.top !== undefined && alt >= seg.top)) continue;
+    near.push({seg, inset});
+  }
   const ring = (n: number): Vec[] => Array.from({ length: n }, (_, i) => ({ x: o.x + Math.cos((i / n) * Math.PI * 2) * r, y: o.y + Math.sin((i / n) * Math.PI * 2) * r }));
   if (!near.length) return { poly: ring(steps), free: true };
   const angles: number[] = [];
   for (let i = 0; i < steps; i++) angles.push((i / steps) * Math.PI * 2 - Math.PI);
   const EPS = 1e-4;
-  for (const s of near) for (const p of [s.a, s.b]) {
+  for (const {seg} of near) for (const p of [seg.a, seg.b]) {
     if (Math.hypot(p.x - o.x, p.y - o.y) > r * 1.001) continue;
     const a = Math.atan2(p.y - o.y, p.x - o.x);
-    angles.push(a - EPS, a, a + EPS);
+    for (const angle of [a-EPS, a, a+EPS]) angles.push(angle >= Math.PI ? angle-2*Math.PI : angle < -Math.PI ? angle+2*Math.PI : angle);
   }
   angles.sort((a, b) => a - b);
-  const out: Vec[] = [];
-  let last = -Infinity;
-  for (const a of angles) {
-    if (a - last < 1e-7) continue;
-    last = a;
-    const dx = Math.cos(a), dy = Math.sin(a);
-    let t = r;
-    for (const s of near) { const h = rayHit(o, dx, dy, s); if (h < t) t = h; }
-    out.push({ x: o.x + dx * t, y: o.y + dy * t });
-  }
-  return { poly: out, free: false };
+  const bearings = angles.filter((a, i) => !i || a - angles[i-1] >= 1e-7);
+  const directions = bearings.map(a => ({x: Math.cos(a), y: Math.sin(a)}));
+  const reach = directions.map(({x, y}) => {
+    let distance = r;
+    for (const {seg, inset} of near) distance = Math.min(distance, rayHit(o, x, y, seg) + inset);
+    return distance;
+  });
+  closeNarrowShadows(bearings, reach);
+  if (reach.every(d => d === r)) return {poly: ring(steps), free: true};
+  return {poly: directions.map((d, i) => ({x: o.x + d.x * reach[i], y: o.y + d.y * reach[i]})), free: false};
 }
 
 /** Drop points that do not change the outline by more than `tol` pixels (Douglas-Peucker, around the closed shape). */
@@ -252,7 +286,7 @@ export type RevealShape = { t: 'line'; pts: Vec[]; w: number } | { t: 'poly'; pt
  * What a token reveals as it walks a route: with no wall anywhere near, one thick line (as before); otherwise
  * what it could see from a spot every `step` pixels along the way, so it does not reveal rooms it only walked past.
  */
-export function routeReveal(route: Vec[], r: number, segs: Seg[], step: number, alt?: number): RevealShape[] {
+export function routeReveal(route: Vec[], r: number, segs: Seg[], step: number, alt?: number | ((p: Vec) => number)): RevealShape[] {
   if (!route.length) return [];
   const samples: Vec[] = [route[0]];
   for (let i = 1; i < route.length; i++) {
@@ -261,7 +295,7 @@ export function routeReveal(route: Vec[], r: number, segs: Seg[], step: number, 
     const n = Math.max(1, Math.ceil(len / step));
     for (let k = 1; k <= n; k++) samples.push({ x: a.x + ((b.x - a.x) * k) / n, y: a.y + ((b.y - a.y) * k) / n });
   }
-  const vis = samples.map((s) => visibilityPolygon(s, r, segs, 64, alt));
+  const vis = samples.map((s) => visibilityPolygon(s, r, segs, 64, typeof alt === 'function' ? alt(s) : alt));
   if (vis.every((v) => v.free)) return [{ t: 'line', pts: route, w: r * 2 }];
   return vis.map((v) => ({ t: 'poly', pts: simplifyPoly(v.poly, 0.75) }));
 }

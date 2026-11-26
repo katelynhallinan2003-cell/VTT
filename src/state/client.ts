@@ -23,9 +23,9 @@ import type {
   Handout, Rect, SceneMeta, TableMeta, TableSettings, Token, Vec, ViewCall,
 } from '../types';
 import { newAreaId } from '../core/terrain';
-import { patchStroke, type HeightPatch } from '../core/terrainEdges';
-import { altitudeOf, groundAt, zonesOf } from '../core/height';
-import { isLightMark, litSeen, lightOf, viewerOf, type LightSrc } from '../core/light';
+import { terrainEdges, patchStroke, type HeightPatch } from '../core/terrainEdges';
+import { groundAt, zonesOf } from '../core/height';
+import { sightHeight, isLightMark, litSeen, lightOf, viewerOf, type LightSrc } from '../core/light';
 import { carveWalls, joinAt, normalizeWall, routeReveal, sightSegs, splitPieces, wallMid, wallToWire, type Wall } from '../core/walls';
 import { buildCampaign, newLibraryItems, planImport, type CampaignFile, type CampaignLibraryItem } from '../core/campaign';
 import { addLibraryItem, removeTokenFromLib, saveTokenToLib, watchTokenLib } from './account';
@@ -1514,12 +1514,11 @@ export class TableClient {
     let count = 0;
     // ground they have seen is kept grey (shown dimmed when nobody can see it now) unless the DM wants it plainly clear
     const mode: FogMode = m.fog.dim ? 'x' : 'r';
-    // a wall's top depends on the ground it stands on, and what is higher than that sees over it (only worked out when some wall has a height)
-    const zones = [...s.walls.values()].some((w) => w.h > 0) ? zonesOf(s.draws.values(), g) : null;
-    const segs = sightSegs(s.walls.values(), (w) => (zones ? groundAt(zones, wallMid(w)) : 0) + w.h);
+    const zones = zonesOf(s.draws.values(), g);
+    const segs = [...sightSegs(s.walls.values(), w => groundAt(zones, wallMid(w)) + w.h), ...terrainEdges(zones)];
     // in the dark a token remembers what its own light, its darkvision and its touch reach as it walks, and what other lights show it where it stands
     const dark = m.light.ambient === 'dark';
-    const altOf = (t: Token) => (zones ? altitudeOf(t, groundAt(zones, t)).alt : undefined);
+    const altOf = (t: Token, p: Vec = t) => sightHeight(t, groundAt(zones, p));
     const lights: LightSrc[] = dark
       ? [...s.tokens.values()].filter((t) => (!t.hidden || isLightMark(t)) && t.light).map((t) => lightOf(t, g, { x: t.x, y: t.y }, altOf(t))).filter((l): l is LightSrc => !!l)
       : [];
@@ -1537,7 +1536,7 @@ export class TableClient {
         // keep the shape of the route but not every little step of it
         const pts = line.filter((p, i) => i === 0 || i === line.length - 1 || Math.hypot(p.x - line[i - 1].x, p.y - line[i - 1].y) >= g.cell * 0.2);
         // with no wall in reach this is the one thick line; with walls it is what the token could see from a spot every square along the way
-        for (const shape of routeReveal(pts, r, segs, g.cell, zones ? altitudeOf(t, groundAt(zones, t)).alt : undefined)) {
+        for (const shape of routeReveal(pts, r, segs, g.cell, p => altOf(t, p))) {
           updates[`${P.sceneFog(this.tableId, sid)}/${this.backend.newKey()}`] = shape.t === 'line' ? lineOp(mode, shape.pts, shape.w) : polyOp(mode, shape.pts);
           count++;
         }

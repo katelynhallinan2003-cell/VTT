@@ -179,7 +179,7 @@ export function terrainEdges(t: Terrain): TerrainEdge[] {
       if (left === right || len < 1e-6) continue;
       const one = left < right ? 1 : -1;
       const low = Math.min(left,right), top = Math.max(left,right);
-      out.push({ a: at(start), b: at(start+len), one, low, top });
+      out.push({ a: at(start), b: at(start+len), one, low, top, terrainPxPerFt: t.grid.cell / t.grid.ft });
     }
   }
   return out;

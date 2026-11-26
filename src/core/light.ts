@@ -1,4 +1,5 @@
 import type { Ambient, GridSettings, Token, TokenLight, Vec } from '../types';
+import { altitudeOf } from './height';
 import { cellPoly } from './cells';
 import { liftField } from './paintedlight';
 import type { Terrain } from './terrain';
@@ -7,6 +8,11 @@ import { visibilityPolygon, type Seg } from './walls';
 /** How dark each kind of scene is where nothing lights it (0 = daylight, 1 = pitch black). */
 /** A token that is only a light (a torch, a lantern, a campfire): no picture and no frame. It is never a combatant. */
 export const isLightMark = (t: Pick<Token, 'shape' | 'img' | 'light'>): boolean => t.shape === 'none' && !t.img && !!t.light;
+
+/** Sight and carried lights originate at creature height above its standing or flying altitude. */
+export function sightHeight(t: Pick<Token, 'size' | 'fly' | 'elev' | 'shape' | 'img' | 'light'>, ground: number): number {
+  return altitudeOf(t, ground).alt + (isLightMark(t) ? 0 : t.size * 5);
+}
 
 export const SHADE: Record<Ambient, number> = { bright: 0, dim: 0.45, dark: 0.88 };
 /** The colour of the dark, a little blue so it reads as night and not as a stain. */

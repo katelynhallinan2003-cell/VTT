@@ -57,6 +57,17 @@ const flight = await drag([start,end]);
 check('60 ft horizontal and 40 ft up costs 72.1 ft during the drag and after drop',
   flight.before === '72.1 ft' && flight.after.includes('72.1 ft'), JSON.stringify(flight));
 await dm.locator('.testbar button',{hasText:'Reset'}).click();
+// The cursor crosses the horizontal and vertical cell boundaries in separate events.
+const diagonalPointer = [start];
+for (let n=0;n<4;n++) {
+  const base = C(4+n,8+n);
+  diagonalPointer.push({x:base.x+0.59*cell,y:base.y+0.42*cell}, C(5+n,9+n));
+}
+await drag(diagonalPointer);
+const diagonal = await dm.evaluate(id => window.__vtt.board.testMoves.get(id), token);
+check('a diagonal square-grid drag with staggered pointer events records a direct diagonal',
+  diagonal?.via.every(p => Math.abs((p.x-start.x)-(p.y-start.y)) < 1) && near(diagonal.to,C(8,12)), JSON.stringify(diagonal));
+await dm.locator('.testbar button',{hasText:'Reset'}).click();
 await dm.evaluate(async ({token,start}) => {
   const {client} = window.__vtt, g = client.grid;
   await client.updateToken(token,{fly:false});

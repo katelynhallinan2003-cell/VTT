@@ -46,70 +46,56 @@ export function movementCost(grid: GridSettings, path: Vec[], flyer: number | nu
   edges: TerrainEdge[], walls: Seg[]) {
   const flightRuns: number[] | undefined = flyer === null ? undefined : [];
   const flat = pathFt(grid, path, [], flightRuns);
-  let climb = 0, rough = 0, run = 0;
-  const air: AirPoint[] = [];
+  if (path.length < 2) return {ft:0, note:''};
+  let rough = 0, run = 0, wallAtJoin = 0;
+  // Each interval describes the surface actually traversed after its entry point.
+  const profile: {run: number; ground: number; wall: number}[] = [];
   for (let i = 1; i < path.length; i++) {
     const a = path[i-1], b = path[i], dx = b.x-a.x, dy = b.y-a.y;
     const length = Math.hypot(dx,dy);
     if (!length) continue;
-    const ft = flightRuns ? flightRuns[i - 1] - run : length * grid.ft / grid.cell;
-    const hits = new Map<number, { rise: number; wall: number }>();
-    const hit = (t: number) => {
+    const ft = flightRuns ? flightRuns[i-1] - run : length * grid.ft / grid.cell;
+    const cuts = new Map<number, number>([[0,wallAtJoin],[1,0]]);
+    const cut = (edge: Seg, wall: number) => {
+      const t = crossing(a,b,edge);
+      if (t === null || t < -EPS || t > 1+EPS) return;
       const key = Math.max(0, Math.min(1, Math.round(t*1e9)/1e9));
-      let h = hits.get(key);
-      if (!h) { h = {rise:0, wall:0}; hits.set(key,h); }
-      return h;
+      cuts.set(key, Math.max(cuts.get(key) ?? 0, wall));
     };
-    for (const e of edges) {
-      const t = crossing(a,b,e);
-      if (t === null) continue;
-      const ex = e.b.x-e.a.x, ey = e.b.y-e.a.y;
-      const normal = (ex*dy-ey*dx)/(Math.hypot(ex,ey)*length);
-      const rise = -e.one * Math.sign(normal) * (e.top-e.low);
-      if (t >= -EPS && t <= 1+EPS) {
-        const h = hit(t);
-        h.rise += rise;
-      }
-    }
+    for (const edge of edges) cut(edge,0);
     for (const w of walls) {
       if (!w.climbable || !w.wallHeight || (w.one && sideOf(w,a) && sideOf(w,a) !== w.one)) continue;
-      const t = crossing(a,b,w);
-      if (t === null || t < -EPS || t > 1+EPS) continue;
-      const h = hit(t);
-      h.wall = Math.max(h.wall,w.wallHeight);
+      cut(w,w.wallHeight);
     }
-    const atStart = ctx.ground(a), atEnd = ctx.ground(b);
-    if (flyer !== null) air.push({run,z:Math.max(flyer,atStart)});
-    let height = atStart;
-    for (const [t,h] of [...hits].sort((x,y)=>x[0]-y[0])) {
-      // A route ending exactly on a terrain edge uses the actual endpoint elevation.
-      let rise = h.rise;
-      if (t === 0) rise = ctx.ground({x:a.x+dx*1e-6,y:a.y+dy*1e-6})-atStart;
-      if (t === 1) rise = atEnd-height;
-      const next = height + rise;
-      const low = Math.min(height,next), high = Math.max(height,next);
-      const summit = Math.max(high,low+h.wall);
-      if (flyer !== null) {
-        if (rise || h.wall) air.push({run:run+t*ft,z:Math.max(flyer,summit)});
-      } else {
-        climb += Math.abs(rise);
-        if (h.wall) {
-          // On level ground a freestanding wall costs both faces. A wall along
-          // a platform edge adds only the part above the platform.
-          const above = summit-high;
-          climb += above * (t === 0 || t === 1 ? 1 : 2);
-        }
-      }
-      height = next;
+    const stations = [...cuts.keys()].sort((x,y) => x-y);
+    for (let j = 1; j < stations.length; j++) {
+      const from = stations[j-1], mid = (from + stations[j])/2;
+      const ground = ctx.ground({x:a.x+dx*mid, y:a.y+dy*mid});
+      profile.push({run:run+ft*from, ground, wall:cuts.get(from)!});
     }
+    wallAtJoin = cuts.get(1)!;
+    if (flyer === null) rough += roughDistance(grid,a,b,ctx.rough);
+    run += ft;
+  }
+  if (!profile.length) return {ft:0, note:''};
+  let height = ctx.ground(path[0]), climb = 0;
+  const air: AirPoint[] = [];
+  if (flyer !== null) air.push({run:0,z:Math.max(flyer,height)});
+  profile.push({run, ground:ctx.ground(path[path.length-1]), wall:wallAtJoin});
+  for (const [i, station] of profile.entries()) {
+    const low = Math.min(height,station.ground), high = Math.max(height,station.ground);
+    const summit = Math.max(high,low+station.wall);
     if (flyer !== null) {
-      run += ft;
-      air.push({run,z:Math.max(flyer,atEnd)});
-      continue;
+      air.push({run:station.run,z:Math.max(flyer,summit)});
+    } else {
+      climb += high-low;
+      // Count each exposed face of a drawn wall, or one face if the move starts or ends on it.
+      climb += (summit-high) * (i === 0 || i === profile.length-1 ? 1 : 2);
     }
-    rough += roughDistance(grid,a,b,ctx.rough);
+    height = station.ground;
   }
   if (flyer !== null) {
+    air.push({run,z:Math.max(flyer,height)});
     return {ft:rounded(airDistance(air)),note:''};
   }
   const normal = rounded(flat+rough), climbing = rounded(climb);

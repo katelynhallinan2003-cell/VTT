@@ -1,6 +1,6 @@
 import { Application, Container, Graphics, Sprite, Text, Texture } from 'pixi.js';
 import {
-  clamp, cornerTotals, distanceFt, fitCamera, pathFt, gridFromRect, mapRect, normRect, sceneRect, pointInToken, rectContains, snapTokenCenter, snapToCellCenter, snapToCorner, zoomAt,
+  clamp, cornerTotals, distanceFt, fitCamera, pathFt, gridFromRect, mapRect, normRect, sceneRect, pointInToken, rectContains, snapDragCenter, snapTokenCenter, snapToCellCenter, snapToCorner, zoomAt,
 } from '../core/geometry';
 import { FILL_LEVEL, STROKE_CELLS, beamWidthPx, dashSegments, fitPenPoints, handlesOf, hitDrawing, pointInPoly, isTemplate, joinPts, resizeDrawing, setLineMeasurer, footprintPx, snapTemplate, templateLabel, templateWidthPx, type HandleId, type TemplateSnapState } from '../core/draw';
 import { templateRoughDraws } from '../core/templaterough';
@@ -14,7 +14,7 @@ import { EMPTY_TERRAIN, MAX_STROKE_CELLS, groundAtTerrain, areaAt, areaLabelAt, 
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
 import { scaleCut, type GridCut, type PixelImage } from '../core/gridcut';
 import { AUTO_GRID_STRENGTH, detectPrintedGrid, impliedGrid } from '../core/mapgrid';
-import { hasPaintedLight, lightOf, viewerOf, type LightSrc, type PaintedLight, type Viewer } from '../core/light';
+import { hasPaintedLight, lightOf, sightHeight, viewerOf, type LightSrc, type PaintedLight, type Viewer } from '../core/light';
 import { LightLayer } from './LightLayer';
 import { colorNum } from '../core/colornum';
 import { DEFAULT_GRID, MAX_ROUTE_CORNERS, MAX_VIA, tokenCoordinate } from '../core/model';
@@ -1159,10 +1159,10 @@ export class Board {
     return false;
   }
 
-  /** How high a token is when it stands (or flies) at `pos`. */
-  private altAt(id: string, pos: Vec): number | undefined {
+  /** Height of a viewer or light above the map at `pos`. */
+  private sightHeightAt(id: string, pos: Vec): number | undefined {
     const t = this.client.scene?.tokens.get(id);
-    return t ? this.heightOf(t, pos).alt : undefined;
+    return t ? sightHeight(t, groundAt(this.zones, pos)) : undefined;
   }
 
   /** Whether a token may go from→to (arrow keys, jumps and the like). */
@@ -1490,7 +1490,7 @@ export class Board {
       return v.testPos ? { x: v.token.x, y: v.token.y } : v.display;
     });
     // how high each one is: something above a wall's top sees over it
-    return circles.map((c) => ({ ...c, alt: this.altAt(c.id, { x: c.x, y: c.y }) }));
+    return circles.map((c) => ({ ...c, alt: this.sightHeightAt(c.id, { x: c.x, y: c.y }) }));
   }
 
   /** What shines and who sees, for a scene that is not in full daylight (null in daylight). Positions are where the tokens are drawn now. */
@@ -1509,16 +1509,16 @@ export class Board {
       if (t.hidden && !isLightMark(t)) continue;
       const at = v.testPos ? { x: t.x, y: t.y } : v.display;
       const g = this.client.gridAt(at); // a map with squares of its own measures its feet in them
-      const l = t.light ? lightOf(t, g, at, this.altAt(t.id, at)) : null;
+      const l = t.light ? lightOf(t, g, at, this.sightHeightAt(t.id, at)) : null;
       if (l) lights.push(l);
-      const w = viewerOf(t, g, at, this.altAt(t.id, at));
+      const w = viewerOf(t, g, at, this.sightHeightAt(t.id, at));
       if (w) viewers.push(w);
     }
     // the marker of a light can be hidden from this viewer (so it has no view here), but its light still shines
     for (const t of scene.tokens.values()) {
       if (!t.hidden || !isLightMark(t) || this.views.has(t.id)) continue;
       const at = { x: t.x, y: t.y };
-      const l = lightOf(t, this.client.gridAt(at), at, this.altAt(t.id, at));
+      const l = lightOf(t, this.client.gridAt(at), at, this.sightHeightAt(t.id, at));
       if (l) lights.push(l);
     }
     const r = (n: number) => Math.round(n * 2) / 2;
@@ -3168,7 +3168,13 @@ export class Board {
       const sn = snapTokenCenter(gg, anchorV!.token.size, to);
       return { x: sn.x - anchorO!.x, y: sn.y - anchorO!.y };
     } : null;
-    if (snapDelta) { const sn = snapDelta({ x: dx, y: dy }); dx = sn.x; dy = sn.y; }
+    if (snapIt) {
+      const to = {x:anchorO.x+dx, y:anchorO.y+dy};
+      const current = {x:anchorO.x+(d.cur?.x ?? 0), y:anchorO.y+(d.cur?.y ?? 0)};
+      const sn = snapDragCenter(this.client.gridAt(to), anchorV.token.size, to, current);
+      dx = sn.x-anchorO.x;
+      dy = sn.y-anchorO.y;
+    }
     // walls hold the group back (it walks around them if the drag does)
     const got = this.wallStep(d, { x: dx, y: dy }, snapDelta);
     const trail = d.trail;

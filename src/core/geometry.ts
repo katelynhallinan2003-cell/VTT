@@ -20,6 +20,22 @@ export function snapTokenCenter(grid: GridSettings, size: number, p: Vec): Vec {
   };
 }
 
+/** Near a square corner, let the cursor enter the diagonal cell before committing
+ * to a sideways step. The centre of a deliberate horizontal or vertical move still snaps normally. */
+export function snapDragCenter(grid: GridSettings, size: number, p: Vec, current: Vec): Vec {
+  const target = snapTokenCenter(grid, size, p);
+  if (isHex(grid)) return target;
+  const step = grid.cell / (size < 1 ? 2 : 1);
+  const center = snapTokenCenter(grid, size, current);
+  if (Math.hypot(current.x-center.x, current.y-center.y) > step * 0.1) return target;
+  const dx = Math.abs(target.x-center.x), dy = Math.abs(target.y-center.y);
+  // Apply only to an adjacent orthogonal step on this lattice (including tiny tokens).
+  if (Math.min(dx,dy) > 1e-5 || Math.abs(Math.max(dx,dy)-step) > 1e-5) return target;
+  const x = Math.abs(p.x-center.x)/step, y = Math.abs(p.y-center.y)/step;
+  const threshold = 0.5 + Math.min(0.3, Math.min(x,y)*0.8);
+  return Math.max(x,y) < threshold ? current : target;
+}
+
 /** Snap a free point to the nearest grid intersection. */
 export function snapToCorner(grid: GridSettings, p: Vec): Vec {
   if (isHex(grid)) return hexCorner(grid, p);

@@ -189,4 +189,21 @@ describe('shadows at creature eye height', () => {
     const thin = visibilityPolygon(origin,300,[near,face(220,-60,60)],64,5);
     expect(inPoly({x:172,y:0},thin.poly)).toBe(true);
   });
+
+  it('keeps shelf shadows steady while walking alongside two straight terraces', () => {
+    const near = {...wall(100,-300,100,300), one:1 as const, low:0, top:10, terrainPxPerFt:10};
+    const far = {...near, ...wall(225,-300,225,300), low:10, top:20};
+    const terrain = [near,far];
+    const points = [{x:167,y:-28},{x:170,y:0},{x:168,y:-10}];
+    const changes = points.map(() => 0);
+    let previous: boolean[] | undefined;
+    for (let y=-50;y<=50;y++) {
+      const view = visibilityPolygon({x:0,y},400,terrain,64,5);
+      const seen = points.map(p => [view.poly,...view.faces].some(poly => inPoly(p,poly)));
+      seen.forEach((value,i) => { if (previous && value!==previous[i]) changes[i]++; });
+      previous = seen;
+    }
+    // The viewer approaches each point and then recedes from it.
+    for (const count of changes) expect(count).toBeLessThanOrEqual(2);
+  });
 });

@@ -226,3 +226,4 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
 - [x] **#116 Remove black streaks in terrain sight** (added 2026-11-26, completed 2026-11-26). Join visible ground across brush endpoints and share the boundary where the number of visible bands changes.
 - [x] **#117 Height labels during movement** (added 2026-11-26, completed 2026-11-26). Show the same elevation numbers wherever the terrain overlay appears, including during a token drag.
 - [x] **#118 Skip fog calculations on a revealed map** (added 2026-11-26, completed 2026-11-26). Skip the fog mask, sight tracing and exploration on revealed scenes. Resume when fog returns.
+- [x] **#119 Steady hill shadows while moving** (added 2026-11-26, completed 2026-11-26). Interpolate terrain visibility between fixed map positions. Replayed sideways and retreating walks on the saved hill and added a moving-viewer regression test.

@@ -208,11 +208,7 @@ export function closeNarrowShadows(angles: number[], reach: number[]): void {
   }
 }
 
-/**
- * What a viewer at `o` can see out to distance `r`: a ring around them, cut back wherever a wall gets in the way.
- * Rays are cast at both sides of every wall end in range (so the outline hugs corners exactly) and at regular steps (so open ground stays round).
- */
-export function visibilityPolygon(o: Vec, r: number, segs: Seg[], steps = 64, alt?: number): Visibility {
+function nearSightEdges(o: Vec, r: number, segs: Seg[], alt?: number) {
   const near: { seg: Seg; inset: number }[] = [];
   for (const seg of segs) {
     if (distToSeg(o, seg) >= r) continue;
@@ -227,10 +223,19 @@ export function visibilityPolygon(o: Vec, r: number, segs: Seg[], steps = 64, al
     } else if (back || (alt !== undefined && seg.top !== undefined && alt >= seg.top)) continue;
     near.push({seg, inset});
   }
+  return near;
+}
+
+/**
+ * What a viewer at `o` can see out to distance `r`: a ring around them, cut back wherever a wall gets in the way.
+ * Rays are cast at both sides of every wall end in range (so the outline hugs corners exactly) and at regular steps (so open ground stays round).
+ */
+export function visibilityPolygon(o: Vec, r: number, segs: Seg[], steps = 64, alt?: number): Visibility {
+  const near = nearSightEdges(o,r,segs,alt);
   const ring = (n: number): Vec[] => Array.from({ length: n }, (_, i) => ({ x: o.x + Math.cos((i / n) * Math.PI * 2) * r, y: o.y + Math.sin((i / n) * Math.PI * 2) * r }));
   if (!near.length) return { poly: ring(steps), faces: [], free: true };
   if (near.some(n => n.seg.terrainPxPerFt !== undefined)) {
-    return terrainSight(o,r,near,alt ?? 0,steps);
+    return terrainSight(o,r,near,alt ?? 0,steps,segs,(p,range) => nearSightEdges(p,range,segs,alt));
   }
   const angles: number[] = [];
   for (let i = 0; i < steps; i++) angles.push((i / steps) * Math.PI * 2 - Math.PI);

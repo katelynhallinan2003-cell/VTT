@@ -105,9 +105,20 @@ const tints = await dm.evaluate(async () => {
 check('three finished elevations have distinct translucent colours', new Set(tints.map(c=>c.slice(0,3).join(','))).size === 3 &&
   tints.every(c=>c[3]>0 && c[3]<200), JSON.stringify(tints));
 await dm.screenshot({path:'/tmp/shots/elevation-heights.png'});
+await dm.keyboard.press('v');
+await pointer(await dm.evaluate(id => { const p = window.__vtt.board.views.get(id).display; return {x:p.x,y:p.y}; },token));
+await dm.mouse.down();
+await pointer(C(10,9));
+await dm.waitForFunction(() => window.__vtt.board.distText.visible);
+const moveLabels = await dm.evaluate(() => {
+  const layer = window.__vtt.board.terrainLayer;
+  return layer.container.visible && [...layer.labels.values()].some(t => t.renderable && t.text === '10 ft');
+});
+check('height numbers are visible during a token drag outside the Heights tool',moveLabels);
+await dm.mouse.up();
+await dm.keyboard.press('h');
 const moveTints = await dm.evaluate(() => {
   const {board,client} = window.__vtt, g = client.grid;
-  board.terrainLayer.sync(board.zones,new Set(),true,false);
   const {canvas,sprite} = board.terrainLayer;
   const ctx = canvas.getContext('2d');
   return [8,11,17].map(i => [...ctx.getImageData(Math.floor((g.ox+i*g.cell-sprite.x)*canvas.width/sprite.width),

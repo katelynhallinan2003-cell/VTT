@@ -138,6 +138,23 @@ await dm.evaluate(() => window.__vtt.client.history.undo());
 await dm.evaluate(() => window.__vtt.client.history.undo()); // hide everything
 await player.waitForFunction(() => !window.__vtt.client.scene.meta.fog.enabled);
 check('undo restores the prior token sight setting', !(await player.evaluate(() => window.__vtt.client.scene.meta.fog.vision)));
+await dm.evaluate(async () => {
+  const {client} = window.__vtt;
+  await client.updateScene({fog:{vision:true,explore:true}});
+  await client.resetFog('clear');
+});
+await player.waitForFunction(() => window.__vtt.client.scene.meta.fog.base === 'clear' && !window.__vtt.board.fogSprite.visible);
+const clear = await player.evaluate(() => {
+  const {board} = window.__vtt;
+  const previous = board.visionNow;
+  let calls = 0;
+  board.visionNow = () => { calls++; return previous.call(board); };
+  try { board.drawVision(); return calls === 0; } finally { board.visionNow = previous; }
+});
+check('a fully revealed map skips current sight and exploration', clear && (await dm.evaluate(() => window.__vtt.client.exploreNow())) === 0);
+await dm.evaluate(() => window.__vtt.client.resetFog('hidden'));
+await player.waitForFunction(() => window.__vtt.board.fogSprite.visible);
+check('covering the map again restores player sight', (await samples())[1] < before[1]-15);
 await browser.close();
 console.log(errors.length ? errors.join('\n') : 'no console problems');
 console.log(`${results.filter(Boolean).length}/${results.length} checks passed`);

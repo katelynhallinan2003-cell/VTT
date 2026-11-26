@@ -55,17 +55,17 @@ export class TerrainLayer {
 
   colourAt(h: number): string { return heightColor(h, this.levels.length ? this.levels : undefined); }
 
-  /** `selected` holds the ids of the areas to outline; `labels` says whether each area is named. Nothing is built while the layer is hidden. */
-  sync(t: Terrain, selected: Set<string>, show: boolean, labels = true, warm = false) {
+  /** `selected` holds the ids of the areas to outline. Nothing is built while the layer is hidden. */
+  sync(t: Terrain, selected: Set<string>, show: boolean, warm = false) {
     this.container.visible = show;
     if (!show && !warm) return;
-    const key = `${t.sig}#${[...selected].sort().join(',')}#${labels ? 1 : 0}`;
+    const key = `${t.sig}#${[...selected].sort().join(',')}`;
     if (key === this.key) return;
     this.key = key;
-    this.build(t, selected, labels);
+    this.build(t, selected);
   }
 
-  private build(t: Terrain, selected: Set<string>, labels: boolean) {
+  private build(t: Terrain, selected: Set<string>) {
     const areas = t.areas;
     if (!areas.length) { this.levels = []; this.clear(); return; }
     const grid = t.grid;
@@ -147,8 +147,6 @@ export class TerrainLayer {
       }
     }
     const line = blur(edge, W, H, 1);
-    const nearLedge = blur(edge, W, H, R);
-    const softCover = blur(Float32Array.from(cov), W, H, R);
     const ring = new Float32Array(N); // the outline of the selected areas
     const rs = Math.max(2, Math.round(s * 2.2));
     for (let y = rs; y < H - rs; y++) {
@@ -177,11 +175,10 @@ export class TerrainLayer {
     for (let i = 0; i < N; i++) {
       // tint, only on the ground itself
       let a = 0, R_ = 0, G_ = 0, B_ = 0;
-      const sharp = labels || nearLedge[i] > 0.00001;
-      const coverage = sharp ? cov[i] : softCover[i];
-      if (coverage) { const c = colour(sharp ? hgt[i] : around[i]); R_ = c[0]; G_ = c[1]; B_ = c[2]; a = 0.36 * coverage; }
+      const coverage = cov[i];
+      if (coverage) { const c = colour(hgt[i]); R_ = c[0]; G_ = c[1]; B_ = c[2]; a = 0.36 * coverage; }
       // shadow on the low side of a drop, light on the high side
-      const d = sharp ? around[i] - hgt[i] : around[Math.min(N - 1, i + W)] - around[Math.max(0, i - W)];
+      const d = around[i] - hgt[i];
       const k = Math.min(1, Math.abs(d) / 6) ** 0.7;
       const sh = d > 0.05 ? 0.28 * k : 0;
       const hi = d < -0.05 ? 0.18 * k : 0;
@@ -204,9 +201,9 @@ export class TerrainLayer {
     this.sprite!.scale.set(1 / s);
     this.sprite!.visible = true;
 
-    this.labelBoxes = labels ? terrainLabelBoxes(hgt, cov, W, H).map(box => ({
+    this.labelBoxes = terrainLabelBoxes(hgt, cov, W, H).map(box => ({
       elevation: box.elevation, x: bx + box.x / s, y: by + box.y / s, w: box.w / s, h: box.h / s,
-    })).filter(box => groundAt(t, { x: box.x + box.w / 2, y: box.y + box.h / 2 }) === box.elevation) : [];
+    })).filter(box => groundAt(t, { x: box.x + box.w / 2, y: box.y + box.h / 2 }) === box.elevation);
     this.layoutLabels();
   }
 

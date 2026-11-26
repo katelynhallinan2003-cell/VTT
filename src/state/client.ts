@@ -607,6 +607,25 @@ export class TableClient {
   /** Every wall, door and window in the open scene. */
   wallsList(): Wall[] { return [...(this.scene?.walls.values() ?? [])]; }
 
+  private coverCache: {meta: SceneState['meta']; ops: Map<string,FogOp>; rev: number; cover: boolean} | null = null;
+
+  fogHasCover(): boolean {
+    const scene = this.scene;
+    if (!scene?.meta?.fog.enabled) return false;
+    const {meta,fogOps,fogRev} = scene;
+    const cache = this.coverCache;
+    if (cache?.meta === meta && cache.ops === fogOps && cache.rev === fogRev) return cache.cover;
+    const cover = meta.fog.base === 'hidden' || [...fogOps.values()].some(op => op.m === 'h');
+    this.coverCache = {meta,ops:fogOps,rev:fogRev,cover};
+    return cover;
+  }
+
+  /** The rendered mask also detects a map cleared by a sequence of reveal brushes. */
+  noteFogClear() {
+    if (this.coverCache) this.coverCache.cover = false;
+    this.trails.clear();
+  }
+
   /** Fog ops in draw order (push keys sort chronologically). */
   fogOpsSorted(): [string, FogOp][] {
     return [...(this.scene?.fogOps.entries() ?? [])].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
@@ -1464,7 +1483,7 @@ export class TableClient {
     if (!this.isDM) return;
     this.syncInitMirror();
     const m = this.scene?.meta;
-    if (!m?.fog.enabled || !m.fog.vision || !m.fog.explore) return;
+    if (!m?.fog.vision || !m.fog.explore || !this.fogHasCover()) { this.trails.clear(); return; }
     this.observeTrails();
     if (this.exploreTimer) clearTimeout(this.exploreTimer);
     this.exploreTimer = setTimeout(() => { this.exploreTimer = null; void this.exploreNow(); }, 400);
@@ -1506,7 +1525,7 @@ export class TableClient {
   async exploreNow(): Promise<number> {
     const s = this.scene;
     const m = s?.meta;
-    if (!this.isDM || !s || !m || !m.fog.enabled || !m.fog.vision || !m.fog.explore) return 0;
+    if (!this.isDM || !s || !m?.fog.vision || !m.fog.explore || !this.fogHasCover()) { this.trails.clear(); return 0; }
     this.observeTrails();
     const g = m.grid;
     const sid = s.id;

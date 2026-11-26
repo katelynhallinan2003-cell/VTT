@@ -176,4 +176,17 @@ describe('shadows at creature eye height', () => {
       expect(reaches([face], 150, altitude)).toBe(false);
     }
   });
+
+  it('joins a farther visible face across brush segments and clears a thin shelf shadow', () => {
+    const near = {...wall(100,-150,100,150), one:1 as const, low:0, top:10, terrainPxPerFt:10};
+    const face = (x: number, from: number, to: number): Seg =>
+      ({...near,...wall(x,from,x,to),low:10,top:20});
+    const pieces = Array.from({length:40},(_,i) => face(225,(i-20)*3,(i-19)*3));
+    const v = visibilityPolygon(origin,300,[near,...pieces],64,5);
+    const visible = (x: number, y: number) => [v.poly,...v.faces].some(p => inPoly({x,y},p));
+    for (let y=-45;y<=45;y+=.25) expect(visible(232,y)).toBe(true);
+    expect(visible(180,0)).toBe(false);
+    const thin = visibilityPolygon(origin,300,[near,face(220,-60,60)],64,5);
+    expect(inPoly({x:172,y:0},thin.poly)).toBe(true);
+  });
 });

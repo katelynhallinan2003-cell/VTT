@@ -99,6 +99,13 @@ export class FogMask {
     this.ctx = this.canvas.getContext('2d', { willReadFrequently: false })!;
   }
 
+  hasCover = false;
+
+  clear() {
+    this.key = '';
+    this.hasCover = false;
+  }
+
   /** Returns true if the canvas content changed. */
   sync(ops: [string, FogOp][], settings: FogSettings, rect: Rect, maxSide = 2048): boolean {
     const scale = Math.min(1, maxSide / Math.max(rect.w, rect.h, 1));
@@ -127,6 +134,8 @@ export class FogMask {
       this.hasSeen = false;
       this.applied = [];
     }
+    let checkCover = false;
+    if (!isExtension) this.hasCover = settings.base === 'hidden';
     for (let i = this.applied.length; i < ops.length; i++) {
       const op = ops[i][1];
       if (op.m === 'x') {
@@ -134,8 +143,18 @@ export class FogMask {
         this.hasSeen = true;
       } else {
         paintOp(this.fogCtx, op, this.origin, this.scale);
+        if (op.m === 'h') this.hasCover = true;
+        checkCover = true;
         // fog put back over ground covers it again: it has to be seen anew
         if (op.m === 'h' && this.hasSeen) paintOp(this.seenCtx, op, this.origin, this.scale, true);
+      }
+    }
+    if (checkCover && this.hasCover) {
+      // Stop at the first covered strip. Only a hide/reveal edit needs this check.
+      this.hasCover = false;
+      for (let y=0;y<h && !this.hasCover;y+=32) {
+        const data = this.fogCtx.getImageData(0,y,w,Math.min(32,h-y)).data;
+        for (let i=3;i<data.length;i+=4) if (data[i]) { this.hasCover = true; break; }
       }
     }
     this.applied = ids;
@@ -162,6 +181,7 @@ export class FogMask {
 
   /** Is there fog over this spot, and has the ground there been seen before? (Both false: clear ground.) */
   fogAt(p: Vec): { fog: boolean; seen: boolean } {
+    if (!this.hasCover) return {fog:false,seen:false};
     const x = Math.floor((p.x - this.origin.x) * this.scale), y = Math.floor((p.y - this.origin.y) * this.scale);
     if (x < 0 || y < 0 || x >= this.canvas.width || y >= this.canvas.height) return { fog: false, seen: false };
     const fog = this.fogCtx.getImageData(x, y, 1, 1).data[3] > 127;

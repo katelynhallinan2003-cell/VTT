@@ -178,6 +178,7 @@ export class Board {
   private fogTexSize = '';
   /** circles around tokens that can see, cut out of the fog */
   private visionG = new Graphics();
+  private brightVision: {segs: Seg[]; key: string; contains: (p: Vec) => boolean} | null = null;
   private lightLayer = new LightLayer();
   /** which kind of hole-cutter the fog has now: none, the circles and shapes of what tokens see, or the lit shape used in the dark */
   private fogMaskKind: '' | 'g' | 's' = '';
@@ -1568,10 +1569,11 @@ export class Board {
     const L = this.lighting();
     this.drawDark(L);
     const sprite = this.fogSprite;
-    if (!sprite) return null;
+    if (!sprite?.visible) return null;
     const meta = this.client.scene?.meta;
     // in the dark, a token only sees what is lit (or what its darkvision reaches): the fog is cut open in that shape
     if (L && L.ambient === 'dark' && sprite.visible && meta?.fog.enabled && meta.fog.vision) {
+      this.brightVision = null;
       this.visionG.clear();
       if (!L.viewers.length) {
         if (this.fogMaskKind) { sprite.setMask({ mask: null }); this.fogMaskKind = ''; }
@@ -1583,14 +1585,18 @@ export class Board {
       return (p) => this.lightLayer.seenAt(p);
     }
     const g = this.visionG;
-    g.clear();
-    const circles = sprite.visible ? this.visionNow() : [];
+    const circles = this.visionNow();
     if (!circles.length) {
+      this.brightVision = null;
+      g.clear();
       if (this.fogMaskKind) { sprite.setMask({ mask: null }); this.fogMaskKind = ''; }
       return sprite.visible ? () => false : null;
     }
     // a wall cuts the circle back to what the token could really see from where it stands
     const sight = this.wallSegs().sight;
+    const key = circles.map(c => [c.x,c.y,c.r,c.alt].join(',')).join(';');
+    if (this.fogMaskKind === 'g' && this.brightVision?.segs === sight && this.brightVision.key === key) return this.brightVision.contains;
+    g.clear();
     const shapes: { x: number; y: number; r: number; poly: Vec[] | null }[] = [];
     for (const c of circles) {
       if (sight.length) {
@@ -1608,7 +1614,9 @@ export class Board {
     }
     g.fill(0xffffff);
     if (this.fogMaskKind !== 'g') { sprite.setMask({ mask: g, inverse: true }); this.fogMaskKind = 'g'; }
-    return (p) => shapes.some((c) => (c.poly ? pointInPoly(p, c.poly) : Math.hypot(p.x - c.x, p.y - c.y) <= c.r));
+    const contains = (p: Vec) => shapes.some(c => c.poly ? pointInPoly(p,c.poly) : Math.hypot(p.x-c.x,p.y-c.y) <= c.r);
+    this.brightVision = {segs:sight,key,contains};
+    return contains;
   }
 
   /** Whose turn is it, as far as this viewer is allowed to know? */
@@ -1852,9 +1860,20 @@ export class Board {
   // ------------------------------------------------------------------ fog
   private updateFog() {
     const meta = this.client.scene?.meta;
-    if (!meta || !meta.fog.enabled) { if (this.fogSprite) this.fogSprite.visible = false; this.dirty = true; return; }
+    if (!meta || !this.client.fogHasCover()) {
+      this.fogMask.clear();
+      if (this.fogSprite) this.fogSprite.visible = false;
+      this.dirty = true;
+      return;
+    }
     const rect = sceneRect(meta) ?? { x: 0, y: 0, w: 2000, h: 1500 };
     const changed = this.fogMask.sync(this.client.fogOpsSorted(), meta.fog, rect);
+    if (!this.fogMask.hasCover) {
+      this.client.noteFogClear();
+      if (this.fogSprite) this.fogSprite.visible = false;
+      this.dirty = true;
+      return;
+    }
     const sizeKey = `${this.fogMask.canvas.width}x${this.fogMask.canvas.height}`;
     if (!this.fogSprite) {
       this.fogSprite = new Sprite(Texture.EMPTY);
@@ -2471,11 +2490,11 @@ export class Board {
     const shown = this.heightFade > 0.001;
     this.terrainLayer.container.alpha = this.heightFade;
     const sel = new Set(this.ui.data.heightPatches ? [] : this.selectedAreas().map((a) => a.id));
-    this.terrainLayer.sync(t, sel, shown, this.ui.data.tool === 'height');
+    this.terrainLayer.sync(t, sel, shown);
     // build the picture a moment after the ground changes, so it is ready when someone starts dragging (no hitch then)
     if (!shown && t.areas.length) {
       window.clearTimeout(this.warmTimer);
-      this.warmTimer = window.setTimeout(() => { if (!this.destroyed && this.heightFade <= 0.001) this.terrainLayer.sync(t, sel, false, false, true); }, 400);
+      this.warmTimer = window.setTimeout(() => { if (!this.destroyed && this.heightFade <= 0.001) this.terrainLayer.sync(t, sel, false, true); }, 400);
     }
   }
 

@@ -221,4 +221,18 @@ describe('shadows at creature eye height', () => {
       expect([view.poly,...view.faces].some(poly => inPoly({x:xProbe,y:yProbe},poly))).toBe(true);
     }
   });
+
+  it('reveals a small enclosed shelf pocket and keeps broad or wall-backed shadows', () => {
+    const ledge = (x: number, halfWidth: number, low: number, top: number): Seg =>
+      ({...wall(x,-halfWidth,x,halfWidth), one:1, low, top, terrainPxPerFt:10});
+    const near = ledge(200,21,0,10), far = ledge(370,300,10,20);
+    const sees = (walls: Seg[], x: number) => {
+      const view = visibilityPolygon(origin,800,walls,64,5);
+      return [view.poly,...view.faces].some(poly => inPoly({x,y:0},poly));
+    };
+    expect(sees([near,far],290)).toBe(true);
+    expect(sees([near,far],480)).toBe(false);
+    expect(sees([ledge(200,100,0,10),far],290)).toBe(false);
+    expect(sees([near,far,wall(225,-100,225,100)],290)).toBe(false);
+  });
 });

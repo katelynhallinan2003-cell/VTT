@@ -95,6 +95,54 @@ function sampleSight(o: Vec, r: number, near: Edge[], eye: number, scale: number
 }
 
 type Profile = Band[][];
+
+// Measure enclosed shadows on a fixed viewpoint before blending. A shallow
+// pocket between shelves can survive the line-width filter on every ray yet
+// occupy very little ground. Leave the continuous shadow beyond the hill alone.
+function clearTerrainPockets(rows: Profile, scale: number): Profile {
+  const n = rows.length;
+  const gaps = rows.map((row,ray) => row.slice(1).map(([hi],j) => ({
+    ray, j, lo:row[j][1], hi, visited:false
+  })));
+  for (const rayGaps of gaps) for (const first of rayGaps) {
+    if (first.visited) continue;
+    const pocket = [first], bearings = new Set<number>();
+    let exterior = false, area = 0;
+    first.visited = true;
+    for (let k=0;k<pocket.length;k++) {
+      const {ray,lo,hi} = pocket[k];
+      bearings.add(ray);
+      area += (hi-lo)*(hi+lo)*Math.PI/n;
+      for (const next of [(ray+n-1)%n,(ray+1)%n]) {
+        if (hi>(rows[next].at(-1)?.[1] ?? 0)) exterior = true;
+        for (const gap of gaps[next]) {
+          if (gap.visited || lo>=gap.hi || hi<=gap.lo) continue;
+          gap.visited = true;
+          pocket.push(gap);
+        }
+      }
+    }
+    if (exterior) continue;
+    // Up to two 5-ft squares and 12 degrees is a small patch. Graduate
+    // back to the full shadow for larger areas or a wider apparent shelf.
+    const size = Math.max((area/(scale*scale)-50)/50,(bearings.size*360/n-12)/4);
+    if (size>=1) continue;
+    const t = Math.max(0,size);
+    const shrink = (1-t*t*(3-2*t))/2;
+    for (const {ray,j,lo,hi} of pocket) {
+      const inset = (hi-lo)*shrink;
+      if (hi-lo-2*inset < scale/4) {
+        // Fully close the last few inches so tapering cannot leave a black line.
+        rows[ray][j][1] = rows[ray][j+1][0] = (lo+hi)/2;
+      } else {
+        rows[ray][j][1] = lo+inset;
+        rows[ray][j+1][0] = hi-inset;
+      }
+    }
+  }
+  return rows.map(row => merge(row));
+}
+
 type ViewCache = {views: Map<string,Visibility>; projections: Map<string,Profile>};
 // The board replaces the segment array whenever its terrain or walls change.
 const profiles = new WeakMap<Seg[], ViewCache>();
@@ -249,7 +297,8 @@ export function terrainSight(o: Vec, r: number, near: Edge[], eye: number, steps
       const view=cached(cache.views,key,() => {
         const p={x:x*spacing,y:y*spacing};
         const terrain=nearAt(p,padded).filter(e => e.seg.terrainPxPerFt!==undefined);
-        return outline(p,padded,scale,sampleSight(p,padded,terrain,eye,scale,n));
+        const rows=sampleSight(p,padded,terrain,eye,scale,n);
+        return outline(p,padded,scale,clearTerrainPockets(rows,scale));
       });
       return project(view,origin,n);
     });

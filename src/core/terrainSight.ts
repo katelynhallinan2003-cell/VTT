@@ -96,7 +96,7 @@ function sampleSight(o: Vec, r: number, near: Edge[], eye: number, scale: number
 
 type Profile = Band[][];
 
-// Measure enclosed shadows on a fixed viewpoint before blending. A shallow
+// Measure enclosed shadows on the finished terrain mask. A shallow
 // pocket between shelves can survive the line-width filter on every ray yet
 // occupy very little ground. Leave the continuous shadow beyond the hill alone.
 function clearTerrainPockets(rows: Profile, scale: number): Profile {
@@ -106,12 +106,11 @@ function clearTerrainPockets(rows: Profile, scale: number): Profile {
   })));
   for (const rayGaps of gaps) for (const first of rayGaps) {
     if (first.visited) continue;
-    const pocket = [first], bearings = new Set<number>();
+    const pocket = [first];
     let exterior = false, area = 0;
     first.visited = true;
     for (let k=0;k<pocket.length;k++) {
       const {ray,lo,hi} = pocket[k];
-      bearings.add(ray);
       area += (hi-lo)*(hi+lo)*Math.PI/n;
       for (const next of [(ray+n-1)%n,(ray+1)%n]) {
         if (hi>(rows[next].at(-1)?.[1] ?? 0)) exterior = true;
@@ -123,9 +122,9 @@ function clearTerrainPockets(rows: Profile, scale: number): Profile {
       }
     }
     if (exterior) continue;
-    // Up to two 5-ft squares and 12 degrees is a small patch. Graduate
-    // back to the full shadow for larger areas or a wider apparent shelf.
-    const size = Math.max((area/(scale*scale)-50)/50,(bearings.size*360/n-12)/4);
+    // Clear up to two 5-ft squares and taper to full size over the next two.
+    // Stepping closer changes the apparent angle even for the same small patch.
+    const size = (area/(scale*scale)-50)/50;
     if (size>=1) continue;
     const t = Math.max(0,size);
     const shrink = (1-t*t*(3-2*t))/2;
@@ -298,13 +297,28 @@ export function terrainSight(o: Vec, r: number, near: Edge[], eye: number, steps
         const p={x:x*spacing,y:y*spacing};
         const terrain=nearAt(p,padded).filter(e => e.seg.terrainPxPerFt!==undefined);
         const rows=sampleSight(p,padded,terrain,eye,scale,n);
-        return outline(p,padded,scale,clearTerrainPockets(rows,scale));
+        return outline(p,padded,scale,rows);
       });
       return project(view,origin,n);
     });
   });
+  const blended = samples[0].map((_,i) => blendBands(samples.map(s => s[i]),weights,padded+spacing,scale));
+  // A notch in the far edge can appear where neighboring views meet. Bridge
+  // only the ground visible from both sides, keeping intervening shelves.
+  const reaches = blended.map(row => row.at(-1)![1]);
+  closeNarrowShadows(blended.map((_,i) => i*angleStep),reaches);
+  const bridged = blended.map((row,i) => {
+    const end=row.at(-1)![1];
+    if (end>=reaches[i]) return row;
+    let left=i, right=i;
+    while (blended[left].at(-1)![1]<reaches[i]) left=(left+n-1)%n;
+    while (blended[right].at(-1)![1]<reaches[i]) right=(right+1)%n;
+    const common=intersect(blended[left],blended[right]);
+    return merge([...row,...intersect(common,[[end,reaches[i]]])]);
+  });
+  const terrainRows = clearTerrainPockets(bridged,scale);
   let directRows: Profile | undefined;
-  const rows=samples[0].map((_,i) => {
+  const rows=terrainRows.map((row,i) => {
     const angle=i*angleStep, x=Math.cos(angle), y=Math.sin(angle);
     if (exactBearings[i]) {
       directRows ??= project(direct(),origin,n);
@@ -312,7 +326,6 @@ export function terrainSight(o: Vec, r: number, near: Edge[], eye: number, steps
     }
     const offset=dx*x+dy*y;
     const limit=offset+Math.sqrt(r*r-dx*dx-dy*dy+offset*offset);
-    const row=blendBands(samples.map(s => s[i]),weights,padded+spacing,scale);
     return row.filter(([a]) => a<limit).map(([a,b]): Band => [a,Math.min(b,limit)]);
   });
   const result=outline(origin,r,scale,rows);

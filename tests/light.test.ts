@@ -155,7 +155,9 @@ describe('shadows at creature eye height', () => {
       const v = visibilityPolygon(origin,300,walls,64,5);
       return [v.poly,...v.faces].some(poly => inPoly({x,y:0},poly));
     };
-    expect(visible([near,far],180)).toBe(false);
+    expect(visible([near,far],180)).toBe(true); // Only a small enclosed pocket remains here.
+    const broadShelf = {...far,...wall(245,-150,245,150)};
+    expect(visible([near,broadShelf],180)).toBe(false);
     expect(visible([near,far],210)).toBe(true);
     expect(visible([near,far],240)).toBe(true);
     expect(visible([near,far],285)).toBe(false);
@@ -181,10 +183,10 @@ describe('shadows at creature eye height', () => {
     const near = {...wall(100,-150,100,150), one:1 as const, low:0, top:10, terrainPxPerFt:10};
     const face = (x: number, from: number, to: number): Seg =>
       ({...near,...wall(x,from,x,to),low:10,top:20});
-    const pieces = Array.from({length:40},(_,i) => face(225,(i-20)*3,(i-19)*3));
+    const pieces = Array.from({length:40},(_,i) => face(245,(i-20)*3,(i-19)*3));
     const v = visibilityPolygon(origin,300,[near,...pieces],64,5);
     const visible = (x: number, y: number) => [v.poly,...v.faces].some(p => inPoly({x,y},p));
-    for (let y=-45;y<=45;y+=.25) expect(visible(232,y)).toBe(true);
+    for (let y=-45;y<=45;y+=.25) expect(visible(252,y)).toBe(true);
     expect(visible(180,0)).toBe(false);
     const thin = visibilityPolygon(origin,300,[near,face(220,-60,60)],64,5);
     expect(inPoly({x:172,y:0},thin.poly)).toBe(true);
@@ -220,6 +222,12 @@ describe('shadows at creature eye height', () => {
       const view = visibilityPolygon({x:0,y},550,ledges,64,5);
       expect([view.poly,...view.faces].some(poly => inPoly({x:xProbe,y:yProbe},poly))).toBe(true);
     }
+    // Projecting a nearer offset ledge leaves a thin spike in the far face.
+    ledges[2] = ledge(40,0,350,0,10);
+    const view = visibilityPolygon({x:0,y:7},550,ledges,64,5);
+    const visible = (x: number,y: number) => [view.poly,...view.faces].some(poly => inPoly({x,y},poly));
+    expect(visible(218.3,-27.4)).toBe(true);
+    expect(visible(350,-27.4)).toBe(false);
   });
 
   it('reveals a small enclosed shelf pocket and keeps broad or wall-backed shadows', () => {

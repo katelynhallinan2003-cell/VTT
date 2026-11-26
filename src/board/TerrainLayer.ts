@@ -9,11 +9,6 @@ import { canvasTexture } from './textures';
 const MAX_SIDE = 2048;
 const SELECT_RGB: [number, number, number] = [0x4d, 0xa3, 0xff];
 
-const rgbOf = (h: number): [number, number, number] => {
-  const c = parseInt(heightColor(h).slice(1), 16);
-  return [(c >> 16) & 255, (c >> 8) & 255, c & 255];
-};
-
 /** Blur a field with a box of radius `r` (edges repeat), twice, which is close enough to a Gaussian for shading. */
 function blur(src: Float32Array, W: number, H: number, r: number): Float32Array {
   if (r < 1) return src;
@@ -56,6 +51,9 @@ export class TerrainLayer {
   private zoom = 1;
   private coveredLabels: Text[] = [];
   private key = '';
+  private levels: number[] = [];
+
+  colourAt(h: number): string { return heightColor(h, this.levels.length ? this.levels : undefined); }
 
   /** `selected` holds the ids of the areas to outline; `labels` says whether each area is named. Nothing is built while the layer is hidden. */
   sync(t: Terrain, selected: Set<string>, show: boolean, labels = true, warm = false) {
@@ -69,7 +67,7 @@ export class TerrainLayer {
 
   private build(t: Terrain, selected: Set<string>, labels: boolean) {
     const areas = t.areas;
-    if (!areas.length) { this.clear(); return; }
+    if (!areas.length) { this.levels = []; this.clear(); return; }
     const grid = t.grid;
     const union = areas.reduce((u, a) => ({ x0: Math.min(u.x0, a.b.x), y0: Math.min(u.y0, a.b.y), x1: Math.max(u.x1, a.b.x + a.b.w), y1: Math.max(u.y1, a.b.y + a.b.h) }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
     // room around the edge for the shadows that fall outside the high ground
@@ -163,25 +161,25 @@ export class TerrainLayer {
     const out = new ImageData(W, H);
     const px = out.data;
     const lut = new Map<number, [number, number, number]>();
-    if (labels) {
-      const heights = new Set<number>();
-      for (let i = 0; i < N; i++) if (cov[i]) heights.add(hgt[i]);
-      const levels = [...heights].sort((a,b) => a-b);
-      const stops = [[53,139,177],[65,174,150],[169,197,105],[236,203,111],[216,140,111],[157,122,172]];
-      levels.forEach((h,index) => {
-        const v = levels.length === 1 ? 1 : index*(stops.length-1)/(levels.length-1);
-        const lo = Math.floor(v), hi = Math.ceil(v);
-        const channel = (c: number) => stops[lo][c]+(stops[hi][c]-stops[lo][c])*(v-lo);
-        lut.set(h,[channel(0),channel(1),channel(2)]);
-      });
-    }
-    const colour = (h: number) => { const k = Math.round(h); let c = lut.get(k); if (!c) { c = rgbOf(k); lut.set(k, c); } return c; };
+    const heights = new Set<number>();
+    for (let i = 0; i < N; i++) if (cov[i]) heights.add(hgt[i]);
+    this.levels = [...heights].sort((a,b) => a-b);
+    const colour = (h: number) => {
+      const key = Math.round(h * 10) / 10;
+      let rgb = lut.get(key);
+      if (!rgb) {
+        const c = parseInt(this.colourAt(key).slice(1),16);
+        rgb = [(c >> 16) & 255,(c >> 8) & 255,c & 255];
+        lut.set(key,rgb);
+      }
+      return rgb;
+    };
     for (let i = 0; i < N; i++) {
       // tint, only on the ground itself
       let a = 0, R_ = 0, G_ = 0, B_ = 0;
       const sharp = labels || nearLedge[i] > 0.00001;
       const coverage = sharp ? cov[i] : softCover[i];
-      if (coverage) { const c = colour(sharp ? hgt[i] : around[i]); R_ = c[0]; G_ = c[1]; B_ = c[2]; a = (labels ? 0.36 : 0.24) * coverage; }
+      if (coverage) { const c = colour(sharp ? hgt[i] : around[i]); R_ = c[0]; G_ = c[1]; B_ = c[2]; a = 0.36 * coverage; }
       // shadow on the low side of a drop, light on the high side
       const d = sharp ? around[i] - hgt[i] : around[Math.min(N - 1, i + W)] - around[Math.max(0, i - W)];
       const k = Math.min(1, Math.abs(d) / 6) ** 0.7;

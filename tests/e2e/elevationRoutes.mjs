@@ -76,7 +76,7 @@ await dm.evaluate(async ({token,start}) => {
 },{token,start});
 const target = C(10,8);
 const direct = await drag([start,target]);
-check('direct crossing charges both faces', direct.before === '50 ft · 30 ft normal + 20 ft climbing', JSON.stringify(direct));
+check('direct crossing charges both faces', direct.before === '50 ft · 30 ft normal + 20 ft climbing (10 ft up, 10 ft down)', JSON.stringify(direct));
 await dm.locator('.testbar button',{hasText:'Reset'}).click();
 const bypass = await drag([start,C(4,6),C(10,6),target]);
 check('one continuous drag around the wall keeps both turns and its 50 ft total after drop',
@@ -105,6 +105,15 @@ const tints = await dm.evaluate(async () => {
 check('three finished elevations have distinct translucent colours', new Set(tints.map(c=>c.slice(0,3).join(','))).size === 3 &&
   tints.every(c=>c[3]>0 && c[3]<200), JSON.stringify(tints));
 await dm.screenshot({path:'/tmp/shots/elevation-heights.png'});
+const moveTints = await dm.evaluate(() => {
+  const {board,client} = window.__vtt, g = client.grid;
+  board.terrainLayer.sync(board.zones,new Set(),true,false);
+  const {canvas,sprite} = board.terrainLayer;
+  const ctx = canvas.getContext('2d');
+  return [8,11,17].map(i => [...ctx.getImageData(Math.floor((g.ox+i*g.cell-sprite.x)*canvas.width/sprite.width),
+    Math.floor((g.oy+8.5*g.cell-sprite.y)*canvas.height/sprite.height),1,1).data]);
+});
+check('the movement overlay uses the same translucent colours as Heights', JSON.stringify(moveTints) === JSON.stringify(tints));
 // One stroke covers both the plateau and a detached island. A separate group
 // touches the plateau, and a higher cell cuts its far end off.
 const samples = [C(8,12),C(9,12),C(10,12),C(11,12),C(12,12),C(15,12)];

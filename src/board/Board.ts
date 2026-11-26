@@ -10,7 +10,7 @@ import { altitudeOf, dayOf, dimOf, groundAt, heightNote, isRough, roughOf, setAl
 import { rampCells } from '../core/walk';
 import { brushCuts, connectedHeight, inRegion, terrainEdges, type TerrainEdge } from '../core/terrainEdges';
 import { movementCost } from '../core/movementCost';
-import { EMPTY_TERRAIN, MAX_STROKE_CELLS, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, heightColor, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
+import { EMPTY_TERRAIN, MAX_STROKE_CELLS, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
 import { scaleCut, type GridCut, type PixelImage } from '../core/gridcut';
 import { AUTO_GRID_STRENGTH, detectPrintedGrid, impliedGrid } from '../core/mapgrid';
@@ -1595,7 +1595,13 @@ export class Board {
     for (const c of circles) {
       if (sight.length) {
         const v = visibilityPolygon({ x: c.x, y: c.y }, c.r, sight, 64, c.alt);
-        if (!v.free) { g.poly(v.poly.flatMap((q) => [q.x, q.y])); shapes.push({ ...c, poly: v.poly }); continue; }
+        if (!v.free) {
+          for (const poly of [v.poly, ...v.faces]) {
+            g.poly(poly.flatMap(q => [q.x, q.y]));
+            shapes.push({ ...c, poly });
+          }
+          continue;
+        }
       }
       g.circle(c.x, c.y, c.r);
       shapes.push({ ...c, poly: null });
@@ -2078,7 +2084,7 @@ export class Board {
     if (d?.kind === 'ramp') {
       const levels = rampCells(grid, d.a, d.b, u.rampFrom, u.rampTo, u.heightBrush);
       for (const l of levels) {
-        const col = num(heightColor(l.h));
+        const col = num(this.terrainLayer.colourAt(l.h));
         for (const c of l.cells) g.poly(cellPoly(grid, c).flatMap((p) => [p.x, p.y]), true);
         g.fill({ color: col, alpha: 0.55 });
       }
@@ -2683,7 +2689,7 @@ export class Board {
     if (!levels.length) return;
     const hex = grid.shape !== 'square';
     void this.client.addDrawings(
-      levels.map((l) => ({ k: 'terrain' as const, p: joinPts(l.cells), color: heightColor(l.h), w: grid.cell * (hex ? 1.16 : 1), fill: 0, fc: '', dash: false, txt: '', fs: 28, bw: 5, hz: l.h, hg: newAreaId(), ha: false, he: false, hc: true })),
+      levels.map((l) => ({ k: 'terrain' as const, p: joinPts(l.cells), color: this.terrainLayer.colourAt(l.h), w: grid.cell * (hex ? 1.16 : 1), fill: 0, fc: '', dash: false, txt: '', fs: 28, bw: 5, hz: l.h, hg: newAreaId(), ha: false, he: false, hc: true })),
       'Paint ramp',
     ).catch((err: Error) => this.cb.onNotice(err.message, 'error'));
     this.cb.onNotice(`Ramp from ${u.rampFrom} ft to ${u.rampTo} ft`, 'ok');
@@ -2712,7 +2718,7 @@ export class Board {
       return;
     }
     if (picks && d.erase) this.ui.selectDrawings(picks.flatMap(p => p.ids));
-    const col = d.rough ? '#c8791b' : heightColor(d.h);
+    const col = d.rough ? '#c8791b' : this.terrainLayer.colourAt(d.h);
     const cur = this.selectedAreas();
     const keep = cur.length === 1 && cur[0].id === d.group ? cur[0].ids : [];
     void this.client.addDrawing(
@@ -2736,7 +2742,7 @@ export class Board {
     const pick = !rough && u.heightPatches?.[0];
     const h = d ? d.h : pick ? pick.height : cur ? cur.h : u.heightFt;
     const add = d ? d.add : pick ? false : cur ? cur.add : u.heightAdds;
-    const col = erase ? 0xff6b6b : rough ? 0xc8791b : num(heightColor(h));
+    const col = erase ? 0xff6b6b : rough ? 0xc8791b : num(this.terrainLayer.colourAt(h));
     const snap = d ? !!d.cells : currentOverlay(grid) !== 'none' && u.heightSnap !== !!this.altDown;
     const n = d ? d.size : u.heightBrush;
     if (snap) {
@@ -2808,7 +2814,7 @@ export class Board {
     const ids = new Set(d.ids);
     for (const a of this.zones.areas) {
       if (!a.ids.some((id) => ids.has(id))) continue;
-      const col = num(heightColor(a.h));
+      const col = num(this.terrainLayer.colourAt(a.h));
       for (const s of a.paint) {
         if (s.kind === 'cells') for (const c of s.pts) g.poly(cellPoly(grid, { x: c.x + d.dx, y: c.y + d.dy }).flatMap((p) => [p.x, p.y]), true);
         else if (s.kind === 'rect') g.rect(s.b.x + d.dx, s.b.y + d.dy, s.b.w, s.b.h);

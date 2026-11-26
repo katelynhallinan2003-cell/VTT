@@ -75,6 +75,12 @@ export function viewerOf(t: Pick<Token, 'id' | 'sight' | 'dv' | 'size'>, g: Pick
   return { id: t.id, x: at.x, y: at.y, r, dv, touch: Math.min(r, edge + g.cell * 0.6), alt };
 }
 
+function visiblePolys(src: Vec & {alt?: number}, radius: number, segs: Seg[], steps = 48): Vec[][] {
+  if (radius <= 0) return [];
+  const {poly, faces} = visibilityPolygon(src, radius, segs, steps, src.alt);
+  return [poly, ...faces];
+}
+
 /** Where a light reaches, out to `radius`: cut back by walls (a closed door stops it, a window does not). */
 export function lightPoly(src: Pick<LightSrc, 'x' | 'y' | 'alt'>, radius: number, segs: Seg[]): Vec[] {
   return visibilityPolygon({ x: src.x, y: src.y }, radius, segs, 48, src.alt).poly;
@@ -139,12 +145,15 @@ export function clipToConvex(subject: Vec[], clip: Vec[]): Vec[] {
  */
 export function litSeen(v: Viewer, lights: LightSrc[], segs: Seg[]): Vec[][] {
   const out: Vec[][] = [];
-  let sight: Vec[] | null = null;
+  let sight: Vec[][] | null = null;
   for (const l of lights) {
     if (Math.hypot(l.x - v.x, l.y - v.y) > v.r + l.r) continue;
-    sight ??= sightPoly(v, segs);
-    const piece = clipToConvex(sight, ringPoly(l, l.r));
-    if (piece.length) out.push(piece);
+    sight ??= visiblePolys(v, v.r, segs, 64);
+    const circle = ringPoly(l, l.r);
+    for (const poly of sight) {
+      const piece = clipToConvex(poly, circle);
+      if (piece.length) out.push(piece);
+    }
   }
   return out;
 }
@@ -165,11 +174,13 @@ function toWorld(ctx: Ctx, f: Frame) {
 }
 function toScreen(ctx: Ctx) { ctx.setTransform(1, 0, 0, 1, 0, 0); }
 
-function path(ctx: Ctx, poly: Vec[]) {
+function path(ctx: Ctx, polys: Vec[][]) {
   ctx.beginPath();
-  ctx.moveTo(poly[0].x, poly[0].y);
-  for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
-  ctx.closePath();
+  for (const poly of polys) {
+    ctx.moveTo(poly[0].x, poly[0].y);
+    for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+    ctx.closePath();
+  }
 }
 
 /** How much a light lifts the dark at each distance (as a share of its reach): full within the bright part, `dim` out to its edge. */
@@ -325,26 +336,26 @@ export function paintShade(ctx: Ctx, f: Frame, ambient: Ambient, lights: LightSr
   toWorld(ctx, f);
   ctx.globalCompositeOperation = 'destination-out';
   for (const l of lights) {
-    const poly = lightPoly(l, l.r, segs);
-    if (poly.length < 3) continue;
+    const polys = visiblePolys(l, l.r, segs);
+    if (!polys.length) continue;
     const g = ctx.createRadialGradient(l.x, l.y, 0, l.x, l.y, l.r);
     for (const [at, a] of eraseStops(l.b, l.r, ambient)) g.addColorStop(at, `rgba(0,0,0,${a})`);
     ctx.fillStyle = g;
-    path(ctx, poly);
+    path(ctx, polys);
     ctx.fill();
   }
   if (ambient === 'dark') {
     for (const v of viewers) {
       const r = v.dv;
       if (!(r > 0)) continue;
-      const poly = visibilityPolygon({ x: v.x, y: v.y }, r, segs, 48, v.alt).poly;
-      if (poly.length < 3) continue;
+      const polys = visiblePolys(v, r, segs);
+      if (!polys.length) continue;
       const g = ctx.createRadialGradient(v.x, v.y, 0, v.x, v.y, r);
       g.addColorStop(0, 'rgba(0,0,0,0.5)');
       g.addColorStop(0.88, 'rgba(0,0,0,0.5)');
       g.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = g;
-      path(ctx, poly);
+      path(ctx, polys);
       ctx.fill();
     }
   }
@@ -363,8 +374,8 @@ export function paintGlow(ctx: Ctx, f: Frame, lights: LightSrc[], segs: Seg[]): 
   toWorld(ctx, f);
   ctx.globalCompositeOperation = 'lighter';
   for (const l of lights) {
-    const poly = lightPoly(l, l.b > 0 ? Math.min(l.r, l.b * 1.35) : l.r, segs);
-    if (poly.length < 3) continue;
+    const polys = visiblePolys(l, l.b > 0 ? Math.min(l.r, l.b * 1.35) : l.r, segs);
+    if (!polys.length) continue;
     const rgb = hexRgb(l.c);
     const reach = Math.min(l.r, l.b * 1.35);
     const g = ctx.createRadialGradient(l.x, l.y, 0, l.x, l.y, Math.max(1, reach));
@@ -372,7 +383,7 @@ export function paintGlow(ctx: Ctx, f: Frame, lights: LightSrc[], segs: Seg[]): 
     g.addColorStop(0.6, `rgba(${rgb},0.1)`);
     g.addColorStop(1, `rgba(${rgb},0)`);
     ctx.fillStyle = g;
-    path(ctx, poly);
+    path(ctx, polys);
     ctx.fill();
   }
   ctx.globalCompositeOperation = 'source-over';
@@ -395,9 +406,9 @@ export function paintSeen(seen: Ctx, lit: Ctx, f: Frame, lights: LightSrc[], vie
   toWorld(lit, f);
   lit.fillStyle = '#fff';
   for (const l of lights) {
-    const poly = lightPoly(l, l.r, segs);
-    if (poly.length < 3) continue;
-    path(lit, poly);
+    const polys = visiblePolys(l, l.r, segs);
+    if (!polys.length) continue;
+    path(lit, polys);
     lit.fill();
   }
   if (paint) {
@@ -410,9 +421,9 @@ export function paintSeen(seen: Ctx, lit: Ctx, f: Frame, lights: LightSrc[], vie
   toWorld(seen, f);
   seen.fillStyle = '#fff';
   for (const v of viewers) {
-    const poly = sightPoly(v, segs);
-    if (poly.length < 3) continue;
-    path(seen, poly);
+    const polys = visiblePolys(v, v.r, segs, 64);
+    if (!polys.length) continue;
+    path(seen, polys);
     seen.fill();
   }
   // keep only the part of what they could see that is lit
@@ -424,9 +435,9 @@ export function paintSeen(seen: Ctx, lit: Ctx, f: Frame, lights: LightSrc[], vie
   toWorld(seen, f);
   seen.fillStyle = '#fff';
   for (const v of viewers) {
-    const poly = darkPoly(v, segs);
-    if (!poly || poly.length < 3) continue;
-    path(seen, poly);
+    const polys = visiblePolys(v, Math.max(v.dv, v.touch), segs);
+    if (!polys.length) continue;
+    path(seen, polys);
     seen.fill();
   }
   toScreen(seen);

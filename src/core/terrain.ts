@@ -266,11 +266,15 @@ export function totalWith(below: number, h: number, add: boolean): number {
   return add ? below + h : h;
 }
 
-/** The colour of ground `h` feet up: sand to brown as it gets higher, then pale rock; blue for pits. */
-export function heightColor(h: number): string {
-  const mix = (a: number[], b: number[], k: number) => '#' + a.map((v, i) => Math.round(v + (b[i] - v) * Math.max(0, Math.min(1, k))).toString(16).padStart(2, '0')).join('');
-  if (h < 0) return mix([0x8f, 0xb4, 0xf5], [0x2b, 0x4a, 0x9e], -h / 40);
+/** Topographical colours by rank among the finished elevations on the map. */
+export function heightColor(h: number, levels: readonly number[] = [-10,0,5,10,15,20,25,30,35,40,60]): string {
   if (h === 0) return '#a8b0ba';
-  if (h <= 60) return mix([0xe8, 0xc9, 0x8a], [0x7a, 0x4a, 0x1e], h / 60);
-  return mix([0x7a, 0x4a, 0x1e], [0xd5, 0xda, 0xe0], (h - 60) / 120);
+  const stops = [[53,139,177],[65,174,150],[169,197,105],[236,203,111],[216,140,111],[157,122,172]];
+  let rank = levels.findIndex(level => level >= h);
+  if (rank < 0) rank = levels.length-1;
+  else if (rank > 0) rank -= (levels[rank]-h)/(levels[rank]-levels[rank-1]);
+  const v = levels.length < 2 ? 1 : rank*(stops.length-1)/(levels.length-1);
+  const lo = Math.floor(v), hi = Math.ceil(v);
+  return '#' + stops[lo].map((value,c) =>
+    Math.round(value+(stops[hi][c]-value)*(v-lo)).toString(16).padStart(2,'0')).join('');
 }

@@ -40,7 +40,7 @@ const points = await player.evaluate(id => {
   return [1.5,7].map(n => board.worldToScreen({x:t.x+n*client.grid.cell,y:t.y}));
 },tokenId);
 // Read the pixels the player actually sees, including the final fog and lighting masks.
-async function samples() {
+async function samples(at = points) {
   const png = await player.screenshot();
   return player.evaluate(async ({points,data}) => {
     const img = new Image();
@@ -56,7 +56,7 @@ async function samples() {
       for (let i=0;i<pixels.length;i+=4) sum += pixels[i]+pixels[i+1]+pixels[i+2];
       return Math.round(sum/147);
     });
-  },{points,data:png.toString('base64')});
+  },{points:at,data:png.toString('base64')});
 }
 const before = await samples();
 await dm.locator('.dock button',{hasText:'Hide everything'}).click();
@@ -115,6 +115,20 @@ const hill = await dm.evaluate(id => {
 await player.waitForFunction(id => window.__vtt.client.scene.draws.has(id),hill);
 await sleep(200);
 check('a player below a hill sees onto its near side', (await samples())[0] > bright[0]-10);
+const summit = await dm.evaluate(id => {
+  const {client} = window.__vtt, t = client.scene.tokens.get(id), c = client.grid.cell;
+  return client.addDrawing({k:'rect',p:[t.x+3.5*c,t.y-2*c,t.x+4*c,t.y+2*c].join(','),hz:42,w:1,color:'#ffffff',fill:0});
+},tokenId);
+await player.waitForFunction(id => window.__vtt.client.scene.draws.has(id),summit);
+const hillSpots = await player.evaluate(id => {
+  const {client,board} = window.__vtt, t = client.scene.tokens.get(id);
+  return [2.6,3.6].map(n => board.worldToScreen({x:t.x+n*client.grid.cell, y:t.y}));
+},tokenId);
+await sleep(200);
+const [shelf, face] = await samples(hillSpots);
+check('the player sees the taller face beyond the hidden shelf', face > shelf+15, JSON.stringify({shelf,face}));
+await dm.evaluate(() => window.__vtt.client.history.undo());
+await player.waitForFunction(id => !window.__vtt.client.scene.draws.has(id),summit);
 await dm.evaluate(id => window.__vtt.client.updateDrawings([id],{hz:65}),hill);
 await player.waitForFunction(id => window.__vtt.client.scene.draws.get(id).hz === 65,hill);
 await sleep(200);

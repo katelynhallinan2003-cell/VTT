@@ -132,7 +132,7 @@ await sleep(300);
 const from = { x: gx(12.5), y: gy(17.5) }, to = { x: gx(12.5), y: gy(14.5) };
 const cost = (f, t, fly, z = 0) => dm.evaluate(([a,b,flies,height]) => window.__vtt.board.moveCost([a,b],flies,height),[f,t,fly,z]);
 const across = await cost(from,to,false), back = await cost(to,from,false);
-check('a walker crosses a ten-foot freestanding wall in either direction', await allowed(from,to,below) && across.ft === 35 && across.note === '15 ft normal + 20 ft climbing' && back.ft === across.ft, JSON.stringify(across));
+check('a walker crosses a ten-foot freestanding wall in either direction', await allowed(from,to,below) && across.ft === 35 && across.note === '15 ft normal + 20 ft climbing (10 ft up, 10 ft down)' && back.ft === across.ft, JSON.stringify(across));
 await dm.evaluate((i) => window.__vtt.client.updateToken(i, { fly: true, elev: 5 }), below);
 await sleep(300);
 check('a low flyer pays to clear the wall', await allowed(from,to,below) && (await cost(from,to,true,5)).ft > 15);

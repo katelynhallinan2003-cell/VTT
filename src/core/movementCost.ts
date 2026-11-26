@@ -78,7 +78,7 @@ export function movementCost(grid: GridSettings, path: Vec[], flyer: number | nu
     run += ft;
   }
   if (!profile.length) return {ft:0, note:''};
-  let height = ctx.ground(path[0]), climb = 0;
+  let height = ctx.ground(path[0]), ascent = 0, descent = 0;
   const air: AirPoint[] = [];
   if (flyer !== null) air.push({run:0,z:Math.max(flyer,height)});
   profile.push({run, ground:ctx.ground(path[path.length-1]), wall:wallAtJoin});
@@ -88,9 +88,11 @@ export function movementCost(grid: GridSettings, path: Vec[], flyer: number | nu
     if (flyer !== null) {
       air.push({run:station.run,z:Math.max(flyer,summit)});
     } else {
-      climb += high-low;
+      ascent += Math.max(0, station.ground-height);
+      descent += Math.max(0, height-station.ground);
       // Count each exposed face of a drawn wall, or one face if the move starts or ends on it.
-      climb += (summit-high) * (i === 0 || i === profile.length-1 ? 1 : 2);
+      if (i > 0) ascent += summit-high;
+      if (i < profile.length-1) descent += summit-high;
     }
     height = station.ground;
   }
@@ -98,7 +100,8 @@ export function movementCost(grid: GridSettings, path: Vec[], flyer: number | nu
     air.push({run,z:Math.max(flyer,height)});
     return {ft:rounded(airDistance(air)),note:''};
   }
-  const normal = rounded(flat+rough), climbing = rounded(climb);
-  const note = climbing ? `${normal} ft normal + ${climbing} ft climbing` : rough ? `difficult ground +${rounded(rough)} ft` : '';
+  const normal = rounded(flat+rough), climbing = rounded(ascent+descent);
+  const directions = ascent && descent ? ` (${rounded(ascent)} ft up, ${rounded(descent)} ft down)` : '';
+  const note = climbing ? `${normal} ft normal + ${climbing} ft climbing${directions}` : rough ? `difficult ground +${rounded(rough)} ft` : '';
   return {ft:rounded(normal+climbing),note};
 }

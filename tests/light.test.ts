@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { clipToConvex, darkPoly, eraseStops, lightOf, lightPoly, litSeen, ringPoly, SHADE, sightHeight, sightPoly, viewerOf, type LightSrc } from '../src/core/light';
-import { inPoly } from '../src/core/walls';
+import { inPoly, visibilityPolygon, routeReveal } from '../src/core/walls';
 import type { Seg } from '../src/core/walls';
 
 const grid = { ft: 5, cell: 70 };
@@ -146,6 +146,24 @@ describe('shadows at creature eye height', () => {
     expect(reaches([face], 160)).toBe(false);
     expect(reaches([{...face, top:45}], 130)).toBe(false);
     expect(reaches([face, {...face, ...wall(125,-100,125,100), one:-1}], 135)).toBe(false);
+  });
+
+  it('reveals the next face above a nearer skyline while keeping the intervening shelf hidden', () => {
+    const near = {...wall(100,-150,100,150), one:1 as const, low:0, top:10, terrainPxPerFt:10};
+    const far = {...near, ...wall(225,-150,225,150), low:10, top:20};
+    const visible = (walls: Seg[], x: number) => {
+      const v = visibilityPolygon(origin,300,walls,64,5);
+      return [v.poly,...v.faces].some(poly => inPoly({x,y:0},poly));
+    };
+    expect(visible([near,far],180)).toBe(false);
+    expect(visible([near,far],210)).toBe(true);
+    expect(visible([near,far],240)).toBe(true);
+    expect(visible([near,far],285)).toBe(false);
+    expect(visible([near,{...far,top:15}],230)).toBe(false);
+    expect(visible([{...wall(90,-150,90,150),top:10},far],230)).toBe(true);
+    expect(visible([wall(90,-150,90,150),far],230)).toBe(false);
+    const memory = routeReveal([origin],300,[near,far],10,5);
+    expect(memory.some(s => s.t === 'poly' && inPoly({x:230,y:0},s.pts))).toBe(true);
   });
 
   it('sees across a level wall top at each creature size on a hill or in flight', () => {

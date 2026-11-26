@@ -33,7 +33,7 @@ describe('movement over terrain', () => {
     terraces.push(normalizeDrawing('lip', {k:'rect', p:'22,2,24.5,6', hz:25, t:2})!);
     const descent = [point(45,0),point(24,2),point(0,0)];
     expect(measure(terraces,descent).note).toMatch(/40 ft climbing$/);
-    expect(measure(terraces,[descent[0],point(24,3),descent[2]]).note).toMatch(/50 ft climbing$/);
+    expect(measure(terraces,[descent[0],point(24,3),descent[2]]).note).toMatch(/50 ft climbing \(5 ft up, 45 ft down\)$/);
   });
   it('clears an intervening ridge on a flight with level endpoints', () => {
     const ridge = [rect('ridge',20,30,15)];
@@ -41,7 +41,7 @@ describe('movement over terrain', () => {
   });
   it('accounts for both walls of a narrow depression and skips them on a route around it', () => {
     const pit = [rect('pit',10,10.5,-20)];
-    expect(measure(pit,[point(0),point(20)])).toEqual({ft:60,note:'20 ft normal + 40 ft climbing'});
+    expect(measure(pit,[point(0),point(20)])).toEqual({ft:60,note:'20 ft normal + 40 ft climbing (20 ft up, 20 ft down)'});
     expect(measure(pit,[point(0),point(0,8),point(20,8),point(20)])).toEqual({ft:34,note:''});
   });
   it('preserves shared drag corners independently of manual stops, including old previews', () => {

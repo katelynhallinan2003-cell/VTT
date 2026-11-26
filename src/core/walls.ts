@@ -32,6 +32,7 @@ export interface Wall {
 export interface Seg {
   /** Painted terrain carries the scale used to measure how far its near face can be seen. */
   terrainPxPerFt?: number;
+  low?: number;
   climbable?: boolean;
   /** Height above the local ground for an authored wall. Cliffs carry only an absolute top. */
   wallHeight?: number;
@@ -180,6 +181,8 @@ export function clampMove(from: Vec, to: Vec, segs: Seg[], gap: number, alt?: nu
 export interface Visibility {
   /** the outline of what can be seen, in order around the viewer */
   poly: Vec[];
+  /** Higher faces that rise back into view beyond a hidden stretch of ground. */
+  faces: Vec[][];
   /** nothing was in the way: it is a plain circle */
   free: boolean;
 }
@@ -224,7 +227,7 @@ export function visibilityPolygon(o: Vec, r: number, segs: Seg[], steps = 64, al
     near.push({seg, inset});
   }
   const ring = (n: number): Vec[] => Array.from({ length: n }, (_, i) => ({ x: o.x + Math.cos((i / n) * Math.PI * 2) * r, y: o.y + Math.sin((i / n) * Math.PI * 2) * r }));
-  if (!near.length) return { poly: ring(steps), free: true };
+  if (!near.length) return { poly: ring(steps), faces: [], free: true };
   const angles: number[] = [];
   for (let i = 0; i < steps; i++) angles.push((i / steps) * Math.PI * 2 - Math.PI);
   const EPS = 1e-4;
@@ -236,14 +239,62 @@ export function visibilityPolygon(o: Vec, r: number, segs: Seg[], steps = 64, al
   angles.sort((a, b) => a - b);
   const bearings = angles.filter((a, i) => !i || a - angles[i-1] >= 1e-7);
   const directions = bearings.map(a => ({x: Math.cos(a), y: Math.sin(a)}));
+  const eye = alt ?? 0;
+  const hasFaces = near.length > 1 && near.some(n => n.inset > 0);
+  type Band = {inner: number; outer: number};
+  const bands: Map<Seg, Band>[] = [];
   const reach = directions.map(({x, y}) => {
     let distance = r;
-    for (const {seg, inset} of near) distance = Math.min(distance, rayHit(o, x, y, seg) + inset);
+    const hits: {d: number; seg: Seg; inset: number}[] = [];
+    for (const {seg, inset} of near) {
+      const d = rayHit(o, x, y, seg);
+      if (d >= r) continue;
+      distance = Math.min(distance, d + inset);
+      if (hasFaces) hits.push({d, seg, inset});
+    }
+    if (hasFaces) {
+      hits.sort((a,b) => a.d-b.d);
+      let horizon = -Infinity, previous = 0;
+      const spans = new Map<Seg, Band>();
+      for (const [i, {d, seg, inset}] of hits.entries()) {
+        if (seg.top === undefined) break;
+        const visibleRise = seg.top - Math.max(seg.low ?? eye, eye + horizon*d);
+        if (inset > 0 && previous > 0 && d+inset > distance && visibleRise > 0) {
+          // Project the exposed face onto the artwork just before the lip. The
+          // existing peek across a shelf ends at the next obstacle or the sightline.
+          const inner = Math.max(previous, d-visibleRise*seg.terrainPxPerFt!);
+          const skylineLimit = horizon > 0 ? (seg.top-eye)/horizon : r;
+          const outer = Math.min(d+inset, hits[i+1]?.d ?? r, skylineLimit);
+          if (outer > inner) spans.set(seg, {inner, outer});
+        }
+        horizon = Math.max(horizon, (seg.top-eye)/Math.max(d, 1e-8));
+        previous = d;
+      }
+      bands.push(spans);
+    }
     return distance;
   });
   closeNarrowShadows(bearings, reach);
-  if (reach.every(d => d === r)) return {poly: ring(steps), free: true};
-  return {poly: directions.map((d, i) => ({x: o.x + d.x * reach[i], y: o.y + d.y * reach[i]})), free: false};
+  if (reach.every(d => d === r)) return {poly: ring(steps), faces: [], free: true};
+  const at = (i: number, d: number) => ({x:o.x+directions[i].x*d, y:o.y+directions[i].y*d});
+  const faces: Vec[][] = [];
+  let strips = new Map<Seg, {inner: Vec[]; outer: Vec[]}>();
+  for (let i = 0; i < bands.length; i++) {
+    const j = (i+1)%bands.length;
+    const next = new Map<Seg, {inner: Vec[]; outer: Vec[]}>();
+    for (const [seg, a] of bands[i]) {
+      const b = bands[j].get(seg);
+      if (!b || (a.outer <= reach[i] && b.outer <= reach[j])) continue;
+      const strip = strips.get(seg) ?? {inner:[at(i,a.inner)], outer:[at(i,a.outer)]};
+      strip.inner.push(at(j,b.inner));
+      strip.outer.push(at(j,b.outer));
+      next.set(seg,strip);
+    }
+    for (const [seg, strip] of strips) if (!next.has(seg)) faces.push(strip.outer.concat(strip.inner.reverse()));
+    strips = next;
+  }
+  for (const strip of strips.values()) faces.push(strip.outer.concat(strip.inner.reverse()));
+  return {poly: reach.map((d, i) => at(i,d)), faces, free: false};
 }
 
 /** Drop points that do not change the outline by more than `tol` pixels (Douglas-Peucker, around the closed shape). */
@@ -297,7 +348,7 @@ export function routeReveal(route: Vec[], r: number, segs: Seg[], step: number, 
   }
   const vis = samples.map((s) => visibilityPolygon(s, r, segs, 64, typeof alt === 'function' ? alt(s) : alt));
   if (vis.every((v) => v.free)) return [{ t: 'line', pts: route, w: r * 2 }];
-  return vis.map((v) => ({ t: 'poly', pts: simplifyPoly(v.poly, 0.75) }));
+  return vis.flatMap(v => [v.poly,...v.faces].map(p => ({ t: 'poly' as const, pts: simplifyPoly(p, 0.75) })));
 }
 
 // ------------------------------------------------------------------ picking and snapping

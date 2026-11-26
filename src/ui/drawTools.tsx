@@ -163,7 +163,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
   const grid = client.grid;
   const hex = isHex(grid);
   const gridless = currentOverlay(grid) === 'none';
-  const mode = terrainBrushMode(d, gridless);
+  const mode = terrainBrushMode(d);
   const cellWord = hex ? 'hex' : 'square';
   const terrain = zonesOf(client.drawingsSorted(), grid);
   const sel = areasSelected(terrain, d.drawSel);
@@ -193,57 +193,42 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
   const n = terrain.areas.length;
   const rough = d.groundKind === 'rough';
   const roughN = roughOf(client.drawingsSorted(), grid).areas.length;
-  const modes = rough ? ([['paint', 'Paint'], ['erase', 'Erase']] as const) : ([['paint', 'Paint'], ['ramp', 'Ramp'], ['erase', 'Erase'], ['move', 'Select']] as const);
+  const modes = rough ? ([['paint', 'Paint'], ['erase', 'Erase']] as const) : ([['paint', 'Paint'], ['erase', 'Erase'], ['move', 'Select']] as const);
+  const gradient = !!d.gradientArea;
+  async function editGradient() {
+    let area = one;
+    if (picks?.length === 1 && (!picks[0].whole || !one)) {
+      const ids = await client.editHeightPatches(picks.map(p => ({...p,whole:false})),{height:picks[0].height});
+      const terrain = zonesOf(client.drawingsSorted(),grid);
+      area = areasSelected(terrain,new Set(ids))[0] ?? null;
+    }
+    if (area) ui.set({drawSel:new Set(area.ids),gradientArea:area.id});
+  }
   return (
-    <div class="flyout">
-      <div class="flyout-title">Heights</div>
+    <div class="flyout terrain-menu">
+      <div class="flyout-title">{rough ? 'Difficult terrain' : 'Elevation'}</div>
       <div class="seg">
-        {([['height', 'Heights'], ['rough', 'Difficult']] as const).map(([k, label]) => (
-          <button key={k} class={d.groundKind === k ? 'on' : ''} onClick={() => ui.set({ groundKind: k })}>{label}</button>
-        ))}
+        {([['height','Elevation'],['rough','Diff Terrain']] as const).map(([k,label]) =>
+          <button key={k} class={d.groundKind===k ? 'on' : ''} onClick={()=>ui.set({groundKind:k})}>{label}</button>)}
       </div>
-      {rough && <p class="hint">Walking through difficult ground costs double movement. Flyers are not slowed.</p>}
       <div class="seg">
-        {modes.filter(([k]) => !gridless || k !== 'ramp').map(([k, label]) => (
-          <button key={k} class={mode === k ? 'on' : ''} onClick={() => ui.set({ heightMode: k })}>{label}</button>
-        ))}
+        {modes.map(([k,label]) => <button key={k} class={!gradient && mode===k ? 'on' : ''} onClick={()=>ui.set({heightMode:k})}>{label}</button>)}
       </div>
-      {!rough && mode === 'paint' && props.onFromColor && <button class="btn small" title="Pick a colour on the map picture (water, a pit) and paint every place with it at a height" onClick={props.onFromColor}>Paint height from a colour…</button>}
-      {mode !== 'move' && (
-        <>
-          {!gridless && mode !== 'ramp' && <Toggle checked={d.heightSnap} onChange={(v) => ui.set({ heightSnap: v })} label={`Fill whole ${cellWord}s`} hint="Hold Alt to flip this for one stroke." />}
-          <span class="field-label">{gridless ? 'Brush diameter (ft)' : mode === 'ramp' ? `Ramp width (${cellWord}s)` : `Brush size (${d.heightSnap ? `${cellWord}s across` : 'cells wide'})`}</span>
-          <div class="chips">
-            {BRUSH_SIZES.map((x) => <button key={x} class={`chip ${d.heightBrush === x ? 'on' : ''}`} onClick={() => ui.set({ heightBrush: x })}>{gridless ? x * grid.ft : x}</button>)}
-          </div>
-        </>
-      )}
-      {rough && (
-        <div class="row wrap">
-          <span class="hint">{roughN ? 'Difficult ground is on this map' : 'No difficult ground yet'}</span>
-          <span class="grow" />
-          {roughN > 0 && <button class="btn small danger" onClick={async () => { const c = await client.clearDrawings((x) => !!x.dt, 'Clear difficult ground'); toast(c ? 'Cleared the difficult ground' : 'Nothing to clear', 'info', 1800); }}>Clear difficult ground</button>}
-        </div>
-      )}
-      {!rough && mode === 'ramp' && (
-        <div class="ht-card">
-          <strong>Ramp</strong>
-          <NumField label="Start" value={d.rampFrom} min={-1000} max={5000} step={5} unit="ft" title="How high the ground is where you press the mouse button" onCommit={(v) => ui.set({ rampFrom: Math.round(v) })} />
-          <NumField label="End" value={d.rampTo} min={-1000} max={5000} step={5} unit="ft" title="How high the ground is where you let go" onCommit={(v) => ui.set({ rampTo: Math.round(v) })} />
-          <div class="row wrap">
-            <button class="btn small" onClick={() => ui.set({ rampFrom: d.rampTo, rampTo: d.rampFrom })}>Swap</button>
-            <span class="hint">Drag to paint successive flat levels in 5 ft steps.</span>
-          </div>
-        </div>
-      )}
-      {!rough && mode !== 'ramp' && <div class="ht-card">
+      {mode !== 'move' && !gradient && <>
+        {!gridless && <Toggle checked={d.heightSnap} onChange={v=>ui.set({heightSnap:v})} label={`Fill whole ${cellWord}s`} hint="Hold Alt to flip this for one stroke." />}
+        <span class="field-label">Brush diameter ({gridless ? 'ft' : cellWord+'s'})</span>
+        <div class="chips terrain-presets">{BRUSH_SIZES.map(x => <button key={x} class={`chip ${d.heightBrush===x ? 'on' : ''}`} onClick={()=>ui.set({heightBrush:x})}>{gridless ? x*grid.ft : x}</button>)}</div>
+      </>}
+      {rough && roughN > 0 && <button class="btn small danger" onClick={()=>void client.clearDrawings(x=>!!x.dt,'Clear difficult ground')}>Clear difficult ground</button>}
+      {!rough && <div class="ht-card">
         <div class="row">
           <strong>{picks ? (picks.length === 1 ? 'Selected ground' : `${picks.length} areas selected`) : editing ? (one ? 'Selected ground' : `${mine.length} areas selected`) : 'Next ground you paint'}</strong>
           <span class="grow" />
           {editing && <button class="btn small" title="Let go of this ground so the next stroke starts a new one (Esc)" onClick={() => ui.selectDrawings([])}>New area</button>}
         </div>
+        {!gradient && !one?.gradient?.length && <>
         <NumField label={shownAdd ? 'Raise by' : 'Height'} value={shownH} min={-1000} max={5000} step={5} unit="ft" title={shownAdd ? 'How much higher this makes the ground it sits on. Negative digs it down.' : 'How high this ground is. Negative is a pit.'} onCommit={setH} />
-        <div class="chips">
+        <div class="chips terrain-presets">
           {ZONE_PRESETS.map((h) => (
             <button key={h} class={`chip ${shownH === h ? 'on' : ''}`} style={{ borderColor: zoneColor(h) }} onClick={() => setH(h)}>{h}</button>
           ))}
@@ -252,14 +237,17 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
           <button class={!shownAdd ? 'on' : ''} disabled={editing && !paintable.length} title="This ground is exactly this high above the map base, whatever is under it" onClick={() => setAdds(false)}>Exact height</button>
           <button class={shownAdd ? 'on' : ''} disabled={mode !== 'paint' && editing && !paintable.length} title="Each new stroke adds its height to the ground beneath it" onClick={() => setAdds(true)}>Added on top</button>
         </div>
+        </>}
         {editing ? (
           <div class="row wrap">
             {(!picks || picks.every(p => p.whole)) && paintable.length > 1 && <button class="btn small" title="Make these one area" onClick={() => { ui.selectDrawings(paintable.flatMap(a => a.ids)); void client.mergeAreas(paintable); }}>Merge</button>}
+            {(one || picks?.length === 1) && <button class="btn small" onClick={() => gradient ? ui.set({gradientArea:undefined,gradientLine:undefined}) : void editGradient().catch(e=>toast(e.message,'error'))}>{gradient ? 'Done' : one?.gradient?.length ? 'Edit Gradient' : 'Make Gradient'}</button>}
             <button class="btn small danger" onClick={() => { if (picks) void client.editHeightPatches(picks,'delete'); else void client.removeDrawings(mine.flatMap((a) => a.ids), 'Delete ground'); ui.selectDrawings([]); }}>Delete {one || picks?.length === 1 ? 'area' : 'areas'}</button>
           </div>
-        ) : <p class="hint">{shownAdd ? 'Each separate stroke raises or lowers the ground once.' : 'Strokes join into one area until you press New area or Esc.'}</p>}
+        ) : null}
+        {gradient && <p class="hint">{d.gradientLine ? 'Click the other end of the line.' : 'Click to add height points. Two points start the gradient. Drag a dot to move it.'}</p>}
       </div>}
-      {!rough && (
+      {!rough && !gradient && (
         <p class="hint">
           {mode === 'paint' && 'Paint or drag across the map. Ctrl-click to select connected ground at the same height.'}
           {mode === 'erase' && (editing ? 'Erases from the selected area only.' : 'Select an area to erase only that area.')}
@@ -267,18 +255,9 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
         </p>
       )}
       {rough && <p class="hint">{mode === 'paint' ? 'Paint or drag across the map.' : 'Erases difficult ground wherever you drag.'}</p>}
-      <span class="field-label">Show the ground heights</span>
-      <div class="seg">
-        {([['auto', 'When moving'], ['always', 'Always'], ['tool', 'In tool']] as const).map(([k, label]) => (
-          <button key={k} class={d.heightView === k ? 'on' : ''} onClick={() => ui.set({ heightView: k })}>{label}</button>
-        ))}
-      </div>
-      <p class="hint">{d.heightView === 'auto' ? 'Shown while you drag a token or measure.' : d.heightView === 'always' ? 'Always shown.' : 'Shown only while this tool is open.'} Only on your screen.</p>
-      <div class="row wrap">
-        <span class="hint">{n ? `${n} height area${n > 1 ? 's' : ''} on this map` : 'No height areas yet'}</span>
-        <span class="grow" />
-        {n > 0 && <button class="btn small danger" onClick={async () => { const c = await client.clearDrawings((x) => !x.dt && !x.dl && (x.hz != null || x.k === 'terrain'), 'Clear all heights'); ui.selectDrawings([]); toast(c ? `Cleared the height areas` : 'No heights to clear', 'info', 1800); }}>Clear all heights</button>}
-      </div>
+      <Toggle label="Always show terrain" checked={d.heightView==='always'} onChange={v=>ui.set({heightView:v ? 'always' : 'auto'})} />
+      {!rough && n>0 && <button class="btn small danger" onClick={async () => { await client.clearDrawings(x=>!x.dt && !x.dl && (x.hz!=null || x.k==='terrain'),'Clear all heights'); ui.selectDrawings([]); }}>Clear all heights</button>}
+      {!rough && props.onFromColor && <details><summary>Advanced</summary><button class="btn small" onClick={props.onFromColor}>Paint height from a colour...</button></details>}
     </div>
   );
 }

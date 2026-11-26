@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cellsOnLine, rampCells, roughDistance } from '../src/core/walk';
+import { cellsOnLine, roughDistance } from '../src/core/walk';
 import { roughOf, isRough, zonesOf, groundAt } from '../src/core/height';
 import type { Drawing, GridSettings } from '../src/types';
 
@@ -23,30 +23,6 @@ describe('difficult ground', () => {
     expect(roughDistance(grid(),at(0,0),at(5,0),rough)).toBe(15);
     expect(roughDistance(grid({visible:false,snap:false}),at(0,0),at(5,0),rough)).toBe(15);
     expect(roughDistance(grid(),at(4,0),at(7,0),rough)).toBe(0);
-  });
-});
-
-describe('ramps', () => {
-  it('steps up in 5 ft stages along the line, one list of squares per height', () => {
-    const r = rampCells(grid(), at(0, 2), at(4, 2), 0, 20, 1);
-    expect(r.map((x) => x.h)).toEqual([0, 5, 10, 15, 20]);
-    expect(r.every((x) => x.cells.length === 1)).toBe(true);
-    expect(r[0].cells[0]).toEqual(at(0, 2));
-    expect(r[4].cells[0]).toEqual(at(4, 2));
-  });
-  it('can go down, and be wider', () => {
-    const r = rampCells(grid(), at(0, 2), at(4, 2), 20, 0, 3);
-    expect(r[0].h).toBe(0);
-    expect(r[r.length - 1].h).toBe(20);
-    expect(r.every((x) => x.cells.length === 3)).toBe(true);
-  });
-  it('a tiny drag makes nothing', () => {
-    expect(rampCells(grid(), at(0, 0), { x: 60, y: 50 }, 0, 20, 1)).toEqual([]);
-  });
-  it('a ramp from a corner is an even number of squares wide', () => {
-    const r = rampCells(grid(), { x: 0, y: 200 }, { x: 400, y: 200 }, 0, 10, 2);
-    expect(r.every((x) => x.cells.length === 4 || x.cells.length === 2 || x.cells.length === 6)).toBe(true);
-    expect(r.flatMap((x) => x.cells).every((c) => Math.abs(c.y - 200) === 50)).toBe(true);
   });
 });
 

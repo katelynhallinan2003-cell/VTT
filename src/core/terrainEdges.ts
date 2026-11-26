@@ -2,7 +2,7 @@ import clip, { type MultiPolygon, type Pair, type Polygon } from 'polygon-clippi
 import type { GridSettings, Vec } from '../types';
 import { snapToCellCenter } from './geometry';
 import { cellPoly } from './cells';
-import { areaAt, groundAtTerrain, type Area, type Terrain, type TStroke } from './terrain';
+import { areaAt, groundAtTerrain, surfaceHeight, type Area, type Terrain, type TStroke } from './terrain';
 import { type Seg } from './walls';
 
 export interface TerrainEdge extends Seg { low: number; top: number; one: 1 | -1 }
@@ -54,12 +54,25 @@ function footprint(s: Pick<TStroke,'kind'|'pts'|'r'|'b'|'rings'>, grid: GridSett
 }
 
 /** Fold the paint in drawing order, retaining the boundaries of each finished elevation. */
-interface Plan { regions: Map<number, MultiPolygon>; layers: { area: Area; shape: MultiPolygon }[] }
+interface Plan { surfaces: Map<number, { area: Area; offset: number }>; regions: Map<number, MultiPolygon>; layers: { area: Area; shape: MultiPolygon }[] }
 const plans = new WeakMap<Terrain, Plan>();
 function heightRegions(t: Terrain): Plan {
   const cached = plans.get(t);
   if (cached) return cached;
   const layers: Plan['layers'] = [];
+  const surfaces: Plan['surfaces'] = new Map();
+  const keys = new Map<string, number>();
+  // Negative sentinel keys keep different continuous surfaces distinct in the polygon overlay.
+  const surfaceKey = (area: Area, offset: number) => {
+    const name = JSON.stringify([area.id,offset]);
+    let key = keys.get(name);
+    if (key === undefined) {
+      key = -1e12 - keys.size;
+      keys.set(name,key);
+      surfaces.set(key,{area,offset});
+    }
+    return key;
+  };
   let regions = new Map<number, MultiPolygon>();
   const footprints = new Map<TStroke, MultiPolygon>();
   for (const area of t.areas) {
@@ -77,20 +90,26 @@ function heightRegions(t: Terrain): Plan {
       const current = next.get(z);
       next.set(z, current ? clip.union(current, shape) : shape);
     };
+    const gradient = (area.gradient?.length ?? 0) >= 2;
     let bare = mask;
     for (const [z, region] of regions) {
       add(z, clip.difference(region, mask));
-      if (area.add) {
-        add(z + area.h, clip.intersection(region, mask));
+      if (area.add && !gradient) {
+        const below = surfaces.get(z);
+        add(below ? surfaceKey(below.area,below.offset + area.h) : z + area.h, clip.intersection(region, mask));
         bare = clip.difference(bare, region);
       }
     }
-    add(area.h, bare);
+    add(gradient ? surfaceKey(area,0) : area.h, bare);
     regions = next;
   }
-  const plan = { regions, layers };
+  const plan = { regions, layers, surfaces };
   plans.set(t,plan);
   return plan;
+}
+
+export function areaShape(t: Terrain, id: string): MultiPolygon {
+  return heightRegions(t).layers.find(layer => layer.area.id === id)?.shape ?? [];
 }
 
 export interface HeightPatch {
@@ -104,9 +123,16 @@ export interface HeightPatch {
 }
 
 export function connectedHeight(t: Terrain, point: Vec): HeightPatch | null {
-  if (!areaAt(t,point)) return null;
+  const picked = areaAt(t,point);
+  if (!picked) return null;
   const { regions, layers } = heightRegions(t);
   const height = groundAtTerrain(t,point);
+  if ((picked.gradient?.length ?? 0)>0 || !regions.has(height)) {
+    const shape = areaShape(t,picked.id);
+    const polygon = shape.find(p => inRegion(p,point));
+    if (!polygon) return null;
+    return {polygon,height,cuts:[{group:picked.id,shape:[polygon]}],ids:picked.ids,whole:shape.length===1,sig:t.sig};
+  }
   const polygon = regions.get(height)?.find(p => inRegion(p,point));
   if (!polygon) return null;
   const cuts: HeightPatch['cuts'] = [];
@@ -150,10 +176,11 @@ export function patchStroke(polygon: Polygon, group: string, height: number | nu
 
 /** Sweep both sides of each contour line together. This splits a long edge wherever
  * a neighbouring terrace ends, even when the polygon on the opposite side has no vertex there. */
-export function terrainEdges(t: Terrain): TerrainEdge[] {
+export function terrainEdges(t: Terrain, levelJoins?: Seg[]): TerrainEdge[] {
   type Event = { s: number; left: number; right: number };
   const lines = new Map<string, { ux: number; uy: number; offset: number; events: Event[] }>();
-  for (const [height, region] of heightRegions(t).regions) for (const polygon of region) for (const ring of polygon) {
+  const {regions,surfaces} = heightRegions(t);
+  for (const [height, region] of regions) for (const polygon of region) for (const ring of polygon) {
     for (let i = 1; i < ring.length; i++) {
       const [x,y] = ring[i-1], [x2,y2] = ring[i];
       const len = Math.hypot(x2-x,y2-y);
@@ -177,9 +204,19 @@ export function terrainEdges(t: Terrain): TerrainEdge[] {
       left += events[i].left; right += events[i].right;
       const start = events[i].s, len = events[i+1].s-start;
       if (left === right || len < 1e-6) continue;
-      const one = left < right ? 1 : -1;
-      const low = Math.min(left,right), top = Math.max(left,right);
-      out.push({ a: at(start), b: at(start+len), one, low, top, terrainPxPerFt: t.grid.cell / t.grid.ft });
+      const ls = surfaces.get(left), rs = surfaces.get(right);
+      const pieces = ls || rs ? Math.max(1,Math.ceil(len / (t.grid.cell / 2))) : 1;
+      for (let j=0; j<pieces; j++) {
+        const middle = at(start+len*(j+0.5)/pieces);
+        const lh = ls ? surfaceHeight(ls.area,middle)+ls.offset : left;
+        const rh = rs ? surfaceHeight(rs.area,middle)+rs.offset : right;
+        if (Math.abs(lh-rh) < 0.001) {
+          levelJoins?.push({a:at(start+len*j/pieces),b:at(start+len*(j+1)/pieces)});
+          continue;
+        }
+        out.push({a:at(start+len*j/pieces), b:at(start+len*(j+1)/pieces),
+          low:Math.min(lh,rh), top:Math.max(lh,rh), one:lh<rh ? 1 : -1, terrainPxPerFt:t.grid.cell/t.grid.ft});
+      }
     }
   }
   return out;

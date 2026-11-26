@@ -195,8 +195,8 @@ const A = [gx(8.5), gy(8.5)], B = [gx(8.5), gy(15.5)];
 check('in the dark, the ground is black to start with', ((await shadeAt(...A)) ?? 0) > 0.8);
 // it is not in Heights any more
 await dm.keyboard.press('h');
-await dm.locator('.flyout-title', { hasText: /^Heights$/ }).waitFor();
-check('the Heights panel no longer has Daylight', (await dm.locator('.flyout .seg button', { hasText: /^Daylight$/ }).count()) === 0 && (await dm.locator('.flyout .seg button', { hasText: /^(Heights|Difficult)$/ }).count()) === 2);
+await dm.locator('.flyout-title', { hasText: /^Elevation$/ }).waitFor();
+check('the Heights panel no longer has Daylight', (await dm.locator('.flyout .seg button', { hasText: /^Daylight$/ }).count()) === 0 && (await dm.locator('.flyout .seg button', { hasText: /^(Elevation|Diff Terrain)$/ }).count()) === 2);
 await dm.keyboard.press('h');
 await dm.evaluate(() => window.__vtt.ui.set({ tool: 'select' }));
 // it is with the other light and darkness settings
@@ -345,7 +345,7 @@ await dm.evaluate(() => window.__vtt.ui.set({ lightPaint: 'day' }));
 
 // the other buttons leave painted light alone
 await dm.keyboard.press('h');
-await dm.locator('.flyout-title', { hasText: /^Heights$/ }).waitFor();
+await dm.locator('.flyout-title', { hasText: /^Elevation$/ }).waitFor();
 await dm.evaluate(() => window.__vtt.ui.set({ heightSnap: true, heightBrush: 3 }));
 await drag([gx(15.5), gy(2.5)], [gx(17.5), gy(2.5)]);
 check('a height area can be painted next to it', await dm.evaluate(() => window.__vtt.board.zones.areas.length === 1));

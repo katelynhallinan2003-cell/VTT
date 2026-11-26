@@ -910,13 +910,7 @@ function MouseSettings(props: { ui: UiState }) {
 function HeightsSetting(props: { ui: UiState }) {
   const d = useUi(props.ui);
   return (
-    <Field label="Show the high and low ground" hint="“When moving” shows it while you drag a token or measure.">
-      <div class="seg">
-        {([['auto', 'When moving'], ['always', 'Always'], ['tool', 'Only in the Heights tool']] as const).map(([k, label]) => (
-          <button key={k} class={d.heightView === k ? 'on' : ''} onClick={() => props.ui.set({ heightView: k })}>{label}</button>
-        ))}
-      </div>
-    </Field>
+    <Toggle label="Always show terrain" checked={d.heightView === 'always'} onChange={v => props.ui.set({heightView:v ? 'always' : 'auto'})} />
   );
 }
 

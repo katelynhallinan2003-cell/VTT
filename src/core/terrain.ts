@@ -38,6 +38,7 @@ export interface Area {
   /** the group id of a brush area, or the id of the box or circle for an old-style one */
   id: string;
   legacy: boolean;
+  gradient?: Drawing['gradient'];
   /** the height in feet */
   h: number;
   /** adds to the ground below instead of setting it */
@@ -170,7 +171,7 @@ export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings, layer: '
     if (d.hz == null && d.k !== 'terrain') continue;
     // difficult ground and daylight are painted with the same brush but are layers of their own: they never change how high anything is
     if ((d.dt ? 'rough' : d.dl ? (d.dd ? 'dim' : 'day') : 'ground') !== layer) continue;
-    sigParts.push(`${d.id}|${d.k}|${d.p}|${d.w}|${d.hz}|${d.hg ?? ''}|${d.ha ? 1 : 0}|${d.he ? 1 : 0}|${d.hc ? 1 : 0}|${d.hr ?? ''}|${d.t}`);
+    sigParts.push(`${d.id}|${d.k}|${d.p}|${d.w}|${d.hz}|${d.hg ?? ''}|${d.ha ? 1 : 0}|${d.he ? 1 : 0}|${d.hc ? 1 : 0}|${d.hr ?? ''}|${JSON.stringify(d.gradient ?? [])}|${d.t}`);
     if (d.k === 'terrain') {
       if (d.he) { erasers.push(d); continue; }
       if (d.hz == null) continue;
@@ -180,7 +181,7 @@ export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings, layer: '
     } else if ((d.k === 'rect' || d.k === 'ellipse') && d.hz != null) {
       const s = strokeOf(d, grid);
       if (!s) continue;
-      legacy.push({ id: d.id, legacy: true, h: d.hz, add: false, order: 0, strokes: [s], paint: [s], ids: [d.id], b: s.b });
+      legacy.push({ id: d.id, legacy: true, gradient: d.gradient, h: d.hz, add: false, order: 0, strokes: [s], paint: [s], ids: [d.id], b: s.b });
     }
   }
   // old-style: bigger ones go below, so a nest drawn inside a cliff counts as the nest
@@ -198,13 +199,13 @@ export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings, layer: '
     const mine = eras.filter((e) => e.hg === id);
     const all = [...paint, ...mine, ...eras.filter((e) => e.hg === '')].sort((a, b) => a.t - b.t || (a.id < b.id ? -1 : 1));
     // the area's height and mode are those of its first stroke (editing an area rewrites all of them together)
-    const first = [...g.paint].sort((a, b) => a.t - b.t)[0];
-    painted.push({ id, legacy: false, h: first.hz ?? g.hz, add: !!first.ha, order: 0, strokes: all, paint, ids: [...paint, ...mine].map((s) => s.id), b: unionRect(paint.map((s) => s.b)) });
+    const first = [...g.paint].sort((a, b) => a.t - b.t || a.id.localeCompare(b.id))[0];
+    painted.push({ id, legacy: false, gradient: first.gradient, h: first.hz ?? g.hz, add: !!first.ha, order: 0, strokes: all, paint, ids: [...paint, ...mine].map((s) => s.id), b: unionRect(paint.map((s) => s.b)) });
   }
   painted.sort((a, b) => Math.min(...a.paint.map((s) => s.t)) - Math.min(...b.paint.map((s) => s.t)) || (a.id < b.id ? -1 : 1));
   const areas = [...legacy, ...painted];
   areas.forEach((a, i) => { a.order = i; });
-  return { areas, grid, sig: `${layer}|${grid.shape}|${grid.ft}|${grid.cell}|${grid.ox}|${grid.oy}#${sigParts.join(';')}` };
+  return { areas, grid, sig: `${layer}|${grid.visible}|${grid.snap}|${grid.shape}|${grid.ft}|${grid.cell}|${grid.ox}|${grid.oy}#${sigParts.join(';')}` };
 }
 
 /** The box around everything painted (null when nothing is). */
@@ -226,10 +227,46 @@ export function areaHas(a: Area, p: Vec, grid: GridSettings): boolean {
 }
 
 /** How high the ground is at a point, in feet: the areas folded from the bottom up. No area means 0. */
+export function surfaceHeight(a: Area, p: Vec): number {
+  if (!a.gradient || a.gradient.length < 2) return a.h;
+  let weights = 0, total = 0;
+  for (const {path,height} of a.gradient) {
+    let d = Math.hypot(p.x-path[0].x,p.y-path[0].y);
+    for (let i=1; i<path.length; i++) d = Math.min(d,distToSegment(p,path[i-1],path[i]));
+    if (d < 1e-7) return height;
+    weights += 1/d;
+    total += height/d;
+  }
+  return total/weights;
+}
+
 export function groundAtTerrain(t: Terrain, p: Vec): number {
   let h = 0;
-  for (const a of t.areas) if (areaHas(a, p, t.grid)) h = a.add ? h + a.h : a.h;
+  for (const a of t.areas) if (areaHas(a, p, t.grid)) h = a.gradient && a.gradient.length >= 2 ? surfaceHeight(a,p) : a.add ? h + a.h : a.h;
   return h;
+}
+
+/** Resolve the surface covering an interval once, then sample along it up to both edges. */
+export function slopeAt(t: Terrain, p: Vec): ((at: Vec) => number) | undefined {
+  let offset = 0;
+  for (let i=t.areas.length-1; i>=0; i--) {
+    const area=t.areas[i];
+    if (!areaHas(area,p,t.grid)) continue;
+    if ((area.gradient?.length ?? 0)>=2) return at => surfaceHeight(area,at)+offset;
+    if (!area.add) break;
+    offset+=area.h;
+  }
+}
+
+/** A standing creature takes the average of seven samples in its hex on a gradient. */
+export function standingGround(t: Terrain, p: Vec): number {
+  const h = groundAtTerrain(t,p);
+  if ((!t.grid.visible && !t.grid.snap) || !isHex(t.grid)) return Math.round(h*10)/10;
+  const c = snapToCellCenter(t.grid,p);
+  if (!slopeAt(t,c)) return Math.round(h*10)/10;
+  const vertices = cellPoly(t.grid,c);
+  const sum = vertices.reduce((total,v) => total + groundAtTerrain(t,{x:c.x+(v.x-c.x)*0.65,y:c.y+(v.y-c.y)*0.65}),groundAtTerrain(t,c));
+  return Math.round(sum/(1+vertices.length)*10)/10;
 }
 
 /** The top-most painted area at a point (null for open ground). Old-style boxes and circles do not count. */

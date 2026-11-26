@@ -46,6 +46,7 @@ await sleep(500);
 const areas = () => dm.evaluate(() => { const c = window.__vtt.client; return [...c.scene.draws.values()].filter((d) => d.k === 'terrain'); });
 
 await dm.keyboard.press('h');
+await dm.locator('.terrain-menu summary').click();
 await dm.getByRole('button', { name: /Paint height from a colour/ }).click();
 await dm.getByRole('dialog', { name: 'Paint height from colour' }).waitFor();
 await dm.waitForFunction(() => document.querySelector('.dw-canvas')?.width === 700);

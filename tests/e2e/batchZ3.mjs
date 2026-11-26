@@ -40,8 +40,8 @@ await sleep(300);
 
 // ---- difficult ground
 await dm.keyboard.press('h');
-check('the Heights panel offers difficult ground', (await dm.locator('.flyout button', { hasText: 'Difficult' }).count()) === 1);
-await dm.locator('.flyout button', { hasText: 'Difficult' }).click();
+check('the Heights panel offers difficult ground', (await dm.locator('.flyout button', { hasText: 'Diff Terrain' }).count()) === 1);
+await dm.locator('.flyout button', { hasText: 'Diff Terrain' }).click();
 check('and then only paints and erases', (await dm.locator('.flyout .seg button', { hasText: 'Ramp' }).count()) === 0 && (await dm.locator('.flyout .seg button', { hasText: 'Select' }).count()) === 0);
 await dragTo(C(8, 6), C(11, 6));
 const nRough = await dm.evaluate(() => window.__vtt.board.rough.areas.length);
@@ -76,24 +76,14 @@ check('rubbing out takes squares away', cells2 === 2, `${cells2}`);
 await dm.locator('.flyout button', { hasText: 'Clear difficult ground' }).click();
 await sleep(400);
 check('and it can be cleared', (await dm.evaluate(() => window.__vtt.board.rough.areas.length)) === 0);
-await dm.locator('.flyout button', { hasText: 'Heights' }).first().click();
+await dm.locator('.flyout button', { hasText: 'Elevation' }).first().click();
 
-// ---- ramps
-await dm.locator('.flyout .seg button', { hasText: 'Ramp' }).click();
-check('the Heights panel has a Ramp mode with a start and an end', (await dm.locator('.ht-card', { hasText: 'Ramp' }).count()) === 1);
-await dm.evaluate(() => window.__vtt.ui.set({ rampFrom: 0, rampTo: 20, heightBrush: 1 }));
-await sleep(200);
-await dragTo(C(8, 9), C(12, 9));
-const hs = [];
-for (let i = 8; i <= 12; i++) hs.push(await ground(C(i, 9)));
-check('a ramp climbs 5 ft a square from the start to the end', JSON.stringify(hs) === JSON.stringify([0, 5, 10, 15, 20]), JSON.stringify(hs));
-check('one drag, one undo step', await (async () => { const before = await dm.evaluate(() => window.__vtt.board.zones.areas.length); await dm.keyboard.press('Control+z'); await sleep(500); const after = await dm.evaluate(() => window.__vtt.board.zones.areas.length); await dm.keyboard.press('Control+y'); await sleep(500); return before === 5 && after === 0; })());
-await dm.screenshot({ path: '/tmp/shots/z3-ramp.png' });
-await dm.evaluate(() => window.__vtt.ui.set({ rampFrom: 30, rampTo: 10, heightBrush: 3 }));
-await dragTo(C(8, 13), C(12, 13));
-const col = []; for (let j = 12; j <= 14; j++) col.push(await ground(C(10, j)));
-check('a wider ramp, going down, fills the width', col[0] === col[1] && col[1] === col[2] && col[0] > 10 && col[0] < 30, JSON.stringify(col));
-
+// Existing stepped terrain from older scenes remains climbable.
+await dm.evaluate(async () => {
+  const {client}=window.__vtt, g=client.grid;
+  for (let i=0;i<5;i++) await client.addDrawing({k:'terrain',hc:true,hg:'step'+i,hz:i*5,
+    p:[g.ox+(8.5+i)*g.cell,g.oy+9.5*g.cell].join(','),w:g.cell,color:'#aa8855',fill:0,dash:false,txt:'',fs:28,bw:5});
+});
 // ---- stairs cost like diagonals
 await dm.evaluate(() => window.__vtt.client.updateScene({ grid: { rule: 'alt' } }));
 await sleep(300);

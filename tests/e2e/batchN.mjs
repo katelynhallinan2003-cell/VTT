@@ -59,7 +59,7 @@ const pts = (p) => { const n = p.split(',').map(Number); const o = []; for (let 
 
 // ---- open the tool
 await dm.keyboard.press('h');
-await dm.locator('.flyout-title', { hasText: /^Heights$/ }).waitFor();
+await dm.locator('.flyout-title', { hasText: /^Elevation$/ }).waitFor();
 check('H opens the Heights panel', (await dm.evaluate(() => window.__vtt.ui.data.tool)) === 'height');
 check('it paints by default', (await dm.evaluate(() => window.__vtt.ui.data.heightMode)) === 'paint');
 check('there are no Box / Circle buttons any more', (await dm.locator('.flyout .seg button', { hasText: /^(Box|Circle)$/ }).count()) === 0);
@@ -259,7 +259,7 @@ check('Clear all heights removes brush and box ground', (await areas()).length =
 // A gridless scene always uses a round brush, including after a gridded ramp or with Alt held.
 await dm.evaluate(async () => {
   const { board, ui } = window.__vtt;
-  ui.set({ heightMode: 'ramp', heightSnap: true, heightFt: 15, heightAdds: false, heightBrush: 6 });
+  ui.set({ heightMode: 'paint', heightSnap: true, heightFt: 15, heightAdds: false, heightBrush: 6 });
   await board.chooseGridOverlay('none');
 });
 await dm.getByText('Brush diameter (ft)', { exact: true }).waitFor();
@@ -279,7 +279,7 @@ await dm.getByRole('button', { name: 'Erase', exact: true }).click();
 await dm.locator('.flyout .chips').first().getByRole('button', { name: String(grid.ft), exact: true }).click();
 await drag([gx, gy], [gx + cell * 0.7, gy]);
 check('gridless erasing follows the brush and leaves nearby ground intact', await ground(gx, gy) === 0 && await ground(gx, gy + cell) === -5 && !(await terrain()).at(-1).hc);
-await dm.getByRole('button', { name: 'Difficult', exact: true }).click();
+await dm.getByRole('button', { name: 'Diff Terrain', exact: true }).click();
 await dm.getByRole('button', { name: 'Paint', exact: true }).click();
 await drag([gx, gy], [gx + cell, gy], { alt: true });
 const difficult = await dm.evaluate(() => [...window.__vtt.client.scene.draws.values()].filter(d => d.dt));

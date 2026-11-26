@@ -11,13 +11,14 @@ export type FogShape = 'rect' | 'poly' | 'brush';
 export type DockTab = 'scene' | 'tokens' | 'players';
 export type InitPos = 'top' | 'side';
 
-export function terrainBrushMode(u: UiData, gridless: boolean): UiData['heightMode'] {
-  if (u.heightMode === 'ramp' && (gridless || u.groundKind === 'rough')) return 'paint';
+export function terrainBrushMode(u: UiData): UiData['heightMode'] {
   if (u.heightMode === 'move' && u.groundKind === 'rough') return 'paint';
   return u.heightMode;
 }
 
 export interface UiData {
+  gradientArea?: string;
+  gradientLine?: string;
   heightPatches?: import('../core/terrainEdges').HeightPatch[];
   tool: Tool;
   scaleStart: Vec | null;
@@ -87,24 +88,21 @@ export interface UiData {
   /** the Heights tool: how high the ground it draws is (feet), and whether it draws boxes or circles */
   heightFt: number;
   /** what the Heights brush does: paint ground, rub ground out, or select and move an area */
-  heightMode: 'paint' | 'ramp' | 'erase' | 'move';
+  heightMode: 'paint' | 'erase' | 'move';
   /** what the Heights brush lays down: height, or difficult ground */
   groundKind: 'height' | 'rough';
   /** what the Light tool paints: daylight, dim light, or erases both */
   lightPaint: 'day' | 'dim' | 'erase';
   /** the Light tool's brush, in feet across */
   lightBrush: number;
-  /** a ramp climbs (or falls) from this many feet at the end you press on to that many at the other end */
-  rampFrom: number;
-  rampTo: number;
   /** paint whole squares (or hexes) rather than freehand */
   heightSnap: boolean;
   /** how wide the brush is, in grid squares */
   heightBrush: number;
   /** new areas add to the ground below them instead of setting its height */
   heightAdds: boolean;
-  /** when the height of the ground shows: only while something is being moved or measured over it (auto), always, or only in the Heights tool */
-  heightView: 'auto' | 'always' | 'tool';
+  /** Show terrain while editing, moving or measuring, or keep it visible all the time. */
+  heightView: 'auto' | 'always';
   /** the Walls tool: draw new walls, or select and edit the ones that are there */
   wallMode: 'draw' | 'edit';
   /** what the next wall drawn is: a wall, a door or a window */
@@ -185,20 +183,14 @@ export class UiState {
     textEdit: null, camRev: 0, initOpen: false,
     fxJump: readFlag('vtt-fx-jump', true), fxDraft: null,
     heightFt: (() => { try { const n = Number(localStorage.getItem('vtt-height-ft')); return Number.isFinite(n) && localStorage.getItem('vtt-height-ft') !== null ? n : 10; } catch { return 10; } })(),
-    heightMode: readStr('vtt-height-mode', 'paint', ['paint', 'ramp', 'erase', 'move'] as const),
+    heightMode: readStr('vtt-height-mode', 'paint', ['paint', 'erase', 'move'] as const),
     groundKind: readStr('vtt-ground-kind', 'height', ['height', 'rough'] as const),
     lightPaint: readStr('vtt-light-paint', 'day', ['day', 'dim', 'erase'] as const),
     lightBrush: (() => { try { const n = Number(localStorage.getItem('vtt-light-brush')); return Number.isFinite(n) && n >= 5 && n <= 200 ? n : 20; } catch { return 20; } })(),
-    rampFrom: (() => { try { const n = Number(localStorage.getItem('vtt-ramp-from')); return Number.isFinite(n) && localStorage.getItem('vtt-ramp-from') !== null ? n : 0; } catch { return 0; } })(),
-    rampTo: (() => { try { const n = Number(localStorage.getItem('vtt-ramp-to')); return Number.isFinite(n) && localStorage.getItem('vtt-ramp-to') !== null ? n : 20; } catch { return 20; } })(),
     heightSnap: readFlag('vtt-height-snap', true),
     heightBrush: (() => { try { const n = Number(localStorage.getItem('vtt-height-brush')); return Number.isFinite(n) && n >= 1 && n <= 8 ? n : 1; } catch { return 1; } })(),
     heightAdds: readFlag('vtt-height-adds', false),
-    heightView: (() => {
-      const v = readStr('vtt-height-view', '', ['auto', 'always', 'tool', ''] as const);
-      if (v) return v;
-      try { return localStorage.getItem('vtt-show-heights') === '0' ? 'tool' : 'auto'; } catch { return 'auto'; } // from the old on/off setting
-    })(),
+    heightView: readStr('vtt-height-view', 'auto', ['auto','always'] as const),
     wallMode: readStr('vtt-wall-mode', 'draw', ['draw', 'edit'] as const),
     wallKind: readStr('vtt-wall-kind', 'wall', ['wall', 'door', 'window'] as const),
     wallVis: (() => { try { const v = localStorage.getItem('vtt-wall-vis'); return v === '1' ? true : v === '0' ? false : null; } catch { return null; } })(),
@@ -251,8 +243,6 @@ export class UiState {
       if (patch.groundKind !== undefined) localStorage.setItem('vtt-ground-kind', patch.groundKind);
       if (patch.lightPaint !== undefined) localStorage.setItem('vtt-light-paint', patch.lightPaint);
       if (patch.lightBrush !== undefined) localStorage.setItem('vtt-light-brush', String(patch.lightBrush));
-      if (patch.rampFrom !== undefined) localStorage.setItem('vtt-ramp-from', String(patch.rampFrom));
-      if (patch.rampTo !== undefined) localStorage.setItem('vtt-ramp-to', String(patch.rampTo));
       if (patch.heightSnap !== undefined) localStorage.setItem('vtt-height-snap', patch.heightSnap ? '1' : '0');
       if (patch.heightBrush !== undefined) localStorage.setItem('vtt-height-brush', String(patch.heightBrush));
       if (patch.heightAdds !== undefined) localStorage.setItem('vtt-height-adds', patch.heightAdds ? '1' : '0');
@@ -276,6 +266,10 @@ export class UiState {
       if (patch.sharePlot !== undefined) localStorage.setItem('vtt-share-plot', patch.sharePlot ? '1' : '0');
       if (patch.fxJump !== undefined) localStorage.setItem('vtt-fx-jump', patch.fxJump ? '1' : '0');
     } catch { /* ignore */ }
+    if (patch.tool !== undefined || patch.drawSel || patch.heightMode || patch.groundKind) {
+      if (!('gradientArea' in patch)) patch.gradientArea = undefined;
+      patch.gradientLine = undefined;
+    }
     if (patch.drawSel && !patch.heightPatches) patch.heightPatches = undefined;
     this.data = { ...this.data, ...patch };
     if (this.queued) return;

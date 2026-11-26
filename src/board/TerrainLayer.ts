@@ -1,6 +1,6 @@
 import { Container, Sprite, Text, type Texture } from 'pixi.js';
 import { cellPoly } from '../core/cells';
-import { areaLabelAt, heightColor, type Terrain } from '../core/terrain';
+import { areaLabelAt, surfaceHeight, heightColor, type Terrain } from '../core/terrain';
 import { terrainLabelBoxes } from '../core/terrainLabels';
 import { groundAt } from '../core/height';
 import type { Rect } from '../types';
@@ -92,6 +92,7 @@ export class TerrainLayer {
     const cov = new Uint8Array(N);
     const sel = new Uint8Array(N);
 
+    const smooth = new Uint8Array(N);
     for (const a of areas) {
       mctx.setTransform(1, 0, 0, 1, 0, 0);
       mctx.clearRect(0, 0, W, H);
@@ -124,9 +125,23 @@ export class TerrainLayer {
       mctx.globalCompositeOperation = 'source-over';
       const data = mctx.getImageData(0, 0, W, H).data;
       const isSel = selected.has(a.id);
+      // Sample the smooth colour field on a small lattice; the coverage mask keeps the exact outline.
+      const stride=8, cols=Math.ceil(W/stride)+1, rows=Math.ceil(H/stride)+1;
+      const field=(a.gradient?.length ?? 0)>=2 ? new Float32Array(cols*rows) : null;
+      if (field) for (let y=0;y<rows;y++) for (let x=0;x<cols;x++) {
+        field[y*cols+x]=surfaceHeight(a,{x:bx+(x*stride+0.5)/s,y:by+(y*stride+0.5)/s});
+      }
       for (let i = 0, j = 3; i < N; i++, j += 4) {
         if (data[j] < 128) continue;
-        hgt[i] = a.add && cov[i] ? hgt[i] + a.h : a.h;
+        if (field) {
+          const x=(i%W)/stride,y=Math.floor(i/W)/stride,k=Math.floor(y)*cols+Math.floor(x);
+          const fx=x%1,fy=y%1;
+          hgt[i]=(field[k]*(1-fx)+field[k+1]*fx)*(1-fy)+(field[k+cols]*(1-fx)+field[k+cols+1]*fx)*fy;
+          smooth[i]=1;
+        } else {
+          hgt[i] = a.add && cov[i] ? hgt[i] + a.h : a.h;
+          if (!a.add) smooth[i]=0;
+        }
         cov[i] = 1;
         if (isSel) sel[i] = 1;
       }
@@ -143,6 +158,7 @@ export class TerrainLayer {
         const i = y * W + x;
         if (!cov[i]) continue;
         const l = i - rad, r = i + rad, u = i - rad * W, d = i + rad * W;
+        if (smooth[i] && smooth[l] && smooth[r] && smooth[u] && smooth[d]) continue;
         if (Math.max(Math.abs(hgt[l] - hgt[i]), Math.abs(hgt[r] - hgt[i]), Math.abs(hgt[u] - hgt[i]), Math.abs(hgt[d] - hgt[i])) > 0) edge[i] = 1;
       }
     }
@@ -160,7 +176,7 @@ export class TerrainLayer {
     const px = out.data;
     const lut = new Map<number, [number, number, number]>();
     const heights = new Set<number>();
-    for (let i = 0; i < N; i++) if (cov[i]) heights.add(hgt[i]);
+    for (let i = 0; i < N; i++) if (cov[i]) heights.add(smooth[i] ? Math.round(hgt[i]/5)*5 : hgt[i]);
     this.levels = [...heights].sort((a,b) => a-b);
     const colour = (h: number) => {
       const key = Math.round(h * 10) / 10;
@@ -201,9 +217,11 @@ export class TerrainLayer {
     this.sprite!.scale.set(1 / s);
     this.sprite!.visible = true;
 
+    // The label finder expects plateaus. Group the gradient into broad elevation bands.
+    for (let i=0;i<N;i++) if (smooth[i]) hgt[i]=Math.round(hgt[i]/5)*5;
     this.labelBoxes = terrainLabelBoxes(hgt, cov, W, H).map(box => ({
       elevation: box.elevation, x: bx + box.x / s, y: by + box.y / s, w: box.w / s, h: box.h / s,
-    })).filter(box => groundAt(t, { x: box.x + box.w / 2, y: box.y + box.h / 2 }) === box.elevation);
+    })).filter(box => Math.abs(groundAt(t, { x: box.x + box.w / 2, y: box.y + box.h / 2 }) - box.elevation)<2.51);
     this.layoutLabels();
   }
 

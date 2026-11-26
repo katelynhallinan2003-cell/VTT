@@ -3,7 +3,7 @@ import type { Drawing, GridSettings, Vec } from '../types';
 import { groundAtTerrain, heightColor, terrainOf, type Terrain } from './terrain';
 
 /** Quick heights to choose from when painting ground. */
-export const ZONE_PRESETS = [-10, 5, 10, 15, 20, 30, 40, 60];
+export const ZONE_PRESETS = [-10, -5, 0, 5, 10, 15, 20, 25, 30, 35, 40, 60];
 
 /** Everything that makes ground higher or lower on a map: brush-painted areas, and old-style boxes and circles. */
 export type Zone = Terrain;

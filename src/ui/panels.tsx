@@ -1,3 +1,4 @@
+import { standingGround } from '../core/terrain';
 import { isLightMark } from '../core/light';
 import { useMemo, useRef, useState } from 'preact/hooks';
 import { healthState, HEALTH_LABEL, pctOf } from '../core/combat';
@@ -8,7 +9,7 @@ import { mapCell } from '../core/mapgrids';
 import { gridPeriod, isHex } from '../core/hex';
 import { currentOverlay } from '../core/gridOverlay';
 import { GridChoices } from './GridChoices';
-import { altitudeOf, altLabel, groundAt, setAltitude, setClearance, zonesOf } from '../core/height';
+import { altitudeOf, altLabel, setAltitude, setClearance, zonesOf } from '../core/height';
 import { throttle } from '../core/throttle';
 import { LIGHT_PRESETS } from '../core/light';
 import { customLights, subscribeLights } from '../state/lights';
@@ -72,7 +73,7 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
   const tracked = client.isDM && !lights ? tokens.filter((t) => t.hp != null && t.maxHp != null) : [];
   const canAura = !multi && editable && !lights;
   const zones = zonesOf(client.scene?.draws.values() ?? [], client.grid);
-  const alts = tokens.map((t) => altitudeOf(t, groundAt(zones, t)));
+  const alts = tokens.map((t) => altitudeOf(t, standingGround(zones, t)));
   const a0 = alts[0];
   const altText = multi ? (alts.every((a) => a.alt === a0.alt) ? altLabel(a0, t0.fly) : '') : altLabel(a0, t0.fly);
 
@@ -129,7 +130,7 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
 /** How high the selected token(s) are above the ground under them: take off, land, go up or down 5 ft, or type a height. Walkers stand on whatever ground is under them. */
 function HeightPop(props: { client: TableClient; tokens: Token[]; zones: ReturnType<typeof zonesOf> }) {
   const { client, tokens, zones } = props;
-  const alts = tokens.map((t) => altitudeOf(t, groundAt(zones, t)));
+  const alts = tokens.map((t) => altitudeOf(t, standingGround(zones, t)));
   const ids = tokens.map((t) => t.id);
   const flying = tokens.every((t) => t.fly);
   const same = alts.every((a) => a.clear === alts[0].clear);

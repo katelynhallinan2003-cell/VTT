@@ -47,7 +47,7 @@ const drag = async (a, b, opts = {}) => {
 
 // ---- paint a 20 ft ledge and a -10 ft pit with the Heights tool
 await dm.keyboard.press('h');
-await dm.locator('.flyout-title', { hasText: /^Heights$/ }).waitFor();
+await dm.locator('.flyout-title', { hasText: /^Elevation$/ }).waitFor();
 await dm.evaluate(() => window.__vtt.ui.set({ heightMode: 'paint', heightSnap: true, heightBrush: 2, heightFt: 20, heightAdds: false }));
 await drag([cx(10), cy(10)], [cx(13), cy(10)]);
 await dm.evaluate(() => window.__vtt.ui.selectDrawings([]));
@@ -136,23 +136,16 @@ await dm.evaluate(() => window.__vtt.ui.set({ heightView: 'always' }));
 await sleep(500);
 check('"Always" keeps the ground on screen', (await fade()) === 1 && (await layerShown()));
 await dm.screenshot({ path: '/tmp/shots/r3-always.png' });
-await dm.evaluate(() => window.__vtt.ui.set({ heightView: 'tool' }));
-await sleep(700);
-await drag([cx(8), cy(7)], [cx(6), cy(6)], { peek: async () => {
-  await sleep(450);
-  check('"Only in the tool" does not show it while dragging', (await fade()) === 0);
-} });
 await dm.evaluate(() => window.__vtt.ui.set({ heightView: 'auto' }));
 await sleep(300);
 
 // ---- the setting is in the panel and remembered
 await dm.keyboard.press('h');
-await dm.locator('.flyout-title', { hasText: /^Heights$/ }).waitFor();
-check('the Heights panel has the three choices', (await dm.locator('.flyout .seg button', { hasText: /^(When moving|Always|In tool)$/ }).count()) === 3);
-await dm.locator('.flyout .seg button', { hasText: /^Always$/ }).click();
+await dm.locator('.flyout-title', { hasText: /^Elevation$/ }).waitFor();
+await dm.getByRole('checkbox',{name:'Always show terrain'}).check();
 check('choosing one changes the setting', (await dm.evaluate(() => window.__vtt.ui.data.heightView)) === 'always');
 check('and remembers it', (await dm.evaluate(() => localStorage.getItem('vtt-height-view'))) === 'always');
-await dm.locator('.flyout .seg button', { hasText: /^When moving$/ }).click();
+await dm.getByRole('checkbox',{name:'Always show terrain'}).uncheck();
 await dm.keyboard.press('v');
 
 // ---- flyers are measured above the ground

@@ -1,11 +1,11 @@
 import type { GridSettings, Vec } from '../types';
 import { currentOverlay } from './gridOverlay';
-import { cellCentersIn } from './cells';
 import { snapToCellCenter } from './geometry';
 
 export interface WalkCtx {
   ground: (p: Vec) => number;
   rough: (p: Vec) => boolean;
+  slope?: (p: Vec) => ((at: Vec) => number) | undefined;
 }
 
 const key = (p: Vec) => `${Math.round(p.x * 2)},${Math.round(p.y * 2)}`;
@@ -36,30 +36,4 @@ export function roughDistance(grid: GridSettings, a: Vec, b: Vec, rough: WalkCtx
     if (rough({x:a.x+(b.x-a.x)*t, y:a.y+(b.y-a.y)*t})) inside++;
   }
   return inside/count * length/grid.cell * grid.ft;
-}
-
-/**
- * The squares of a ramp: from `a` (ground `from` ft) to `b` (ground `to` ft), `width` squares wide, in steps of `step` feet.
- * Returns one entry per height, each with the squares at that height, lowest first.
- */
-export function rampCells(grid: GridSettings, a: Vec, b: Vec, from: number, to: number, width: number, step = 5): { h: number; cells: Vec[] }[] {
-  const L = Math.hypot(b.x - a.x, b.y - a.y);
-  if (L < grid.cell * 0.4) return [];
-  const ux = (b.x - a.x) / L, uy = (b.y - a.y) / L;
-  const half = (Math.max(1, width) * grid.cell) / 2;
-  const eps = grid.cell * 0.02;
-  const pad = half + grid.cell;
-  const box = { x: Math.min(a.x, b.x) - pad, y: Math.min(a.y, b.y) - pad, w: Math.abs(b.x - a.x) + pad * 2, h: Math.abs(b.y - a.y) + pad * 2 };
-  const q = Math.max(1, step);
-  const byH = new Map<number, Vec[]>();
-  for (const p of cellCentersIn(grid, box)) {
-    const s = (p.x - a.x) * ux + (p.y - a.y) * uy; // how far along
-    const d = Math.abs(-(p.x - a.x) * uy + (p.y - a.y) * ux); // how far to the side
-    if (d > half + eps || s < -grid.cell / 2 - eps || s > L + grid.cell / 2 + eps) continue;
-    const t = Math.max(0, Math.min(1, s / L));
-    const h = Math.round((from + (to - from) * t) / q) * q;
-    const list = byH.get(h);
-    if (list) list.push(p); else byH.set(h, [p]);
-  }
-  return [...byH].sort((x, y) => x[0] - y[0]).map(([h, cells]) => ({ h, cells }));
 }

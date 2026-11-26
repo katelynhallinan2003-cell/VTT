@@ -1,7 +1,6 @@
 import type { GridSettings, Vec } from '../types';
 import { pathFt } from './geometry';
 import { roughDistance, type WalkCtx } from './walk';
-import type { TerrainEdge } from './terrainEdges';
 import { sideOf, type Seg } from './walls';
 
 const rounded = (n: number) => Math.round(n * 10) / 10;
@@ -43,13 +42,14 @@ function crossing(a: Vec, b: Vec, edge: Seg): number | null {
 }
 
 export function movementCost(grid: GridSettings, path: Vec[], flyer: number | null, ctx: WalkCtx,
-  edges: TerrainEdge[], walls: Seg[]) {
-  const flightRuns: number[] | undefined = flyer === null ? undefined : [];
+  edges: Seg[], walls: Seg[]) {
+  const flightRuns: number[] | undefined = flyer === null && !ctx.slope ? undefined : [];
   const flat = pathFt(grid, path, [], flightRuns);
   if (path.length < 2) return {ft:0, note:''};
+  let slopeExtra = 0;
   let rough = 0, run = 0, wallAtJoin = 0;
   // Each interval describes the surface actually traversed after its entry point.
-  const profile: {run: number; ground: number; wall: number}[] = [];
+  const profile: {run: number; ground: number; endGround?: number; endRun?: number; wall: number}[] = [];
   for (let i = 1; i < path.length; i++) {
     const a = path[i-1], b = path[i], dx = b.x-a.x, dy = b.y-a.y;
     const length = Math.hypot(dx,dy);
@@ -70,8 +70,22 @@ export function movementCost(grid: GridSettings, path: Vec[], flyer: number | nu
     const stations = [...cuts.keys()].sort((x,y) => x-y);
     for (let j = 1; j < stations.length; j++) {
       const from = stations[j-1], mid = (from + stations[j])/2;
-      const ground = ctx.ground({x:a.x+dx*mid, y:a.y+dy*mid});
-      profile.push({run:run+ft*from, ground, wall:cuts.get(from)!});
+      const at = (t: number) => ({x:a.x+dx*t,y:a.y+dy*t});
+      const slope = ctx.slope?.(at(mid));
+      if (!slope) {
+        profile.push({run:run+ft*from,ground:ctx.ground(at(mid)),wall:cuts.get(from)!});
+        continue;
+      }
+      const span = stations[j]-from;
+      const steps = Math.max(1,Math.ceil(length*span/(grid.cell/4)));
+      let ground = slope(at(from));
+      for (let k=0; k<steps; k++) {
+        const t=from+span*(k+1)/steps, endGround=slope(at(t)), across=ft*span/steps;
+        const extra=Math.hypot(across,endGround-ground)-across;
+        slopeExtra += extra * (flyer===null && ctx.rough(at(t-span/(2*steps))) ? 2 : 1);
+        profile.push({run:run+ft*(t-span/steps),ground,endGround,endRun:run+ft*t,wall:k===0 ? cuts.get(from)! : 0});
+        ground=endGround;
+      }
     }
     wallAtJoin = cuts.get(1)!;
     if (flyer === null) rough += roughDistance(grid,a,b,ctx.rough);
@@ -94,13 +108,14 @@ export function movementCost(grid: GridSettings, path: Vec[], flyer: number | nu
       if (i > 0) ascent += summit-high;
       if (i < profile.length-1) descent += summit-high;
     }
-    height = station.ground;
+    height = station.endGround ?? station.ground;
+    if (flyer !== null && station.endRun !== undefined) air.push({run:station.endRun,z:Math.max(flyer,height)});
   }
   if (flyer !== null) {
     air.push({run,z:Math.max(flyer,height)});
     return {ft:rounded(airDistance(air)),note:''};
   }
-  const normal = rounded(flat+rough), climbing = rounded(ascent+descent);
+  const normal = rounded(flat+rough+slopeExtra), climbing = rounded(ascent+descent);
   const directions = ascent && descent ? ` (${rounded(ascent)} ft up, ${rounded(descent)} ft down)` : '';
   const note = climbing ? `${normal} ft normal + ${climbing} ft climbing${directions}` : rough ? `difficult ground +${rounded(rough)} ft` : '';
   return {ft:rounded(normal+climbing),note};

@@ -1,5 +1,6 @@
+import { standingGround } from '../core/terrain';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { groundAt, zonesOf } from '../core/height';
+import { zonesOf } from '../core/height';
 import { LIGHT_PRESETS, isLightMark } from '../core/light';
 import { TOKEN_SIZES } from '../core/model';
 import type { TableClient } from '../state/client';
@@ -56,7 +57,7 @@ export function TokenEditorModal(props: { client: TableClient; ids: string[]; /*
   const set = (p: Partial<Token>) => setDraft((d) => ({ ...d, ...p }));
   // how high the ground is under the token(s): a flyer's height is shown above it, though what is stored is its elevation
   const zones = zonesOf(client.scene?.draws.values() ?? [], client.grid);
-  const grounds = tokens.map((t) => groundAt(zones, t));
+  const grounds = tokens.map((t) => standingGround(zones, t));
   const g0 = grounds[0] ?? 0;
   const sameGround = grounds.every((g) => g === g0);
   const elevNow = draft.elev ?? same('elev');

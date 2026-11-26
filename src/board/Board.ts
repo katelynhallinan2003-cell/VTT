@@ -7,10 +7,10 @@ import { templateRoughDraws } from '../core/templaterough';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
 import { altitudeOf, dayOf, dimOf, groundAt, heightNote, isRough, roughOf, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
-import { rampCells } from '../core/walk';
-import { brushCuts, connectedHeight, inRegion, terrainEdges, type TerrainEdge } from '../core/terrainEdges';
+import { gradientPath } from '../core/gradientGeometry';
+import { areaShape, brushCuts, connectedHeight, inRegion, terrainEdges, type TerrainEdge } from '../core/terrainEdges';
 import { movementCost } from '../core/movementCost';
-import { EMPTY_TERRAIN, MAX_STROKE_CELLS, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
+import { EMPTY_TERRAIN, MAX_STROKE_CELLS, slopeAt, surfaceHeight, standingGround, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
 import { scaleCut, type GridCut, type PixelImage } from '../core/gridcut';
 import { AUTO_GRID_STRENGTH, detectPrintedGrid, impliedGrid } from '../core/mapgrid';
@@ -59,8 +59,6 @@ type Drag =
       /** what the last template snap decided (so it only changes when the pointer clearly moves on) */ snap?: TemplateSnapState }
   | { kind: 'erase'; ids: Set<string> }
   /** painting (or rubbing out) ground with the Heights brush */
-  /** a ramp being dragged out from its low (or high) end to the other */
-  | { kind: 'ramp'; a: Vec; b: Vec }
   | { kind: 'lightpaint'; /** taking painted light away instead of adding it */ erase: boolean; /** dim light (half as strong) instead of daylight */ dim: boolean; pts: Vec[]; last: Vec; /** brush width in pixels */ size: number }
   | { kind: 'terrain'; /** painting difficult ground instead of height */ rough?: boolean; erase: boolean; /** the area it paints into (empty: erase from every area) */ group: string; h: number; add: boolean; /** the cells covered so far (null for a free brush) */ cells: Map<string, Vec> | null; pts: Vec[]; last: Vec; size: number }
   | { kind: 'ruler'; /** another leg added to a measurement that is already there */ extend?: boolean }
@@ -125,7 +123,7 @@ export class Board {
   private wallRunFirst: Vec | null = null;
   private wallRunCount = 0;
   private seenWallRev = -1;
-  private segCache: { scene: unknown; rev: number; ground: string; sight: Seg[]; move: Seg[]; terrain: TerrainEdge[] } = { scene: null, rev: -1, ground: '', sight: [], move: [], terrain: [] };
+  private segCache: { scene: unknown; rev: number; ground: string; sight: Seg[]; move: Seg[]; terrain: TerrainEdge[]; levelJoins: Seg[] } = { scene: null, rev: -1, ground: '', sight: [], move: [], terrain: [], levelJoins: [] };
   private auraG = new Graphics();
   private ghostLayer = new Container();
   private overlayG = new Graphics();
@@ -441,7 +439,7 @@ export class Board {
     this.gridDirty = true;
     this.invalidate();
     if (Math.abs(this.ui.data.zoom - this.cam.zoom) / this.cam.zoom > 0.005) this.ui.set({ zoom: this.cam.zoom });
-    if (this.ui.data.textEdit) this.ui.set({ camRev: this.ui.data.camRev + 1 });
+    if (this.ui.data.textEdit || this.ui.data.gradientArea) this.ui.set({ camRev: this.ui.data.camRev + 1 });
     if (this.zoomSettleTimer) clearTimeout(this.zoomSettleTimer);
     this.zoomSettleTimer = setTimeout(() => this.settleText(), 180);
   }
@@ -519,7 +517,13 @@ export class Board {
     if (scene.drawRev !== this.seenZoneRev) {
       this.seenZoneRev = scene.drawRev;
       const next = zonesOf(scene.draws.values(), this.client.grid);
-      if (next.sig !== this.zones.sig) { this.zones = next; this.seenTokensRev = -1; this.refreshDraws(); }
+      if (next.sig !== this.zones.sig) {
+        this.zones = next;
+        const editing = this.ui.data.gradientArea;
+        if (editing && !next.areas.some(a => a.id===editing)) this.ui.selectDrawings([]);
+        this.seenTokensRev = -1;
+        this.refreshDraws();
+      }
       this.refreshRough();
       this.refreshDay();
     }
@@ -888,7 +892,7 @@ export class Board {
 
   /** How high a token is (at `pos`, or where it is): flying, or standing on the ground there. */
   heightOf(t: Token, pos?: Vec): Altitude {
-    return altitudeOf(t, groundAt(this.zones, pos ?? t));
+    return altitudeOf(t, standingGround(this.zones, pos ?? t));
   }
 
   /** How high the ground is at a spot, in feet. */
@@ -1007,7 +1011,7 @@ export class Board {
     if (next.sig !== this.rough.sig) { this.rough = next; this.paintRough(); }
   }
 
-  /** Hatch every square of difficult ground. */
+  /** Draw the painted silhouette on gridless maps and hatch occupied cells on grids. */
   private paintRough() {
     const g = this.roughG;
     g.clear();
@@ -1016,6 +1020,16 @@ export class Board {
     const box = terrainBounds(t);
     if (!box) { this.invalidate(); return; }
     const col = 0xc8791b;
+    if (currentOverlay(grid) === 'none') {
+      for (const area of t.areas) for (const poly of areaShape(t,area.id)) {
+        for (const [i,ring] of poly.entries()) {
+          g.poly(ring.flat());
+          if (i===0) g.fill({color:col,alpha:0.3}); else g.cut();
+        }
+      }
+      this.invalidate();
+      return;
+    }
     const cells = cellCentersIn(grid, box).filter((p) => isRough(t, p)).slice(0, 8000);
     for (const c of cells) g.poly(cellPoly(grid, c).flatMap((p) => [p.x, p.y]));
     g.fill({ color: col, alpha: 0.24 });
@@ -1059,26 +1073,29 @@ export class Board {
   /** Movement along the accepted route, including terrain, walls and flight clearance. */
   private moveCost(path: Vec[], fly: boolean, elevation = 0): { ft: number; note: string } {
     const grid = this.client.gridAt(path[0] ?? { x: 0, y: 0 });
-    const { terrain, move } = this.wallSegs();
-    if (!terrain.length && !move.length && !this.rough.areas.length) return { ft: pathFt(grid,path), note: '' };
+    const { terrain, move, levelJoins } = this.wallSegs();
+    const slopes = this.zones.areas.some(a => (a.gradient?.length ?? 0) >= 2);
+    if (!slopes && !terrain.length && !move.length && !this.rough.areas.length) return { ft: pathFt(grid,path), note: '' };
     return movementCost(grid, path, fly ? elevation : null, {
+      slope: slopes ? p => slopeAt(this.zones,p) : undefined,
       ground: p => groundAtTerrain(this.zones,p), rough: p => isRough(this.rough,p),
-    }, terrain, this.moveBlockers() ? move : []);
+    }, levelJoins.length ? [...terrain,...levelJoins] : terrain, this.moveBlockers() ? move : []);
   }
 
   // ------------------------------------------------------------------ walls
   /** The wall pieces that stop sight and walking, kept until the walls change. */
-  wallSegs(): { sight: Seg[]; move: Seg[]; terrain: TerrainEdge[] } {
+  wallSegs(): { sight: Seg[]; move: Seg[]; terrain: TerrainEdge[]; levelJoins: Seg[] } {
     const scene = this.client.scene;
-    if (!scene) return { sight: [], move: [], terrain: [] };
+    if (!scene) return { sight: [], move: [], terrain: [], levelJoins: [] };
     const c = this.segCache;
     // how tall a wall's top is depends on the ground it stands on, so the pieces are rebuilt when the ground changes too
     const gsig = this.zones.sig;
     if (c.scene !== scene || c.rev !== scene.wallRev || c.ground !== gsig) {
       const list = [...scene.walls.values()];
       const topOf = (w: Wall) => groundAt(this.zones, wallMid(w)) + w.h;
-      const terrain = terrainEdges(this.zones);
-      this.segCache = { scene, terrain, rev: scene.wallRev, ground: gsig, sight: [...sightSegs(list, topOf), ...terrain], move: moveSegs(list, topOf) };
+      const levelJoins: Seg[] = [];
+      const terrain = terrainEdges(this.zones,levelJoins);
+      this.segCache = { scene, terrain, levelJoins, rev: scene.wallRev, ground: gsig, sight: [...sightSegs(list, topOf), ...terrain], move: moveSegs(list, topOf) };
     }
     return this.segCache;
   }
@@ -1163,7 +1180,7 @@ export class Board {
   /** Height of a viewer or light above the map at `pos`. */
   private sightHeightAt(id: string, pos: Vec): number | undefined {
     const t = this.client.scene?.tokens.get(id);
-    return t ? sightHeight(t, groundAt(this.zones, pos)) : undefined;
+    return t ? sightHeight(t, standingGround(this.zones, pos)) : undefined;
   }
 
   /** Whether a token may go from→to (arrow keys, jumps and the like). */
@@ -2100,25 +2117,12 @@ export class Board {
     }
 
     // the Heights brush: where it would paint, the stroke so far, and areas being carried to a new place
-    if (d?.kind === 'ramp') {
-      const levels = rampCells(grid, d.a, d.b, u.rampFrom, u.rampTo, u.heightBrush);
-      for (const l of levels) {
-        const col = num(this.terrainLayer.colourAt(l.h));
-        for (const c of l.cells) g.poly(cellPoly(grid, c).flatMap((p) => [p.x, p.y]), true);
-        g.fill({ color: col, alpha: 0.55 });
-      }
-      g.moveTo(d.a.x, d.a.y).lineTo(d.b.x, d.b.y).stroke({ width: 2 / z, color: 0xffffff, alpha: 0.85 });
-      g.circle(d.a.x, d.a.y, 5 / z).fill(0xffffff);
-      g.circle(d.b.x, d.b.y, 5 / z).fill(0xffffff);
-      this.plotLabel(li++, `${u.rampFrom} ft`, d.a.x, d.a.y - Math.max(grid.cell * 0.7, 18 / z), 0xffffff);
-      this.plotLabel(li++, `${u.rampTo} ft`, d.b.x, d.b.y - Math.max(grid.cell * 0.7, 18 / z), 0xffffff);
-    }
     const brushLabelIndex = li;
     if (d?.kind === 'lightpaint') this.paintLightBrush(g, z, d.last, d);
     else if (!d && u.tool === 'light' && this.pointerW && this.client.isDM) this.paintLightBrush(g, z, this.pointerW, null);
     else if (d?.kind === 'terrain') li = this.paintBrush(g, z, d.last, d, li);
-    else if (!d && u.tool === 'height' && this.pointerW && this.client.isDM) {
-      const mode = terrainBrushMode(u, currentOverlay(grid) === 'none');
+    else if (!d && !u.gradientArea && u.tool === 'height' && this.pointerW && this.client.isDM) {
+      const mode = terrainBrushMode(u);
       if (mode === 'paint' || mode === 'erase') li = this.paintBrush(g, z, this.pointerW, null, li);
     }
     this.terrainLayer.avoidBrushReadout(li > brushLabelIndex ? this.plotLabels[brushLabelIndex] : undefined);
@@ -2303,7 +2307,7 @@ export class Board {
       }
       return;
     }
-    if (tool === 'select' || (tool === 'height' && !e.ctrlKey && !e.metaKey) || (tool === 'draw' && this.ui.data.drawTool !== 'erase') || (tool === 'template' && this.ui.data.tplMode === 'select')) {
+    if (tool === 'select' || (tool === 'height' && !this.ui.data.gradientArea && !e.ctrlKey && !e.metaKey) || (tool === 'draw' && this.ui.data.drawTool !== 'erase') || (tool === 'template' && this.ui.data.tplMode === 'select')) {
       const hh = this.handleAt(w);
       if (hh) { this.drag = { kind: 'drawresize', id: hh.d.id, handle: hh.h.id, orig: hh.d, patch: null }; return; }
     }
@@ -2430,7 +2434,6 @@ export class Board {
   private heightsWanted(): boolean {
     const u = this.ui.data;
     if (u.tool === 'height' || u.heightView === 'always') return true;
-    if (u.heightView !== 'auto') return false;
     const d = this.drag;
     if ((d?.kind === 'tokens' && d.moved) || d?.kind === 'ruler') return true;
     return performance.now() < this.heightsUntil;
@@ -2445,6 +2448,7 @@ export class Board {
   /** Fade the ground in or out (called every frame; cheap when nothing changes). */
   private tickHeights(dt: number) {
     const want = this.heightsWanted();
+    this.roughG.visible = want;
     if (this.heightsUntil && performance.now() >= this.heightsUntil) { this.heightsUntil = 0; this.dirty = true; }
     else if (this.heightsUntil) this.dirty = true;
     const target = want ? 1 : 0;
@@ -2614,6 +2618,26 @@ export class Board {
     this.cb.onNotice(ids.length === 1 ? (to > a0.ground ? `${t0.name || 'Token'} flies ${to - a0.ground} ft above the ground` : `${t0.name || 'Token'} lands`) : `${ids.length} tokens ${ft > 0 ? 'up' : 'down'} ${Math.abs(ft)} ft`, 'info');
   }
 
+  private gradientAnchor(id: string) {
+    const area = this.zones.areas.find(a => a.id === id);
+    if (!area) return undefined;
+    const first = [...area.paint].sort((a,b) => a.t-b.t || a.id.localeCompare(b.id))[0];
+    return this.client.scene?.draws.get(first.id);
+  }
+
+  gradientControls(id: string) { return this.gradientAnchor(id)?.gradient ?? []; }
+
+  gradientPlacement(id: string, a: Vec, b?: Vec, movingEnd=true) {
+    return gradientPath(areaShape(this.zones,id),a,b,10/this.cam.zoom,movingEnd);
+  }
+
+  saveGradient(id: string, controls: NonNullable<Area['gradient']>) {
+    const anchor = this.gradientAnchor(id);
+    if (!anchor || !this.client.isDM) return;
+    void this.client.updateDrawings([anchor.id],{gradient:controls},'Edit gradient')
+      .catch((err: Error) => this.cb.onNotice(err.message,'error'));
+  }
+
   /** The area the brush adds to: the one area that is selected (an old-style box or circle cannot take more paint). */
   private currentArea(): Area | null {
     if (this.ui.data.heightPatches && !(this.ui.data.heightPatches.length === 1 && this.ui.data.heightPatches[0].whole)) return null;
@@ -2629,7 +2653,23 @@ export class Board {
     const u = this.ui.data;
     const rough = u.groundKind === 'rough';
     const gridless = currentOverlay(this.client.grid) === 'none';
-    const mode = terrainBrushMode(u, gridless);
+    const mode = terrainBrushMode(u);
+    if (u.gradientArea && !rough) {
+      const area = this.zones.areas.find(a => a.id === u.gradientArea);
+      if (!area) return;
+      const controls = this.gradientControls(area.id);
+      const line = controls.find(c => c.id === u.gradientLine);
+      const path = this.gradientPlacement(area.id,line?.path[0] ?? w,line ? w : undefined);
+      if (!path) return;
+      if (line) {
+        this.saveGradient(area.id,controls.map(c => c===line ? {...c,path} : c));
+        this.ui.set({gradientLine:undefined});
+      } else {
+        const height = Math.round((controls.length >= 2 ? surfaceHeight(area,w) : groundAt(this.zones,w))*10)/10;
+        this.saveGradient(area.id,[...controls,{id:newAreaId(),height,path}]);
+      }
+      return;
+    }
     if (!rough && (e.ctrlKey || e.metaKey || (mode === 'move' && u.heightPatches?.some(p => inRegion(p.polygon,w))))) {
       const hit = connectedHeight(this.zones,w);
       if (!hit) { if (!e.shiftKey) this.ui.selectDrawings([]); return; }
@@ -2643,13 +2683,6 @@ export class Board {
         const snap = !gridless && !e.altKey && this.selectedAreas().some(a => a.paint.some(s => s.kind === 'cells'));
         this.drag = { kind:'drawmove',ids:[...ids],start:w,dx:0,dy:0,moved:false,snap };
       }
-      return;
-    }
-    if (mode === 'ramp') {
-      const grid = this.client.grid;
-      const free = e.altKey;
-      const p = free ? w : (u.heightBrush % 2 === 1 || isHex(grid)) ? snapToCellCenter(grid, w) : snapToCorner(grid, w);
-      this.drag = { kind: 'ramp', a: p, b: p };
       return;
     }
     if (!rough && mode === 'move') {
@@ -2698,20 +2731,6 @@ export class Board {
     else if (Math.hypot(w.x - d.last.x, w.y - d.last.y) * this.cam.zoom > 2) d.pts.push(w);
     else return; // accumulate slow pointer movement from the last recorded point
     d.last = w;
-  }
-
-  /** Lay a ramp down: ground that climbs from one end to the other in 5 ft steps, each step an area of its own. */
-  private commitRamp(d: Extract<Drag, { kind: 'ramp' }>) {
-    const grid = this.client.grid;
-    const u = this.ui.data;
-    const levels = rampCells(grid, d.a, d.b, u.rampFrom, u.rampTo, u.heightBrush);
-    if (!levels.length) return;
-    const hex = grid.shape !== 'square';
-    void this.client.addDrawings(
-      levels.map((l) => ({ k: 'terrain' as const, p: joinPts(l.cells), color: this.terrainLayer.colourAt(l.h), w: grid.cell * (hex ? 1.16 : 1), fill: 0, fc: '', dash: false, txt: '', fs: 28, bw: 5, hz: l.h, hg: newAreaId(), ha: false, he: false, hc: true })),
-      'Paint ramp',
-    ).catch((err: Error) => this.cb.onNotice(err.message, 'error'));
-    this.cb.onNotice(`Ramp from ${u.rampFrom} ft to ${u.rampTo} ft`, 'ok');
   }
 
   private commitTerrain(d: Extract<Drag, { kind: 'terrain' }>) {
@@ -3139,12 +3158,6 @@ export class Board {
       }
       case 'terrain': this.paintTerrainAt(d, w); break;
       case 'lightpaint': this.paintLightAt(d, w); break;
-      case 'ramp': {
-        const grid = this.client.grid;
-        const n = this.ui.data.heightBrush;
-        d.b = e.altKey ? w : (n % 2 === 1 || isHex(grid)) ? snapToCellCenter(grid, w) : snapToCorner(grid, w);
-        break;
-      }
       case 'wall': case 'wallend': case 'wallmove': case 'wallbox': this.moveWallDrag(d, w, e); break;
       case 'brush': {
         const last = d.pts[d.pts.length - 1];
@@ -3304,7 +3317,6 @@ export class Board {
       case 'shape': this.commitShape(d); break;
       case 'terrain': this.commitTerrain(d); break;
       case 'lightpaint': this.commitLightPaint(d); break;
-      case 'ramp': this.commitRamp(d); break;
       case 'wall': this.commitWall(d); break;
       case 'wallend': case 'wallmove': this.finishWallDrag(d); break;
       case 'wallbox': break;

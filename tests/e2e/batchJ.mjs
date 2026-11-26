@@ -52,7 +52,7 @@ const front = async (p) => { await p.bringToFront(); await sleep(150); };
 check('DM has a Heights button', (await dm.locator('.toolbar button[aria-label^="Heights"]').count()) === 1);
 check('players do not', (await pl.locator('.toolbar button[aria-label^="Heights"]').count()) === 0);
 await dm.keyboard.press('h');
-await dm.locator('.flyout-title', { hasText: /^Heights$/ }).waitFor();
+await dm.locator('.flyout-title', { hasText: /^Elevation$/ }).waitFor();
 check('H opens the Heights panel', (await dm.evaluate(() => window.__vtt.ui.data.tool)) === 'height');
 await dm.locator('.flyout .chip', { hasText: /^10$/ }).click();
 check('a preset chip sets the height', (await dm.evaluate(() => window.__vtt.ui.data.heightFt)) === 10);
@@ -239,12 +239,12 @@ await sleep(300);
 await dm.bringToFront();
 
 // ---- Show heights is just a view setting
-await dm.evaluate(() => window.__vtt.ui.set({ heightView: 'tool' }));
+await dm.evaluate(() => window.__vtt.ui.set({ heightView: 'always' }));
 await sleep(300);
 const hiddenCount = await dm.evaluate(() => window.__vtt.board.drawLayer.container.children.length);
 await dm.evaluate(() => window.__vtt.ui.set({ heightView: 'auto' }));
 await sleep(300);
-check('turning the height view to "only in the tool" keeps the ground, only hiding it', (await zones(dm)).length === 2 && (await alt(dm, gob)).alt >= 0);
+check('changing the terrain view preserves the ground', (await zones(dm)).length === 2 && (await alt(dm, gob)).alt >= 0);
 void hiddenCount;
 
 // ---- the draw tool's Clear all leaves terrain alone

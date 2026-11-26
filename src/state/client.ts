@@ -1,3 +1,4 @@
+import { standingGround } from '../core/terrain';
 import type { Backend, Unsub } from '../backend/types';
 import { SERVER_TS } from '../backend/types';
 import {
@@ -60,7 +61,7 @@ export interface SceneState {
 
 /** A drawing as the caller describes it; the text styling and the fill colour are optional. */
 export type NewDrawing = Omit<Drawing, 'id' | 'uid' | 't' | 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc' | 'dt' | 'dl' | 'dd'> & Partial<Pick<Drawing, 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc' | 'dt' | 'dl' | 'dd'>>;
-export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'hg' | 'ha' | 'he' | 'hc' | 'td'>>;
+export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'hg' | 'ha' | 'he' | 'hc' | 'gradient' | 'td'>>;
 
 export type ScenePatch = Partial<Omit<SceneMeta, 'grid' | 'fog' | 'light'>> & {
   grid?: Partial<GridSettings>;
@@ -1124,12 +1125,15 @@ export class TableClient {
 
   /** Slide drawings by (dx, dy). `record` makes it one undo step. */
   async moveDrawings(ids: string[], dx: number, dy: number, record = true): Promise<void> {
-    const before = ids.map((id) => this.scene?.draws.get(id)).filter((d): d is Drawing => !!d && this.canEditDrawing(d)).map((d) => ({ id: d.id, p: d.p }));
+    const before = ids.map((id) => this.scene?.draws.get(id)).filter((d): d is Drawing => !!d && this.canEditDrawing(d)).map((d) => ({ id: d.id, p: d.p, gradient: d.gradient }));
     if (!before.length) return;
-    const after = before.map((b) => ({ id: b.id, p: movedPoints(b, dx, dy) }));
-    const write = (list: { id: string; p: string }[]) => {
+    const after = before.map((b) => ({ id: b.id, p: movedPoints(b, dx, dy), gradient: b.gradient?.map(c => ({...c, path: c.path.map(p => ({x:p.x+dx,y:p.y+dy}))})) }));
+    const write = (list: typeof before) => {
       const updates: Record<string, any> = {};
-      for (const d of list) updates[`${this.drawPath(d.id)}/p`] = d.p;
+      for (const d of list) {
+        updates[`${this.drawPath(d.id)}/p`] = d.p;
+        if (d.gradient?.length) updates[`${this.drawPath(d.id)}/gradient`] = d.gradient;
+      }
       return this.backend.update(updates);
     };
     await write(after);
@@ -1142,7 +1146,7 @@ export class TableClient {
     const prev = cur.map((d) => ({ id: d.id, vals: Object.fromEntries(Object.keys(patch).map((k) => [k, (d as any)[k]])) }));
     const write = (list: { id: string; vals: Record<string, unknown> }[]) => {
       const updates: Record<string, any> = {};
-      for (const d of list) for (const [k, v] of Object.entries(d.vals)) updates[`${this.drawPath(d.id)}/${k}`] = k === 'hz' ? v ?? null : v === '' || v === false || v === 0 ? null : v;
+      for (const d of list) for (const [k, v] of Object.entries(d.vals)) updates[`${this.drawPath(d.id)}/${k}`] = v == null || (Array.isArray(v) && !v.length) ? null : k === 'hz' ? v : v === '' || v === false || v === 0 ? null : v;
       return this.backend.update(updates);
     };
     const next = cur.map((d) => ({ id: d.id, vals: patch as Record<string, unknown> }));
@@ -1537,7 +1541,7 @@ export class TableClient {
     const segs = [...sightSegs(s.walls.values(), w => groundAt(zones, wallMid(w)) + w.h), ...terrainEdges(zones)];
     // in the dark a token remembers what its own light, its darkvision and its touch reach as it walks, and what other lights show it where it stands
     const dark = m.light.ambient === 'dark';
-    const altOf = (t: Token, p: Vec = t) => sightHeight(t, groundAt(zones, p));
+    const altOf = (t: Token, p: Vec = t) => sightHeight(t, standingGround(zones, p));
     const lights: LightSrc[] = dark
       ? [...s.tokens.values()].filter((t) => (!t.hidden || isLightMark(t)) && t.light).map((t) => lightOf(t, g, { x: t.x, y: t.y }, altOf(t))).filter((l): l is LightSrc => !!l)
       : [];

@@ -502,7 +502,7 @@ input[type=text], input[type=number], input[type=password], select { border-radi
 .style-btns button { padding: 5px 11px; min-width: 32px; }
 .dt-body .field-label { display: block; margin-bottom: 4px; }
 .drawtag select { width: auto; }
-.flyout .seg button { padding: 6px 9px; white-space: nowrap; }
+.flyout .seg button { padding: 6px 9px; white-space: normal; }
 .flyout .seg.wrap button { flex: 1 0 28%; }
 
 /* height chips */
@@ -633,7 +633,8 @@ input[type=text], input[type=number], input[type=password], select { border-radi
 .flyout { overflow-x: hidden; }
 .flyout .seg { display: flex; max-width: 100%; }
 .flyout .grid-choices { display: grid; }
-.flyout .seg button { padding: 6px 4px; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.flyout .seg button, .panel .seg button { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.flyout .seg button { padding: 6px 4px; flex: 1 1 auto; }
 .flyout .seg.wrap button { flex: 1 0 28%; }
 
 /* ---------------- boxes for longer writing (handouts) look like the other inputs; the on-board text editor keeps its own look */
@@ -697,3 +698,7 @@ textarea:not(.text-editor):focus { border-color: var(--accent); }
 .dw-slot-pick { padding: 0; border: 0; background: none; cursor: pointer; display: inline-flex; }
 .dw-slot-x { padding: 0 4px; border: 0; background: none; color: var(--muted, #98a0b0); cursor: pointer; font-size: 12px; }
 .dw-slot-x:hover { color: inherit; }
+
+.terrain-key { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+.terrain-key i { width: 15px; border-top: 3px solid #ffd27a; }
+.terrain-key i:nth-child(2) { margin-left: 8px; border-top: 2px solid #83d7cb; }

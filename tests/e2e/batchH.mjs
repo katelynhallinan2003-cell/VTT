@@ -127,10 +127,19 @@ await dm.mouse.up();
 await sleep(1500);
 const ops = await fogOps();
 const added = ops.slice(before);
-const route = added.find((q) => q.length >= 6);
-check('walking leaves a trail along the route', !!route, `${added.length} new fog line(s)`);
-const turned = !!route && (() => { const xs = []; for (let i = 0; i < route.length; i += 2) xs.push([route[i], route[i + 1]]); return xs.some(([x, y]) => Math.abs(x - worldPt(12.5, 12.5).x) < c * 0.8 && Math.abs(y - worldPt(12.5, 12.5).y) < c * 0.8); })();
-check('and it follows the corner instead of cutting across', turned);
+// Exploration may flush a stroke during the drag. Check the painted route across all writes.
+const turn = worldPt(12.5, 12.5);
+const samples = added.flatMap(line => line.filter((_,i) => i % 2 === 0).map((x,i) => ({x,y:line[2*i+1]})));
+check('walking leaves a trail along the route', samples.length >= 3, JSON.stringify(samples));
+const onRoute = p => Math.abs(p.y - turn.y) < c * 0.8 || Math.abs(p.x - turn.x) < c * 0.8;
+const staysOnRoute = added.every(line => {
+  for (let i = 2; i < line.length; i += 2) {
+    if (!onRoute({x:(line[i]+line[i-2])/2,y:(line[i+1]+line[i-1])/2})) return false;
+  }
+  return true;
+});
+check('and it follows the corner instead of cutting across', staysOnRoute && samples.every(onRoute) &&
+  samples.some(p => Math.hypot(p.x-turn.x,p.y-turn.y) < c*0.8));
 
 // teleport: hold Q while dragging
 const n1 = (await fogOps()).length;

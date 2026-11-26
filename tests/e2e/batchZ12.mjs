@@ -144,7 +144,7 @@ if (!(await dm.getByRole('button', { name: /Detect walls from the map/ }).count(
 await dm.getByRole('button', { name: /Detect walls from the map/ }).click();
 await dm.getByRole('dialog', { name: 'Detect walls' }).waitFor();
 await dm.waitForFunction(() => /(\d+ walls? found|No walls found|too many)/.test(document.querySelector('.modal-foot')?.textContent || ''), null, { timeout: 30000 });
-check('a picture with no flat wall colour says so, in plain words', /not one flat colour/.test((await dm.locator('.hint.warn').first().innerText().catch(() => ''))));
+check('a picture with no flat wall colour says so, in plain words', /colour also appears in the terrain/.test((await dm.locator('.hint.warn').first().innerText().catch(() => ''))));
 await dm.screenshot({ path: '/tmp/shots/z12-grass.png' });
 await dm.getByRole('button', { name: 'Cancel' }).click();
 

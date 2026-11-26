@@ -260,11 +260,12 @@ export function drawingToWire(d: Omit<Drawing, 'id'> | Drawing): Record<string, 
 
 /** The corners of a measurement or a move in several steps, as "x,y;x,y" (at most 24). */
 export const MAX_VIA = 24;
-export const viaToWire = (pts: Vec[] | undefined): string | undefined => (pts?.length ? pts.slice(0, MAX_VIA).map((p) => `${Math.round(p.x * 10) / 10},${Math.round(p.y * 10) / 10}`).join(';') : undefined);
-export function viaFromWire(s: unknown): Vec[] {
+export const MAX_ROUTE_CORNERS = 2048;
+export const viaToWire = (pts: Vec[] | undefined, limit = MAX_VIA): string | undefined => (pts?.length ? pts.slice(0, limit).map((p) => `${Math.round(p.x * 10) / 10},${Math.round(p.y * 10) / 10}`).join(';') : undefined);
+export function viaFromWire(s: unknown, limit = MAX_VIA): Vec[] {
   if (typeof s !== 'string' || !s) return [];
   const out: Vec[] = [];
-  for (const part of s.split(';').slice(0, MAX_VIA)) {
+  for (const part of s.split(';').slice(0, limit)) {
     const [x, y] = part.split(',').map(Number);
     if (Number.isFinite(x) && Number.isFinite(y)) out.push({ x, y });
   }
@@ -280,12 +281,13 @@ export function normalizeLive(uid: string, raw: any): LivePlot | null {
       ...(viaFromWire(raw.ruler.w).length ? { via: viaFromWire(raw.ruler.w) } : {}),
     }
     : null;
-  const ghosts: Record<string, Vec & { via?: Vec[] }> = {};
+  const ghosts: Record<string, Vec & { via?: Vec[]; stops?: number[] }> = {};
   if (raw.ghosts && typeof raw.ghosts === 'object') {
     for (const [id, v] of Object.entries(raw.ghosts as Record<string, any>)) {
       if (v && typeof v === 'object') {
-        const via = viaFromWire(v.w);
-        ghosts[id] = { x: num(v.x, 0), y: num(v.y, 0), ...(via.length ? { via } : {}) };
+        const via = viaFromWire(v.w, MAX_ROUTE_CORNERS);
+        const stops = typeof v.s === 'string' ? [...new Set(String(v.s).split(',').map(Number).filter(i => Number.isInteger(i) && i > 0 && i <= via.length))].sort((a,b) => a-b) : undefined;
+        ghosts[id] = { x: num(v.x, 0), y: num(v.y, 0), ...(via.length ? { via } : {}), ...(stops ? { stops } : {}) };
       }
     }
   }

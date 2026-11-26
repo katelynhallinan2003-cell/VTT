@@ -7,8 +7,9 @@ import { templateRoughDraws } from '../core/templaterough';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
 import { altitudeOf, dayOf, dimOf, groundAt, heightNote, isRough, roughOf, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
-import { DEFAULT_CLIFF_FT, cliffSegs, rampCells, walkExtra, walkNote, type WalkExtra } from '../core/walk';
-import { paintedCliffBlocks } from '../core/terrainMovement';
+import { DEFAULT_CLIFF_FT, rampCells } from '../core/walk';
+import { terrainEdges, type TerrainEdge } from '../core/terrainEdges';
+import { movementCost } from '../core/movementCost';
 import { EMPTY_TERRAIN, MAX_STROKE_CELLS, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, heightColor, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
 import { scaleCut, type GridCut, type PixelImage } from '../core/gridcut';
@@ -16,7 +17,7 @@ import { AUTO_GRID_STRENGTH, detectPrintedGrid, impliedGrid } from '../core/mapg
 import { hasPaintedLight, lightOf, viewerOf, type LightSrc, type PaintedLight, type Viewer } from '../core/light';
 import { LightLayer } from './LightLayer';
 import { colorNum } from '../core/colornum';
-import { DEFAULT_GRID, MAX_VIA, tokenCoordinate } from '../core/model';
+import { DEFAULT_GRID, MAX_ROUTE_CORNERS, MAX_VIA, tokenCoordinate } from '../core/model';
 import { isBlankMap, isBlankPage, paperColour } from '../core/blankgrid';
 import { squareLines } from '../core/mapgrids';
 import { pctOf, toPub, visionCircles, withoutLights } from '../core/combat';
@@ -46,7 +47,7 @@ export interface BoardCallbacks {
 
 type Drag =
   | { kind: 'pan'; sx: number; sy: number; tx: number; ty: number; moved: boolean; button: number; noPan?: boolean }
-  | { kind: 'tokens'; ids: string[]; anchor: string; start: Vec; origins: Map<string, Vec>; moved: boolean; /** how far the group has been let go so far (walls can hold it back) */ cur?: Vec }
+  | { kind: 'tokens'; ids: string[]; anchor: string; start: Vec; origins: Map<string, Vec>; trail: Vec[]; moved: boolean; /** how far the group has been let go so far (walls can hold it back) */ cur?: Vec }
   | { kind: 'marquee'; start: Vec; cur: Vec; base: Set<string> }
   | { kind: 'rect'; start: Vec; cur: Vec }
   | { kind: 'brush'; pts: Vec[] }
@@ -74,7 +75,7 @@ type Drag =
   | { kind: 'drawresize'; id: string; handle: HandleId; orig: Drawing; patch: DrawingPatch | null };
 
 /** a token being tried out: where it really is, the corners it turned at, and where the test has put it */
-interface TestMove { from: Vec; to: Vec; via: Vec[] }
+interface TestMove { from: Vec; to: Vec; via: Vec[]; stops: number[] }
 const NO_IDS: Set<string> = new Set();
 const WALL_COLOR = { wall: 0xffd27a, door: 0xe8873a, window: 0x7fd8ff } as const;
 
@@ -123,8 +124,9 @@ export class Board {
   /** where the run of walls being drawn began, and how many it has so far (coming back to the start closes the loop) */
   private wallRunFirst: Vec | null = null;
   private wallRunCount = 0;
+  private seenWallThreshold?: number;
   private seenWallRev = -1;
-  private segCache: { scene: unknown; rev: number; ground: string; sight: Seg[]; move: Seg[] } = { scene: null, rev: -1, ground: '', sight: [], move: [] };
+  private segCache: { scene: unknown; rev: number; ground: string; sight: Seg[]; move: Seg[]; terrain: TerrainEdge[] } = { scene: null, rev: -1, ground: '', sight: [], move: [], terrain: [] };
   private auraG = new Graphics();
   private ghostLayer = new Container();
   private overlayG = new Graphics();
@@ -502,10 +504,11 @@ export class Board {
       this.seenMetaRev = scene.metaRev;
       this.onMeta();
     }
-    const gridKey = scene.meta ? `${scene.meta.grid.cell}|${scene.meta.grid.shape}|${currentOverlay(scene.meta.grid) === 'none'}` : '';
+    const gridKey = scene.meta ? `${scene.meta.grid.cell}|${scene.meta.grid.ft}|${scene.meta.grid.ox}|${scene.meta.grid.oy}|${scene.meta.grid.shape}|${currentOverlay(scene.meta.grid) === 'none'}` : '';
     const previewNow = this.ui.data.dmPreview;
     if (gridKey !== this.seenGridKey) {
       this.seenGridKey = gridKey;
+      this.seenZoneRev = -1;
       for (const v of this.views.values()) v.invalidate();
       this.seenTokensRev = -1;
       this.seenDrawRev = -1;
@@ -536,7 +539,8 @@ export class Board {
       if (stale.length) this.ui.selectDrawings([...this.ui.data.drawSel].filter((id) => scene.draws.has(id)));
       this.dirty = true;
     }
-    if (scene.wallRev !== this.seenWallRev) {
+    if (scene.wallRev !== this.seenWallRev || this.seenWallThreshold !== scene.meta?.cliff) {
+      this.seenWallThreshold = scene.meta?.cliff;
       this.seenWallRev = scene.wallRev;
       this.refreshRough(); // a wall can cut a difficult spell template short
       this.onWallsChanged();
@@ -1053,26 +1057,21 @@ export class Board {
   /** Is the ground at this spot difficult? */
   isRoughAt(p: Vec): boolean { return isRough(this.rough, p); }
 
-  /** What a walk through these points costs, counting stairs and difficult ground (a flyer is not slowed by either). */
-  private moveCost(path: Vec[], fly: boolean): { ft: number; note: string } {
+  /** Movement along the accepted route, including terrain, walls and flight clearance. */
+  private moveCost(path: Vec[], fly: boolean, elevation = 0): { ft: number; note: string } {
     const grid = this.client.gridAt(path[0] ?? { x: 0, y: 0 });
-    const base = pathFt(grid, path);
-    if (fly || (!this.zones.areas.length && !this.rough.areas.length)) return { ft: base, note: '' };
-    const ctx = { ground: (p: Vec) => groundAtTerrain(this.zones, p), surface: (p: Vec) => groundAt(this.zones, p), rough: (p: Vec) => isRough(this.rough, p) };
-    const sum: WalkExtra = { extraFt: 0, rough: 0, stairs: 0, stairRise: 0, ledges: [], straightStairs: 0 };
-    for (let i = 1; i < path.length; i++) {
-      const e = walkExtra(grid, path[i - 1], path[i], ctx, sum.straightStairs);
-      sum.extraFt += e.extraFt; sum.rough += e.rough; sum.stairs += e.stairs;
-      sum.stairRise += e.stairRise; sum.straightStairs += e.straightStairs; sum.ledges.push(...e.ledges);
-    }
-    return { ft: Math.round((base + sum.extraFt) * 10) / 10, note: walkNote(grid, sum) };
+    const { terrain, move } = this.wallSegs();
+    if (!terrain.length && !move.length && !this.rough.areas.length) return { ft: pathFt(grid,path), note: '' };
+    return movementCost(grid, path, fly ? elevation : null, {
+      ground: p => groundAtTerrain(this.zones,p), surface: p => groundAt(this.zones,p), rough: p => isRough(this.rough,p),
+    }, terrain, this.moveBlockers() ? move : []);
   }
 
   // ------------------------------------------------------------------ walls
   /** The wall pieces that stop sight and walking, kept until the walls change. */
-  wallSegs(): { sight: Seg[]; move: Seg[] } {
+  wallSegs(): { sight: Seg[]; move: Seg[]; terrain: TerrainEdge[] } {
     const scene = this.client.scene;
-    if (!scene) return { sight: [], move: [] };
+    if (!scene) return { sight: [], move: [], terrain: [] };
     const c = this.segCache;
     // how tall a wall's top is depends on the ground it stands on, so the pieces are rebuilt when the ground changes too
     const cliffFt = scene.meta?.cliff ?? DEFAULT_CLIFF_FT;
@@ -1081,8 +1080,9 @@ export class Board {
       const list = [...scene.walls.values()];
       const topOf = (w: Wall) => groundAt(this.zones, wallMid(w)) + w.h;
       // a big enough drop between neighbouring squares is a cliff: a wall for whatever is lower than the top of it, nothing for what stands on top
-      const cliffs = cliffSegs(this.client.grid, terrainBounds(this.zones), (p) => groundAtTerrain(this.zones, p), cliffFt);
-      this.segCache = { scene, rev: scene.wallRev, ground: gsig, sight: [...sightSegs(list, topOf), ...cliffs], move: moveSegs(list, topOf) };
+      const terrain = terrainEdges(this.zones, cliffFt);
+      const cliffs = terrain.filter(edge => !edge.stair);
+      this.segCache = { scene, terrain, rev: scene.wallRev, ground: gsig, sight: [...sightSegs(list, topOf), ...cliffs], move: moveSegs(list, topOf) };
     }
     return this.segCache;
   }
@@ -1090,7 +1090,7 @@ export class Board {
   /** What stops a spell, for the template painter. */
   private wallsForSpells(): { segs: Seg[]; rev: string; ground: (p: Vec) => number } {
     // a spell also depends on how high the ground is where it starts (a wall lower than that does not stop it)
-    return { segs: this.wallSegs().sight, rev: `${this.client.scene?.wallRev ?? 0}:${this.zones.sig}`, ground: (p) => groundAt(this.zones, p) };
+    return { segs: this.wallSegs().sight, rev: `${this.client.scene?.wallRev ?? 0}:${this.client.scene?.meta?.cliff}:${this.zones.sig}`, ground: (p) => groundAt(this.zones, p) };
   }
 
   private onWallsChanged() {
@@ -1118,7 +1118,7 @@ export class Board {
     this.wallLayer.sync(this.wallsShown(), {
       z: this.cam.zoom, cell: this.client.grid.cell, showAll: dm && !u.dmPreview,
       selected: editing ? u.wallSel : NO_IDS, hover: edit ? this.wallHover : null, handles: edit,
-    }, `${scene.wallRev}:${this.wallPrevSeq}`, editing || u.showWalls);
+    }, `${scene.wallRev}:${this.wallPrevSeq}:${this.zones.sig}:${scene.meta?.cliff}`, editing || u.showWalls, dm && !u.dmPreview && (editing || u.showWalls) ? this.wallSegs().terrain : []);
   }
 
   /** The door or window whose handle is under `p` (the DM clicks it to open or close it). */
@@ -1152,6 +1152,7 @@ export class Board {
     // a light-only mark is a prop the DM sets down and leaves: it goes through walls and over cliffs, whatever the switches say
     if (token && isLightMark(token)) return false;
     for (const seg of segs) {
+      if (seg.climbable) continue;
       const t = rayHit(from, dx, dy, seg);
       if (t > 1) continue;
       const side = seg.one && sideOf(seg, from);
@@ -1160,7 +1161,7 @@ export class Board {
       const ground = groundAt(this.zones, { x: from.x + t * dx, y: from.y + t * dy });
       if (altitudeOf(token, ground).alt <= ground + seg.wallHeight) return true;
     }
-    return paintedCliffBlocks(this.zones, from, to, this.client.scene?.meta?.cliff ?? DEFAULT_CLIFF_FT, token?.fly ? token.elev : undefined);
+    return false;
   }
 
   /** How high a token is when it stands (or flies) at `pos`. */
@@ -1182,7 +1183,7 @@ export class Board {
   private wallStep(d: Extract<Drag, { kind: 'tokens' }>, want: Vec, snap: ((v: Vec) => Vec) | null): Vec {
     const segs = this.moveBlockers();
     const cur = d.cur ?? { x: 0, y: 0 };
-    if (!segs || (!segs.length && !this.zones.areas.length)) return want;
+    if (!segs?.length) return want;
     const origins = d.ids.map((id) => ({ id, o: d.origins.get(id) })).filter((x): x is { id: string; o: Vec } => !!x.o);
     const clear = (v: Vec) => origins.every(({ id, o }) => {
       const from = { x: o.x + cur.x, y: o.y + cur.y };
@@ -1527,7 +1528,7 @@ export class Board {
     }
     const r = (n: number) => Math.round(n * 2) / 2;
     const painted = this.paintedLight();
-    const key = `${scene.id}|${ambient}|${scene.wallRev}:${this.zones.sig}|${painted ? `${painted.day?.sig ?? ''}~${painted.dim?.sig ?? ''}~${Math.round(painted.edge)}` : ''}|${lights.map((l) => `${r(l.x)},${r(l.y)},${r(l.b)},${r(l.r)},${l.c},${l.alt ?? ''}`).join(';')}|${viewers.map((w) => `${r(w.x)},${r(w.y)},${r(w.r)},${r(w.dv)},${r(w.touch)},${w.alt ?? ''}`).join(';')}`;
+    const key = `${scene.id}|${ambient}|${scene.wallRev}:${scene.meta?.cliff}:${this.zones.sig}|${painted ? `${painted.day?.sig ?? ''}~${painted.dim?.sig ?? ''}~${Math.round(painted.edge)}` : ''}|${lights.map((l) => `${r(l.x)},${r(l.y)},${r(l.b)},${r(l.r)},${l.c},${l.alt ?? ''}`).join(';')}|${viewers.map((w) => `${r(w.x)},${r(w.y)},${r(w.r)},${r(w.dv)},${r(w.touch)},${w.alt ?? ''}`).join(';')}`;
     return { ambient, lights, viewers, painted, key };
   }
 
@@ -1696,7 +1697,7 @@ export class Board {
   /** Show (or stop showing) my ruler and test moves to everyone else, according to the share switch. */
   private publishLive(force = false) {
     const share = this.ui.data.sharePlot;
-    const ghosts = share ? Object.fromEntries([...this.testMoves].map(([id, m]) => [id, { ...m.to, via: m.via.length ? m.via : undefined }])) : {};
+    const ghosts = share ? Object.fromEntries([...this.testMoves].map(([id, m]) => [id, { ...m.to, via: m.via.length ? m.via : undefined, stops: m.stops }])) : {};
     const ruler = share && this.ruler ? { ...this.ruler, via: this.ruler.via.length ? this.ruler.via : undefined, c: this.ui.data.rulerColor || undefined } : null;
     const any = !!ruler || Object.keys(ghosts).length > 0;
     if (!any && !this.liveSent && !force) return;
@@ -1711,24 +1712,41 @@ export class Board {
     this.invalidate();
   }
 
-  /** Try a token out at `to` without moving it for anyone else. */
-  private setTest(id: string, to: Vec) {
+  private routeTo(id: string, origin: Vec, to: Vec, trail: Vec[] = []): TestMove {
+    const current = this.testMoves.get(id);
+    const from = current?.from ?? origin;
+    const via: Vec[] = [];
+    const stops: number[] = [];
+    // Repositioning a single destination on an empty board is a straight measure.
+    // Where terrain or walls affect the route, keep how the token actually got here.
+    if (current && (this.ui.data.testMulti || this.zones.areas.length || this.rough.areas.length || this.wallSegs().move.length)) {
+      via.push(...current.via, current.to);
+      if (this.ui.data.testMulti) stops.push(...current.stops, via.length);
+    }
+    for (const d of trail.slice(1, -1)) via.push({ x: origin.x + d.x, y: origin.y + d.y });
+    return { from, to, via, stops };
+  }
+
+  private setTest(id: string, to: Vec, trail?: Vec[]) {
     const v = this.views.get(id);
     if (!v) return;
-    const cur = this.testMoves.get(id);
-    const from = cur?.from ?? { x: v.token.x, y: v.token.y };
-    if (this.ui.data.testMulti && cur) {
-      // a move in several steps: where it was becomes a corner, and the new place is the end
-      if (Math.hypot(to.x - cur.to.x, to.y - cur.to.y) < 1) return;
-      this.testMoves.set(id, { from, to: { ...to }, via: [...cur.via, cur.to].slice(-MAX_VIA) });
-      v.testPos = { ...to }; v.target = { ...to };
-    } else if (Math.hypot(to.x - from.x, to.y - from.y) < 1) { this.testMoves.delete(id); v.testPos = null; v.target = { ...from }; }
-    else { this.testMoves.set(id, { from, to: { ...to }, via: [] }); v.testPos = { ...to }; v.target = { ...to }; }
+    const origin = this.testMoves.get(id)?.to ?? v.token;
+    const move = this.routeTo(id, { x: origin.x, y: origin.y }, to, trail);
+    if (move.via.length > MAX_ROUTE_CORNERS) return;
+    if (!move.via.length && Math.hypot(to.x - move.from.x, to.y - move.from.y) < 1) {
+      this.testMoves.delete(id);
+      v.testPos = null;
+      v.target = { ...move.from };
+    } else {
+      this.testMoves.set(id, move);
+      v.testPos = { ...to };
+      v.target = { ...to };
+    }
   }
 
   /** Remember how the test moves look now, before they change (a right-click goes back to it). */
   private pushTestHistory() {
-    this.testHistory.push(new Map([...this.testMoves].map(([id, m]) => [id, { from: { ...m.from }, to: { ...m.to }, via: m.via.map((p) => ({ ...p })) }])));
+    this.testHistory.push(new Map([...this.testMoves].map(([id, m]) => [id, { from: { ...m.from }, to: { ...m.to }, via: m.via.map((p) => ({ ...p })), stops: [...m.stops] }])));
     if (this.testHistory.length > 60) this.testHistory.shift();
   }
 
@@ -1953,20 +1971,14 @@ export class Board {
     }
     if (d?.kind === 'tokens' && d.moved) {
       const a = this.views.get(d.anchor);
-      const tm = this.testMoves.get(d.anchor);
-      const o = tm?.from ?? d.origins.get(d.anchor);
-      if (a && o) {
-        // a move in several steps keeps the corners it has already turned at; the leg being dragged goes on from the last one
-        const before = this.ui.data.testMulti && tm ? [tm.from, ...tm.via, tm.to] : [o];
-        const lastLeg = before[before.length - 1];
-        if (before.length > 1) this.dashedLine(g, before, 0xffffff, z);
-        g.moveTo(lastLeg.x, lastLeg.y).lineTo(a.display.x, a.display.y).stroke({ width: 2 / z, color: 0xffffff, alpha: 0.7 });
-        const whole = [...before, { x: a.display.x, y: a.display.y }];
-        const cost = this.moveCost(whole, a.token.fly);
-        const ft = cost.ft;
-        // in several steps: each step's own distance sits on the step, the whole is at the token
-        if (whole.length > 2) this.plotNext = this.stepLabels(this.plotNext, whole, a.token.fly, 0xffffff, z);
-        this.distText.text = `${ft} ft${whole.length > 2 ? ' total' : ''}${cost.note ? ` · ${cost.note}` : ''}`;
+      const origin = d.origins.get(d.anchor);
+      if (a && origin) {
+        const move = this.routeTo(d.anchor, origin, a.display, d.trail);
+        const path = [move.from, ...move.via, move.to];
+        this.dashedLine(g, path, 0xffffff, z, move.stops);
+        const cost = this.moveCost(path, a.token.fly, a.token.elev);
+        this.plotNext = this.stepLabels(this.plotNext, path, a.token, 0xffffff, z, move.stops);
+        this.distText.text = `${cost.ft} ft${move.stops.length ? ' total' : ''}${cost.note ? ` · ${cost.note}` : ''}`;
         this.distText.scale.set(1 / z);
         this.distText.position.set(a.display.x, a.display.y - (a.token.size * grid.cell) / 2 - 6 / z);
         this.distText.visible = true;
@@ -2104,8 +2116,9 @@ export class Board {
         const t = scene.tokens.get(id);
         if (!t || !this.visibleToViewer(t)) continue;
         const path = [{ x: t.x, y: t.y }, ...(pos.via ?? []), { x: pos.x, y: pos.y }];
-        this.dashedLine(g, path, col, z);
-        li = this.testLabel(li, path, t, col, p?.name ?? '');
+        const stops = pos.stops ?? (pos.via ?? []).map((_, i) => i + 1);
+        this.dashedLine(g, path, col, z, stops);
+        li = this.testLabel(li, path, t, col, p?.name ?? '', stops);
       }
     }
 
@@ -2115,24 +2128,24 @@ export class Board {
       const t = scene.tokens.get(id);
       if (!t) continue;
       const path = [m.from, ...m.via, m.to];
-      this.dashedLine(g, path, 0xffffff, z);
-      li = this.testLabel(li, path, t, 0xffffff, '');
+      this.dashedLine(g, path, 0xffffff, z, m.stops);
+      li = this.testLabel(li, path, t, 0xffffff, '', m.stops);
     }
   }
 
   /** A dashed line through the points (and a dot at each corner in between). */
-  private dashedLine(g: Graphics, pts: Vec[], color: number, z: number) {
+  private dashedLine(g: Graphics, pts: Vec[], color: number, z: number, stops?: number[]) {
     for (const [p, q] of dashSegments(pts, 9 / z, 6 / z)) g.moveTo(p.x, p.y).lineTo(q.x, q.y);
     g.stroke({ width: 2.5 / z, color, alpha: 0.9, cap: 'round' });
-    for (const p of pts.slice(1, -1)) g.circle(p.x, p.y, 4 / z).fill({ color, alpha: 0.9 });
+    for (const p of stops ? stops.map(i => pts[i]) : pts.slice(1, -1)) g.circle(p.x, p.y, 4 / z).fill({ color, alpha: 0.9 });
   }
 
-  private testLabel(li: number, path: Vec[], t: Token, color: number, name: string): number {
+  private testLabel(li: number, path: Vec[], t: Token, color: number, name: string, stops: number[]): number {
     const grid = this.client.grid;
     const to = path[path.length - 1];
-    const cost = this.moveCost(path, t.fly);
-    li = this.stepLabels(li, path, t.fly, color, this.cam.zoom);
-    this.plotLabel(li, `${name ? name + ': ' : ''}${cost.ft} ft${path.length > 2 ? ' total' : ''}${cost.note ? ` (${cost.note})` : ''}`, to.x, to.y - (t.size * grid.cell) / 2 - 6 / this.cam.zoom, color);
+    const cost = this.moveCost(path, t.fly,t.elev);
+    li = this.stepLabels(li, path, t, color, this.cam.zoom, stops);
+    this.plotLabel(li, `${name ? name + ': ' : ''}${cost.ft} ft${stops.length ? ' total' : ''}${cost.note ? ` (${cost.note})` : ''}`, to.x, to.y - (t.size * grid.cell) / 2 - 6 / this.cam.zoom, color);
     return li + 1;
   }
 
@@ -2140,11 +2153,11 @@ export class Board {
    * A move made in several steps: how far each step went, on the step. The steps add up to the whole
    * (each is the difference between the cost so far and the cost one corner earlier, so stairs and rough ground are counted once).
    */
-  private stepLabels(li: number, path: Vec[], fly: boolean, color: number, z: number): number {
-    if (path.length < 3) return li;
+  private stepLabels(li: number, path: Vec[], token: Token, color: number, z: number, stops: number[]): number {
+    if (!stops.length) return li;
     let prev = 0;
-    for (let i = 1; i < path.length; i++) {
-      const sofar = this.moveCost(path.slice(0, i + 1), fly).ft;
+    for (const i of [...stops, path.length - 1]) {
+      const sofar = this.moveCost(path.slice(0, i + 1), token.fly,token.elev).ft;
       const leg = Math.round((sofar - prev) * 10) / 10;
       prev = sofar;
       const a = path[i - 1], b = path[i];
@@ -2294,7 +2307,7 @@ export class Board {
         const origins = new Map<string, Vec>();
         for (const id of movable) { const v = this.views.get(id)!; origins.set(id, { ...v.display }); v.dragging = true; }
         const anchor = movable.includes(hit.id) ? hit.id : movable[0];
-        this.drag = { kind: 'tokens', ids: movable, anchor, start: w, origins, moved: false };
+        this.drag = { kind: 'tokens', ids: movable, anchor, start: w, origins, trail: [{ x: 0, y: 0 }], moved: false };
         this.updateCursor();
       }
       this.startPress(w, e);
@@ -3122,6 +3135,19 @@ export class Board {
     if (snapDelta) { const sn = snapDelta({ x: dx, y: dy }); dx = sn.x; dy = sn.y; }
     // walls hold the group back (it walks around them if the drag does)
     const got = this.wallStep(d, { x: dx, y: dy }, snapDelta);
+    const trail = d.trail;
+    const last = trail[trail.length - 1];
+    if (last.x !== got.x || last.y !== got.y) {
+      const prior = trail[trail.length - 2];
+      const ax = prior ? last.x - prior.x : 0, ay = prior ? last.y - prior.y : 0;
+      const bx = got.x - last.x, by = got.y - last.y;
+      if (prior && ax * bx + ay * by > 0 && Math.abs(ax * by - ay * bx) < 0.00001 * Math.hypot(ax, ay)) {
+        trail[trail.length - 1] = got;
+      } else {
+        if (trail.length + Math.max(0, ...d.ids.map(id => this.testMoves.get(id)?.via.length ?? 0)) > MAX_ROUTE_CORNERS) return;
+        trail.push(got);
+      }
+    }
     d.cur = got;
     dx = got.x; dy = got.y;
     const moves: { id: string; x: number; y: number }[] = [];
@@ -3134,7 +3160,8 @@ export class Board {
       moves.push({ id, x: v.display.x, y: v.display.y });
       v.setAlt(this.heightOf(v.token, v.display), this.client.gridAt(v.display));
     }
-    if (!this.ui.data.testMove) this.sendMoves(moves, this.teleportHeld);
+    // A teleport has one destination. Publishing intermediate positions reveals fog there.
+    if (!this.ui.data.testMove && !this.teleportHeld) this.sendMoves(moves, false);
   }
 
   private onPointerUp(e: PointerEvent) {
@@ -3174,7 +3201,7 @@ export class Board {
             const v = this.views.get(id);
             if (!v) continue;
             v.dragging = false;
-            if (d.moved) this.setTest(id, { ...v.display });
+            if (d.moved) this.setTest(id, { ...v.display }, d.trail);
           }
           if (d.moved) this.afterTestChange();
           break;

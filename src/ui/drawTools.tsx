@@ -191,7 +191,6 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
   const rough = d.groundKind === 'rough';
   const roughN = roughOf(client.drawingsSorted(), grid).areas.length;
   const modes = rough ? ([['paint', 'Paint'], ['erase', 'Erase']] as const) : ([['paint', 'Paint'], ['ramp', 'Ramp'], ['erase', 'Erase'], ['move', 'Select']] as const);
-  const cliff = client.scene?.meta?.cliff ?? 10;
   return (
     <div class="flyout">
       <div class="flyout-title">Heights</div>
@@ -260,18 +259,11 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
       {!rough && (
         <p class="hint">
           {mode === 'paint' && 'Paint or drag across the map. Ctrl-click an area to select it, then paint more onto it or change its height.'}
-          {mode === 'erase' && (editing ? 'Erases from the selected area only.' : 'Erases from every area. Select an area first to erase from just that one.')}
-          {mode === 'move' && (gridless ? 'Click an area to select it and change its height. Drag it to move it freely. Shift-click adds more.' : `Click an area to select it and change its height. Drag it to move it: ground made of whole ${cellWord}s moves a ${cellWord} at a time (Alt moves it freely). Shift-click adds more.`)}
+          {mode === 'erase' && (editing ? 'Erases from the selected area only.' : 'Select an area to erase only that area.')}
+          {mode === 'move' && (gridless ? 'Select ground to change its height or drag it.' : `Click an area to select it and change its height. Drag to move it.`)}
         </p>
       )}
       {rough && <p class="hint">{mode === 'paint' ? 'Paint or drag across the map.' : 'Erases difficult ground wherever you drag.'}</p>}
-      {!rough && client.isDM && (
-        <div style={{ margin: '8px 0' }}>
-          <NumField label="Steepest climb" value={cliff} min={0} max={1000} step={5} unit="ft" title="At 10 ft, ground that rises more than 10 ft within 10 horizontal feet is a cliff and stops a walker. This includes overlapping brushes. A single 5 ft step is walkable. The distance sideways scales with this number. Set to 0 to turn off automatic cliffs."
-            onCommit={(v) => void client.updateScene({ cliff: Math.max(0, Math.round(v)) })} />
-          <p class="hint">Ground that rises more than this is a cliff: walkers can't climb it, but can walk down. 0 turns cliffs off.</p>
-        </div>
-      )}
       <span class="field-label">Show the ground heights</span>
       <div class="seg">
         {([['auto', 'When moving'], ['always', 'Always'], ['tool', 'In tool']] as const).map(([k, label]) => (
@@ -289,9 +281,9 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
 }
 
 const WALL_HINT: Record<WallKind, string> = {
-  wall: 'Stops sight, movement and spells.',
+  wall: 'Blocks sight and spells. Set a height to allow climbing.',
   door: 'Blocks everything while it is closed. Click its diamond to open it.',
-  window: 'You can see and cast through it. Shut, nobody walks through; click its square to open it.',
+  window: 'Open the window to pass.',
 };
 
 const SHAPE_HINT = { line: 'One wall at a time, run on from point to point', box: 'A room: four walls at once', free: 'Draw a line by hand', circle: 'A round room' } as const;
@@ -323,11 +315,11 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
             {WALL_KINDS.map((k) => <button key={k} class={d.wallKind === k ? 'on' : ''} title={WALL_HINT[k]} onClick={() => ui.set({ wallKind: k, wallVis: null })}>{WALL_NAME[k]}</button>)}
           </div>
           <p class="hint">{WALL_HINT[d.wallKind]}</p>
-          <Toggle checked={shownVis} onChange={(v) => ui.set({ wallVis: v })} label="Players can see it" hint="Off: only you see it. It blocks either way." />
+          <Toggle checked={shownVis} onChange={(v) => ui.set({ wallVis: v })} label="Players can see it" hint="Hidden walls still work." />
           {d.wallKind !== 'door' && (
             <>
               <span class="field-label">Shape</span>
-              <div class="seg wrap">
+              <div class="seg grid-choices">
                 {([['line', 'Lines'], ['box', 'Box'], ['free', 'Freehand'], ['circle', 'Round']] as const).map(([k, label]) => (
                   <button key={k} class={d.wallShape === k ? 'on' : ''} title={SHAPE_HINT[k]} onClick={() => ui.set({ wallShape: k })}>{label}</button>
                 ))}
@@ -340,8 +332,8 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
                   </div>
                 </>
               )}
-              <Toggle checked={d.wallOne !== 0} onChange={(v) => ui.set({ wallOne: v ? (d.wallOne || 1) : 0 })} label="One-way (a cliff edge)"
-                hint="Blocks from one side only. The little ticks mark the side that is stopped." />
+              <Toggle checked={d.wallOne !== 0} onChange={(v) => ui.set({ wallOne: v ? (d.wallOne || 1) : 0 })} label="One-way"
+                hint="Ticks mark the affected side." />
               {d.wallOne !== 0 && (
                 <div class="seg">
                   <button class={d.wallOne === 1 ? 'on' : ''} title="The side on your right as you draw from the first point to the next" onClick={() => ui.set({ wallOne: 1 })}>Stops its right</button>
@@ -350,22 +342,17 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
               )}
             </>
           )}
-<div>
+          <div>
             <NumField label="Height" value={d.wallH} min={0} max={1000} step={5} unit="ft" title="How tall it is above the ground it stands on. 0 means too tall to get over. Anything higher than the top sees and flies over it." onCommit={(n) => ui.set({ wallH: Math.max(0, Math.round(n)) })} />
-            {d.wallH === 0 && <span class="hint"> 0: full height, nothing gets over it</span>}
+            {d.wallH === 0 && <span class="hint"> 0 means full height.</span>}
           </div>
           <span class="field-label">Snap ends to</span>
           <div class="seg wrap">
-            {([['corner', 'Corners'], ['half', 'Halves too'], ['off', 'Free']] as const).map(([k, label]) => <button key={k} class={d.wallSnap === k ? 'on' : ''} onClick={() => ui.set({ wallSnap: k })}>{label}</button>)}
+            {([['corner', 'Corners'], ['half', 'Halves'], ['off', 'Free']] as const).map(([k, label]) => <button key={k} title={k === 'half' ? 'Snap to corners and half-grid points' : label} class={d.wallSnap === k ? 'on' : ''} onClick={() => ui.set({ wallSnap: k })}>{label}</button>)}
           </div>
+          <span class="hint">{d.wallKind === 'door' || d.wallShape === 'line' ? 'Click to join segments. Enter to finish.' : d.wallShape === 'free' ? 'Drag to trace a wall.' : d.wallShape === 'circle' ? 'Drag from the centre to the edge.' : 'Drag between opposite corners.'}</span>
           {props.onDetect && <button class="btn small" title="Look for the walls printed on the map picture and add them for you to check" onClick={props.onDetect}>Detect walls from the map…</button>}
-          <p class="hint">
-            {d.wallKind === 'door' || d.wallShape === 'line' ? 'Click points and the walls run on; double-click, Enter, Esc or right-click to stop. Or drag one wall at a time.'
-              : d.wallShape === 'box' ? 'Drag out a room, or click two opposite corners.'
-              : d.wallShape === 'circle' ? 'Drag from the middle out to the edge, or click the middle and then the edge.'
-              : 'Draw the outline with the mouse held down. Come back to where you started to close it. It becomes ordinary walls you can bend afterwards.'}
-            {' '}Shift: straight or 45°. Alt: no snapping.{d.wallKind !== 'wall' ? ' Drawn along a wall, it cuts a gap in it.' : ''}
-          </p>
+
         </>
       ) : (
         <div class="ht-card">
@@ -382,7 +369,7 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
               <Toggle checked={allVis} onChange={(v) => void client.updateWalls(ids, { vis: v }, v ? 'Show wall to players' : 'Hide wall from players')} label="Players can see it" />
               {canOne.length > 0 && (
                 <>
-                  <Toggle checked={canOne.every((w) => w.one !== 0)} onChange={(v) => void client.updateWalls(canOne.map((w) => w.id), { one: v ? 1 : 0 }, v ? 'Make one-way' : 'Make two-way')} label="One-way (a cliff edge)"
+                  <Toggle checked={canOne.every((w) => w.one !== 0)} onChange={(v) => void client.updateWalls(canOne.map((w) => w.id), { one: v ? 1 : 0 }, v ? 'Make one-way' : 'Make two-way')} label="One-way"
                     hint="Stops only what is on the ticked side." />
                   {canOne.some((w) => w.one !== 0) && <button class="btn small" title="Swap which side is stopped (X)" onClick={() => void client.flipWalls(ids)}>Flip the stopped side (X)</button>}
                 </>
@@ -402,9 +389,10 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
                 <button class="btn small danger" onClick={() => { void client.removeWalls(ids); ui.set({ wallSel: new Set() }); }}>Delete {sel.length > 1 ? 'walls' : WALL_NAME[sel[0].k].toLowerCase()}</button>
               </div>
             </>
-          ) : <p class="hint">Click a wall, or drag a box round several (Shift-click adds more). Drag a dot to move a corner, or the wall to move it. Double-click a wall to add a corner, a corner to remove it, a door or window to open it.</p>}
+          ) : <p class="hint">Select a wall to edit its corners or height.</p>}
         </div>
       )}
+      {client.drawingsSorted().some(s => s.hz != null && !s.dt && !s.dl) && <span class="terrain-key"><i />Terrain wall <i />Stairs</span>}
       <div class="ht-card">
         <button type="button" class="fold-head" aria-expanded={d.wallMapOpen} onClick={() => ui.set({ wallMapOpen: !d.wallMapOpen })}>
           <span class="fold-caret" aria-hidden="true">{d.wallMapOpen ? '▾' : '▸'}</span>
@@ -412,7 +400,8 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
         </button>
         {d.wallMapOpen && (
           <>
-            <Toggle checked={!!meta?.wallStop} onChange={(v) => void client.updateScene({ wallStop: v })} label="Walls stop the players' tokens" hint="Off: walls only block sight and spells." />
+            <NumField label="Terrain wall threshold" value={meta?.cliff ?? 10} min={0} max={1000} step={5} unit="ft" title="At 10 ft, rising more than 10 ft within 10 horizontal feet creates a climbable wall. Zero turns terrain walls off." onCommit={value => void client.updateScene({ cliff: Math.max(0,Math.round(value)) })} />
+            <Toggle checked={!!meta?.wallStop} onChange={(v) => void client.updateScene({ wallStop: v })} label="Apply walls to player movement" hint="Full-height walls block. Finite walls cost climbing." />
             <Toggle checked={d.wallIgnore} onChange={(v) => ui.set({ wallIgnore: v })} label="DM can move tokens through walls" hint="Holding Q while you drag does it once." />
             <Toggle checked={d.showWalls} onChange={(v) => ui.set({ showWalls: v })} label="Show walls when this tool is closed" hint="Only on your screen." />
           </>
@@ -422,7 +411,7 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
         )}
       </div>
       <div class="row wrap">
-        <span class="hint">{walls.length ? `${walls.length} wall${walls.length > 1 ? 's' : ''} on this map` : 'No walls yet'}</span>
+        <span class="hint">{walls.length ? `${walls.length} drawn wall${walls.length > 1 ? 's' : ''}` : 'No drawn walls yet'}</span>
         <span class="grow" />
         {walls.length > 0 && <button class="btn small danger" onClick={async () => { await client.removeWalls(walls.map((w) => w.id)); ui.set({ wallSel: new Set() }); toast('Cleared all the walls (Ctrl+Z brings them back)', 'info', 2200); }}>Clear all walls</button>}
       </div>

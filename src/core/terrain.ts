@@ -187,7 +187,7 @@ export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings, layer: '
   painted.sort((a, b) => Math.min(...a.paint.map((s) => s.t)) - Math.min(...b.paint.map((s) => s.t)) || (a.id < b.id ? -1 : 1));
   const areas = [...legacy, ...painted];
   areas.forEach((a, i) => { a.order = i; });
-  return { areas, grid, sig: `${layer}|${grid.shape}|${grid.cell}|${grid.ox}|${grid.oy}#${sigParts.join(';')}` };
+  return { areas, grid, sig: `${layer}|${grid.shape}|${grid.ft}|${grid.cell}|${grid.ox}|${grid.oy}#${sigParts.join(';')}` };
 }
 
 /** The box around everything painted (null when nothing is). */

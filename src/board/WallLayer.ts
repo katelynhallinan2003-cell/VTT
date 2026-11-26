@@ -1,6 +1,7 @@
 import { Container, Graphics } from 'pixi.js';
 import { hatchTicks, wallLength, wallMid, type Wall, type WallKind } from '../core/walls';
 import type { Vec } from '../types';
+import type { TerrainEdge } from '../core/terrainEdges';
 
 const COLOR: Record<WallKind, number> = { wall: 0xffd27a, door: 0xe8873a, window: 0x7fd8ff };
 const SELECT = 0x4da3ff;
@@ -45,20 +46,24 @@ export class WallLayer {
 
   clear() { this.g.clear(); this.key = ''; }
 
-  sync(walls: Wall[], o: WallDrawOpts, rev: number | string, show: boolean) {
+  sync(walls: Wall[], o: WallDrawOpts, rev: number | string, show: boolean, terrain: TerrainEdge[] = []) {
     this.container.visible = show;
     if (!show) return;
     const key = `${rev}|${o.z.toFixed(3)}|${o.cell}|${o.showAll ? 1 : 0}|${o.handles ? 1 : 0}|${[...o.selected].sort().join(',')}|${o.hover ?? ''}`;
     if (key === this.key) return;
     this.key = key;
-    this.build(walls, o);
+    this.build(walls, o, terrain);
   }
 
-  private build(walls: Wall[], o: WallDrawOpts) {
+  private build(walls: Wall[], o: WallDrawOpts, terrain: TerrainEdge[]) {
     const g = this.g;
     g.clear();
     const px = 1 / o.z;
     const w = Math.max(2.5 * px, o.cell * 0.05);
+    for (const stair of [true,false]) {
+      for (const edge of terrain) if (edge.stair === stair) g.moveTo(edge.a.x,edge.a.y).lineTo(edge.b.x,edge.b.y);
+      g.stroke({ width: stair ? 1.5*px : w, color: stair ? 0x83d7cb : COLOR.wall, alpha: stair ? 0.75 : 0.92 });
+    }
     const list = o.showAll ? walls : walls.filter((x) => x.vis);
     // under-strokes first so crossing walls do not cut each other
     for (const s of list) {

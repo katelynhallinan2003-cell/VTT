@@ -98,11 +98,11 @@ check('a wider ramp, going down, fills the width', col[0] === col[1] && col[1] =
 await dm.evaluate(() => window.__vtt.client.updateScene({ grid: { rule: 'alt' } }));
 await sleep(300);
 const stairs = await dm.evaluate(() => { const g = window.__vtt.client.grid; const p = (i) => ({ x: g.ox + (i + 0.5) * g.cell, y: g.oy + 9.5 * g.cell }); return window.__vtt.board.moveCost([p(7), p(12)], false); });
-check('four 5 ft stairs report their rise once and follow the diagonal rule', stairs.note === '20 ft of stairs' && stairs.ft === 35, JSON.stringify(stairs));
+check('four 5 ft stairs appear in one total and follow the diagonal rule', stairs.note === '' && stairs.ft === 35, JSON.stringify(stairs));
 await dm.evaluate(() => window.__vtt.client.updateScene({ grid: { rule: 'chebyshev' } }));
 await sleep(300);
 const st2 = await dm.evaluate(() => { const g = window.__vtt.client.grid; const p = (i) => ({ x: g.ox + (i + 0.5) * g.cell, y: g.oy + 9.5 * g.cell }); return window.__vtt.board.moveCost([p(7), p(12)], false); });
-check('on the 5-5-5 rule stairs still show their rise and cost nothing extra', st2.note === '20 ft of stairs' && st2.ft === 25, JSON.stringify(st2));
+check('on the 5-5-5 rule stairs use one movement total', st2.note === '' && st2.ft === 25, JSON.stringify(st2));
 const gradeAndWall = await dm.evaluate(async ({ from, to, id }) => {
   const { client, board } = window.__vtt;
   await board.chooseGridOverlay('none');
@@ -119,8 +119,8 @@ const gradeAndWall = await dm.evaluate(async ({ from, to, id }) => {
   await board.chooseGridOverlay('square');
   return { slope, cost, open, blocked, fliesOver };
 }, { from: C(8, 9), to: C(9, 9), id: tok });
-check('a 5 ft rise has a halfway elevation and one diagonal distance', gradeAndWall.slope[0] === 0 && Math.abs(gradeAndWall.slope[1] - 2.5) <= 0.1 && gradeAndWall.slope[2] === 5 && gradeAndWall.cost.note === '5 ft of stairs' && gradeAndWall.cost.ft === 7.1, JSON.stringify(gradeAndWall));
-check('an authored 5 ft wall on the slope blocks walkers and clears high flyers', gradeAndWall.open && gradeAndWall.blocked && gradeAndWall.fliesOver, JSON.stringify(gradeAndWall));
+check('a 5 ft rise has a halfway elevation and one diagonal distance', gradeAndWall.slope[0] === 0 && Math.abs(gradeAndWall.slope[1] - 2.5) <= 0.1 && gradeAndWall.slope[2] === 5 && gradeAndWall.cost.note === '' && gradeAndWall.cost.ft === 7.1, JSON.stringify(gradeAndWall));
+check('an authored 5 ft wall on the slope is climbable and clears high flyers', gradeAndWall.open && !gradeAndWall.blocked && gradeAndWall.fliesOver, JSON.stringify(gradeAndWall));
 await dm.evaluate(() => window.__vtt.client.updateScene({ grid: { rule: 'alt' } }));
 
 // ---- cliffs
@@ -134,8 +134,8 @@ await sleep(600);
 const nSeg = await dm.evaluate(() => window.__vtt.board.wallSegs().sight.length);
 check('the edge of the plateau is a cliff (a wall piece for every square along it)', nSeg >= 12, `${nSeg}`);
 const mv = (from, to) => dm.evaluate(([f, t]) => window.__vtt.board.moveAllowed(f, t), [from, to]);
-check('walking from the low ground into the cliff is stopped', (await mv(C(15, 4), C(16, 4))) === false);
-check('and so is anything coming from the side', (await mv(C(17, 2), C(17, 3))) === false);
+check('the plateau can be climbed', (await mv(C(15, 4), C(16, 4))) === true);
+check('including from the side', (await mv(C(17, 2), C(17, 3))) === true);
 check('walking off the top is not stopped (it is a fall)', (await mv(C(16, 4), C(15, 4))) === true);
 check('walking about on top is fine', (await mv(C(16, 4), C(17, 4))) === true);
 await dm.evaluate(() => window.__vtt.client.updateScene({ cliff: 40 }));
@@ -143,11 +143,12 @@ await sleep(500);
 check('with cliffs set above the drop, there is no wall', (await dm.evaluate(() => window.__vtt.board.wallSegs().sight.length)) === 0 && (await mv(C(15, 4), C(16, 4))) === true);
 await dm.evaluate(() => window.__vtt.client.updateScene({ cliff: 10 }));
 await sleep(500);
-check('and it is back at 10 ft', (await dm.evaluate(() => window.__vtt.board.wallSegs().sight.length)) >= 12 && !(await mv(C(15, 4), C(16, 4))));
+check('and it is back at 10 ft', (await dm.evaluate(() => window.__vtt.board.wallSegs().sight.length)) >= 12 && (await mv(C(15, 4), C(16, 4))));
 await dm.keyboard.press('Escape');
-await dm.keyboard.press('h');
-await sleep(300);
-check('the Steepest climb (cliff) setting is in the Heights panel', (await dm.locator('.flyout', { hasText: 'Steepest climb' }).count()) === 1);
+await dm.keyboard.press('b');
+await dm.getByRole('button', {name:'On this map'}).click();
+check('the terrain wall threshold is a map setting', await dm.getByText('Terrain wall threshold', {exact:true}).isVisible());
+await dm.screenshot({path:'/tmp/shots/z3-walls-menu.png'});
 
 // Six staggered, additive round brushes. The entire hill fits between grid centres.
 await dm.keyboard.press('Escape');
@@ -165,23 +166,19 @@ const stack = await dm.evaluate(async id => {
   return { base, top, edge: x - g.cell / 2 };
 }, tok);
 await dm.waitForFunction(({top}) => window.__vtt.board.groundAtPoint(top) === 30, stack);
+await dm.waitForFunction(({id,base}) => {
+  const p = window.__vtt.board.views.get(id)?.display;
+  return p && Math.hypot(p.x-base.x,p.y-base.y) < 1;
+}, {id:tok,base:stack.base});
 await dragTo(stack.base, stack.top);
 const position = () => dm.evaluate(id => { const { x, y } = window.__vtt.client.scene.tokens.get(id); return { x, y }; }, tok);
-const atFoot = p => Math.hypot(p.x - stack.edge - cell / 2, p.y - stack.base.y) > cell / 2 && Math.abs(p.x - stack.edge) < 3;
-const stopped = await position();
-check('a drag stops at the foot of a 30 ft brush stack', atFoot(stopped), JSON.stringify({stopped, ...stack}));
-const edgeScreen = await screen(stopped), summit = await screen(stack.top);
-await dm.mouse.move(edgeScreen.x, edgeScreen.y);
-await dm.mouse.down();
-await dm.mouse.move(summit.x, summit.y, { steps: Math.ceil(summit.x - edgeScreen.x) });
-await dm.mouse.up();
-await sleep(300);
-const retried = await position();
-check('a second slow drag cannot creep through the face', atFoot(retried), JSON.stringify(retried));
-await dm.keyboard.down('q');
-await dragTo(retried, stack.top);
-await dm.keyboard.up('q');
-check('holding Q teleports the same walker onto the plateau', near(await dm.evaluate(id => window.__vtt.client.scene.tokens.get(id), tok), stack.top));
+check('a walker can reach the summit', near(await position(), stack.top));
+const stackCost = await dm.evaluate(({base,top}) => {
+  const b = window.__vtt.board;
+  return [b.moveCost([base,top],false), b.moveCost([top,base],false)];
+}, stack);
+check('the stacked brush face charges thirty feet of climbing in both directions',
+  stackCost.every(c => c.note.endsWith('30 ft climbing')), JSON.stringify(stackCost));
 
 console.log(errors.length ? errors.join('\n') : 'no console problems');
 await browser.close();

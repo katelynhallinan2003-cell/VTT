@@ -2,6 +2,7 @@
 import { launch, watch, sleep } from './lib.mjs';
 import { mkdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+const python = process.platform === 'win32' ? 'python' : 'python3';
 const BASE = (process.env.BASE || 'http://127.0.0.1:4174/') + '?demo';
 const errors = [];
 const results = [];
@@ -167,7 +168,7 @@ for x, y in json.loads(sys.argv[2]):
             best[0] = max(best[0], r - max(g, b)); best[1] = max(best[1], g - max(r, b))
     out.append(best)
 print(json.dumps(out))`;
-    return JSON.parse(execFileSync('python3', ['-c', code, '/tmp/shots/z18-px.png', JSON.stringify(sp.map((q) => [q.x, q.y]))]).toString());
+    return JSON.parse(execFileSync(python, ['-c', code, '/tmp/shots/z18-px.png', JSON.stringify(sp.map((q) => [q.x, q.y]))]).toString());
   });
 };
 const colourAt = async (wx, wy) => {
@@ -178,7 +179,7 @@ import sys
 from PIL import Image
 im = Image.open(sys.argv[1]).convert('RGB')
 print(','.join(str(v) for v in im.getpixel((int(round(float(sys.argv[2]))), int(round(float(sys.argv[3])))))))`;
-  return execFileSync('python3', ['-c', code, '/tmp/shots/z18-px2.png', String(sp.x), String(sp.y)]).toString().trim().split(',').map(Number);
+  return execFileSync(python, ['-c', code, '/tmp/shots/z18-px2.png', String(sp.x), String(sp.y)]).toString().trim().split(',').map(Number);
 };
 // the scene's red lines run across the added grid too (it has nothing of its own yet), on its own spots 70 px apart
 const sceneLineX = m.x + 70, ownLineX = m.x + 50, ly = m.y + 105;

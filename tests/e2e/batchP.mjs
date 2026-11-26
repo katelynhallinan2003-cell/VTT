@@ -187,10 +187,10 @@ check('and still move the other way', near(t.y, gy(11.5), 2), JSON.stringify(t))
 await dm.keyboard.press('b');
 await dm.locator('.flyout-title', { hasText: /^Walls$/ }).waitFor();
 const fold = dm.locator('.flyout .fold-head', { hasText: 'On this map' });
-check('the "On this map" switches start folded away', (await fold.getAttribute('aria-expanded')) === 'false' && (await dm.locator('.flyout label', { hasText: "Walls stop the players' tokens" }).count()) === 0);
+check('the "On this map" switches start folded away', (await fold.getAttribute('aria-expanded')) === 'false' && (await dm.locator('.flyout label', { hasText: "Apply walls to player movement" }).count()) === 0);
 await fold.click();
 check('and unfold with one click', (await fold.getAttribute('aria-expanded')) === 'true');
-const stop = dm.locator('.flyout label', { hasText: "Walls stop the players' tokens" }).locator('input');
+const stop = dm.locator('.flyout label', { hasText: "Apply walls to player movement" }).locator('input');
 check('walls stop the players by default', await stop.isChecked());
 await stop.uncheck();
 await sleep(300);
@@ -263,11 +263,11 @@ check('and one Ctrl+Z takes the whole room back', (await walls()).length === bef
 await dm.locator('.flyout .seg button', { hasText: /^Lines$/ }).click();
 
 // ---- snapping
-await dm.locator('.flyout .seg button', { hasText: /^Halves too/ }).click();
+await dm.locator('.flyout .seg button', { hasText: /^Halves/ }).click();
 await drag([gx(17.45), gy(10.55)], [gx(19.45), gy(10.55)]);
 let last = (await walls()).at(-1);
 const half = (v, o) => near(((v - o) / (cell / 2)) % 1 + 1, 1, 0.01) || near(((v - o) / (cell / 2)) % 1, 0, 0.01);
-check('Halves too snaps a wall end to the middle of a side', !!last && half(last.a.x, grid.ox) && half(last.a.y, grid.oy), JSON.stringify(last));
+check('Halves snaps a wall end to the middle of a side', !!last && half(last.a.x, grid.ox) && half(last.a.y, grid.oy), JSON.stringify(last));
 await dm.keyboard.press('Control+z');
 await sleep(300);
 await dm.locator('.flyout .seg button', { hasText: /^Free$/ }).click();
@@ -276,7 +276,7 @@ last = (await walls()).at(-1);
 check('Free leaves it exactly where you put it', !!last && near(last.a.x, gx(17.31), 2.5) && near(last.a.y, gy(10.27), 2.5), JSON.stringify(last));
 await dm.keyboard.press('Control+z');
 await sleep(300);
-await dm.locator('.flyout .seg button', { hasText: /^Halves too/ }).click();
+await dm.locator('.flyout .seg button', { hasText: /^Halves/ }).click();
 
 // ---- clear all, and bring them back
 const clear = dm.locator('.flyout button', { hasText: /^Clear all walls$/ });

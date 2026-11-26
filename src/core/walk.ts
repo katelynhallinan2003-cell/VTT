@@ -25,6 +25,7 @@ export interface WalkCtx {
   rough: (p: Vec) => boolean;
   /** Continuous elevation along a freehand route. */
   surface?: (p: Vec) => number;
+  stairAt?: (from: Vec, to: Vec) => boolean;
 }
 
 export interface WalkExtra {
@@ -76,7 +77,7 @@ export function walkExtra(grid: GridSettings, a: Vec, b: Vec, ctx: WalkCtx, prev
     if (free) {
       if (ctx.rough({ x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 })) ex.rough += run / grid.ft;
     } else if (ctx.rough(q)) ex.rough++;
-    if (Math.abs(jump) > STAIR_FT) {
+    if (jump && (ctx.stairAt ? !ctx.stairAt(p,q) : Math.abs(jump) > STAIR_FT)) {
       ex.ledges.push(jump);
     } else {
       const rise = Math.abs(z - prevSurface);

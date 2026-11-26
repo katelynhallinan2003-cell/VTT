@@ -127,7 +127,7 @@ export function DetectWallsModal(props: { client: TableClient; board: Board | nu
       )}>
       {error ? <p class="muted">{error}</p> : (
         <>
-          <p class="hint">Click a piece of wall on the picture. Everything about that colour becomes a wall. Doors, windows and cliff edges you set yourself afterwards.</p>
+          <p class="hint">Click a wall colour to preview matching walls.</p>
           <div class="dw-view"><div class="dw-stage">
             <canvas ref={canvas} class="dw-canvas" onClick={(e) => pick(e as unknown as MouseEvent)} title="Click a bit of wall" />
             {loaded && (
@@ -149,8 +149,8 @@ export function DetectWallsModal(props: { client: TableClient; board: Board | nu
                 <button class={mode === 'edges' ? 'on' : ''} title="The colour fills the rock round the rooms: the walls run along its edge" onClick={() => setMode('edges')}>Solid areas</button>
               </div>
             </div>
-            {!clear && <p class="hint warn">This colour is spread all over the picture (texture, shadow, grass), not one flat colour, so what is found here is a guess. Click a flat colour on the wall or rock itself, or draw the walls by hand.</p>}
-            <SliderField label="How close the colour must be" value={sens} min={2} max={60} onInput={setSens} hint="Up: catches fainter wall. Down: only the exact colour." />
+            {!clear && <p class="hint warn">This colour also appears in the terrain. Pick a more distinct wall colour.</p>}
+            <SliderField label="Colour tolerance" value={sens} min={2} max={60} onInput={setSens} hint="Higher includes more shades." />
             <SliderField label="Ignore pieces shorter than" value={minSq} min={0.25} max={3} step={0.25} unit="squares" onInput={setMinSq} />
             <Toggle checked={skipGrid} onChange={setSkipGrid} label="Ignore thin lines (a printed grid)" />
             <Toggle checked={snap} onChange={setSnap} label="Snap ends to grid corners" hint="Where one is close. Leave off on maps with no grid." />

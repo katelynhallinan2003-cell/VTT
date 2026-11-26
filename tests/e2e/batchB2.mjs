@@ -211,6 +211,7 @@ check('M turns on test move', (await dm.locator('.testbar').count()) === 1);
 await drag(dm, { x: p0.x, y: p0.y }, { x: p0.x + 5 * cell, y: p0.y }, 8);
 const p1 = await tokPos();
 check('the token shows at the test spot but has not really moved', Math.abs(p1.dx - (p0.x + 5 * cell)) < 2 && p1.x === p0.x, `real ${p1.x}, shown ${Math.round(p1.dx)}`);
+await dm.waitForFunction(() => window.__vtt.board.ghostViews.size === 1);
 check('a shadow stays where it was', (await dm.evaluate(() => window.__vtt.board.ghostViews.size)) === 1);
 check('the bar counts it', (await dm.locator('.testbar', { hasText: '1 moved' }).count()) === 1);
 check('other players see nothing by default', (await pl.evaluate(() => [...window.__vtt.client.scene.live.values()].filter((l) => Object.keys(l.ghosts).length).length)) === 0);
@@ -221,7 +222,8 @@ check('turning on "show others" sends the ghost', (await pl.evaluate(() => [...w
 check('the player draws a ghost of it', (await pl.evaluate(() => window.__vtt.board.ghostViews.size)) === 1);
 await pl.screenshot({ path: '/tmp/shots/65-player-sees-ghost.png' });
 await dm.locator('.testbar button', { hasText: 'Reset' }).click();
-await sleep(500);
+await dm.waitForFunction(({id,x}) => Math.abs(window.__vtt.board.views.get(id).display.x-x) < 2, {id:tok,x:p0.x});
+await pl.waitForFunction(() => window.__vtt.board.ghostViews.size === 0);
 const p2 = await tokPos();
 check('Reset puts the token back', Math.abs(p2.dx - p0.x) < 2 && p2.x === p0.x);
 check('and the player no longer sees a ghost', (await pl.evaluate(() => window.__vtt.board.ghostViews.size)) === 0);

@@ -70,7 +70,7 @@ export function distanceFt(grid: GridSettings, a: Vec, b: Vec, rule: DistanceRul
  * along the whole path (not once per leg), so a path of two diagonal legs costs what one long diagonal does.
  * `rise[i]` is how much higher point i+1 is than point i (a leg that climbs or falls is measured with the height, and does not carry).
  */
-export function pathFt(grid: GridSettings, pts: Vec[], rise: number[] = []): number {
+export function pathFt(grid: GridSettings, pts: Vec[], rise: number[] = [], totals?: number[]): number {
   let total = 0;
   let diag = 0; // diagonal steps taken so far
   for (let i = 1; i < pts.length; i++) {
@@ -84,6 +84,7 @@ export function pathFt(grid: GridSettings, pts: Vec[], rise: number[] = []): num
       total += (hi + Math.floor((diag + lo) / 2) - Math.floor(diag / 2)) * grid.ft;
       diag += lo;
     } else total += distanceFt(grid, a, b, grid.rule, dz);
+    totals?.push(Math.round(total * 10) / 10);
   }
   return Math.round(total * 10) / 10;
 }
@@ -91,7 +92,7 @@ export function pathFt(grid: GridSettings, pts: Vec[], rise: number[] = []): num
 /** The distance so far at every corner after the first: entry `i` is the length of the path from the start to point `i + 1`. */
 export function cornerTotals(grid: GridSettings, pts: Vec[], rise: number[] = []): number[] {
   const out: number[] = [];
-  for (let i = 1; i < pts.length; i++) out.push(pathFt(grid, pts.slice(0, i + 1), rise.slice(0, i)));
+  pathFt(grid, pts, rise, out);
   return out;
 }
 

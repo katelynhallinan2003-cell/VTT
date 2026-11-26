@@ -288,7 +288,7 @@ export interface LivePlot {
   /** `via` are the corners between a and b of a ruler that has several legs */
   ruler: { a: Vec; b: Vec; c?: string; via?: Vec[] } | null;
   /** token id -> where they are trying that token out (`via`: the points it went through on the way, for a move in several steps) */
-  ghosts: Record<string, Vec & { via?: Vec[] }>;
+  ghosts: Record<string, Vec & { via?: Vec[]; stops?: number[] }>;
 }
 
 /** One line of the initiative order. */

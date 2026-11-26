@@ -2,7 +2,7 @@ import type { Backend, Unsub } from '../backend/types';
 import { SERVER_TS } from '../backend/types';
 import {
   drawingToWire, handoutToWire, initPubToWire, initToWire, normalizeDrawing, normalizeFogOp, normalizeHandout, normalizeInit, normalizeInitPub, normalizeLive, normalizeMeta, tokenCoordinate,
-  normalizeLibraryItem, normalizePlayer, normalizeSceneMeta, normalizeSettings, normalizeToken, stripUndefined, tokenToWire, viaToWire, DEFAULT_GRID, DEFAULT_BG, DM_COLOR, MAX_EXTRA_MAPS, mapsToWire,
+  normalizeLibraryItem, normalizePlayer, normalizeSceneMeta, normalizeSettings, normalizeToken, stripUndefined, tokenToWire, viaToWire, MAX_ROUTE_CORNERS, DEFAULT_GRID, DEFAULT_BG, DM_COLOR, MAX_EXTRA_MAPS, mapsToWire,
 } from '../core/model';
 import { gridAtPoint, mapCell, ownGrids, type MapGrid } from '../core/mapgrids';
 import { BLANK_BG, BLANK_COLS, BLANK_MAP, BLANK_ROWS, blankSpot, clampSquares, isBlankMap, isBlankPage } from '../core/blankgrid';
@@ -1107,13 +1107,13 @@ export class TableClient {
   }
 
   // ---------------------------------------------------------------- live plotting (ruler, test moves)
-  private liveMine: { ruler: { a: Vec; b: Vec; c?: string; via?: Vec[] } | null; ghosts: Record<string, Vec & { via?: Vec[] }> } = { ruler: null, ghosts: {} };
+  private liveMine: { ruler: { a: Vec; b: Vec; c?: string; via?: Vec[] } | null; ghosts: Record<string, Vec & { via?: Vec[]; stops?: number[] }> } = { ruler: null, ghosts: {} };
   private liveSid: string | null = null;
   private liveArmed = false;
   private pushLive = throttle(() => { void this.writeLive(); }, 90);
 
   /** Share (or stop sharing) what you are plotting. Pass only the parts that changed. */
-  setLive(patch: { ruler?: { a: Vec; b: Vec; c?: string; via?: Vec[] } | null; ghosts?: Record<string, Vec & { via?: Vec[] }> }) {
+  setLive(patch: { ruler?: { a: Vec; b: Vec; c?: string; via?: Vec[] } | null; ghosts?: Record<string, Vec & { via?: Vec[]; stops?: number[] }> }) {
     if (!this.viewSceneId) return;
     if (patch.ruler !== undefined) this.liveMine.ruler = patch.ruler;
     if (patch.ghosts !== undefined) this.liveMine.ghosts = patch.ghosts;
@@ -1126,7 +1126,7 @@ export class TableClient {
     if (!sid) return;
     const path = P.sceneLiveOf(this.tableId, sid, this.uid);
     const { ruler, ghosts } = this.liveMine;
-    const gh = Object.fromEntries(Object.entries(ghosts).map(([id, v]) => [id, { x: Math.round(v.x * 10) / 10, y: Math.round(v.y * 10) / 10, w: viaToWire(v.via) }]));
+    const gh = Object.fromEntries(Object.entries(ghosts).map(([id, v]) => [id, { x: Math.round(v.x * 10) / 10, y: Math.round(v.y * 10) / 10, w: viaToWire(v.via, MAX_ROUTE_CORNERS), s: v.via?.length ? v.stops?.join(',') : undefined }]));
     try {
       if (!ruler && !Object.keys(gh).length) { await this.backend.remove(path); return; }
       if (!this.liveArmed) { this.backend.onDisconnectSet(path, null); this.liveArmed = true; }

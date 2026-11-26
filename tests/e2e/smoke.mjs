@@ -143,7 +143,8 @@ await dm.evaluate(() => window.__vtt.client.updateScene({ grid: { cell: 70, ox: 
 const g = await dm.evaluate(() => { const geo = null; return window.__vtt.client.scene.meta.grid; });
 check('grid settings persisted', g.cell === 70);
 
-console.log('\nconsole problems:\n' + (errors.length ? errors.join('\n') : '(none)'));
+const problems = errors.filter(e => !e.includes('GPU stall due to ReadPixels'));
+console.log('\nconsole problems:\n' + (problems.length ? problems.join('\n') : '(none)'));
 await browser.close();
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed}/${results.length} checks passed`);

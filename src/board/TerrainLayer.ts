@@ -2,7 +2,7 @@ import { Container, Sprite, Text, type Texture } from 'pixi.js';
 import { cellPoly } from '../core/cells';
 import { areaLabelAt, heightColor, type Terrain } from '../core/terrain';
 import { terrainLabelBoxes } from '../core/terrainLabels';
-import { STAIR_FT, groundAt } from '../core/height';
+import { groundAt } from '../core/height';
 import type { Rect } from '../types';
 import { canvasTexture } from './textures';
 
@@ -101,7 +101,15 @@ export class TerrainLayer {
       mctx.fillStyle = mctx.strokeStyle = '#fff';
       for (const st of a.strokes) {
         mctx.globalCompositeOperation = st.erase ? 'destination-out' : 'source-over';
-        if (st.kind === 'rect') mctx.fillRect(st.b.x, st.b.y, st.b.w, st.b.h);
+        if (st.kind === 'polygon') {
+          mctx.beginPath();
+          for (const ring of st.rings!) {
+            mctx.moveTo(ring[0].x, ring[0].y);
+            for (const p of ring.slice(1)) mctx.lineTo(p.x,p.y);
+            mctx.closePath();
+          }
+          mctx.fill('evenodd');
+        } else if (st.kind === 'rect') mctx.fillRect(st.b.x, st.b.y, st.b.w, st.b.h);
         else if (st.kind === 'ellipse') { mctx.beginPath(); mctx.ellipse(st.b.x + st.b.w / 2, st.b.y + st.b.h / 2, Math.max(0.5, st.b.w / 2), Math.max(0.5, st.b.h / 2), 0, 0, Math.PI * 2); mctx.fill(); }
         else if (st.kind === 'cells') {
           mctx.beginPath();
@@ -127,7 +135,7 @@ export class TerrainLayer {
     }
 
     // soft shading: compare each pixel with the ground around it
-    const R = Math.max(1, Math.min(MAX_SIDE / 2, Math.round(s * grid.cell * STAIR_FT / grid.ft / 4)));
+    const R = Math.max(1, Math.min(MAX_SIDE / 2, Math.round(s * grid.cell / 4)));
     const around = blur(hgt, W, H, R);
     // a faint contour wherever the height changes, softened by a small blur
     const rad = Math.max(1, Math.round(s * Math.max(0.5, grid.cell * 0.01)));
@@ -137,7 +145,7 @@ export class TerrainLayer {
         const i = y * W + x;
         if (!cov[i]) continue;
         const l = i - rad, r = i + rad, u = i - rad * W, d = i + rad * W;
-        if (Math.max(Math.abs(hgt[l] - hgt[i]), Math.abs(hgt[r] - hgt[i]), Math.abs(hgt[u] - hgt[i]), Math.abs(hgt[d] - hgt[i])) > STAIR_FT) edge[i] = 1;
+        if (Math.max(Math.abs(hgt[l] - hgt[i]), Math.abs(hgt[r] - hgt[i]), Math.abs(hgt[u] - hgt[i]), Math.abs(hgt[d] - hgt[i])) > 0) edge[i] = 1;
       }
     }
     const line = blur(edge, W, H, 1);

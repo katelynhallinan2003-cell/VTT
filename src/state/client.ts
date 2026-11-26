@@ -22,6 +22,8 @@ import type {
   Drawing, Effect, ExtraMap, FogMode, FogOp, InitEntry, InitPub, InitState, LivePlot, GridSettings, Permissions, PermPreset, Ping, Player, Role, SceneFolder, SceneIndexEntry,
   Handout, Rect, SceneMeta, TableMeta, TableSettings, Token, Vec, ViewCall,
 } from '../types';
+import { newAreaId } from '../core/terrain';
+import { patchStroke, type HeightPatch } from '../core/terrainEdges';
 import { altitudeOf, groundAt, zonesOf } from '../core/height';
 import { isLightMark, litSeen, lightOf, viewerOf, type LightSrc } from '../core/light';
 import { carveWalls, joinAt, normalizeWall, routeReveal, sightSegs, splitPieces, wallMid, wallToWire, type Wall } from '../core/walls';
@@ -1055,6 +1057,29 @@ export class TableClient {
     if (!snaps.length) return;
     await this.deleteDrawingsRaw(snaps.map((d) => d.id));
     this.history.push({ label: snaps.length > 1 ? `${label}s` : label, undo: () => this.restoreDrawings(snaps), redo: () => this.deleteDrawingsRaw(snaps.map((d) => d.id)) });
+  }
+
+  /** Apply one edit to the selected finished surfaces. Partial strokes are cut only
+   * inside the selected contour. The cuts and replacement belong to one undo step. */
+  async editHeightPatches(patches: HeightPatch[], edit: { height: number } | { delta: Vec } | 'delete'): Promise<string[]> {
+    if (!this.isDM || !patches.length) return [];
+    const current = zonesOf(this.scene?.draws.values() ?? [],this.grid);
+    if (patches.some(p => p.sig !== current.sig)) return [];
+    const ids = [...new Set(patches.flatMap(p => p.ids))];
+    if (patches.every(p => p.whole)) {
+      if (edit === 'delete') { await this.removeDrawings(ids,'Delete ground'); return []; }
+      if ('delta' in edit) await this.moveDrawings(ids,edit.delta.x,edit.delta.y);
+      else await this.updateDrawings(ids.filter(id => !this.scene?.draws.get(id)?.he),{hz:edit.height},'Change ground');
+      return ids;
+    }
+    const strokes = patches.flatMap(p => p.cuts.flatMap(cut => cut.shape.map(poly => patchStroke(poly,cut.group,null))));
+    const cutCount = strokes.length;
+    if (edit !== 'delete') for (const p of patches) {
+      const delta = 'delta' in edit ? edit.delta : {x:0,y:0};
+      strokes.push(patchStroke(p.polygon,newAreaId(),'height' in edit ? edit.height : p.height,delta.x,delta.y));
+    }
+    const written = await this.addDrawings(strokes,edit === 'delete' ? 'Delete ground' : 'height' in edit ? 'Change ground' : 'Move ground');
+    return written.slice(cutCount);
   }
 
   /** Change the height (and whether it adds to the ground below) of a painted area: all of its strokes together. */

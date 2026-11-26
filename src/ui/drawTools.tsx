@@ -172,16 +172,19 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
   const one = mine.length === 1 ? mine[0] : null;
   const editing = mine.length > 0;
   // the number box shows the selected area (and edits it), or else what the next area will be
-  const shownH = editing ? mine[0].h : d.heightFt;
-  const shownAdd = editing ? paintable.length > 0 && paintable[0].add : d.heightAdds;
+  const picks = d.heightPatches;
+  const shownH = picks?.[0].height ?? (editing ? mine[0].h : d.heightFt);
+  const shownAdd = picks ? false : editing ? paintable.length > 0 && paintable[0].add : d.heightAdds;
   const setH = (h: number) => {
     const n = Math.max(-1000, Math.min(5000, Math.round(h)));
     ui.set({ heightFt: n });
-    for (const a of mine) void client.setArea(a, { hz: n });
+    if (picks) void client.editHeightPatches(picks,{height:n}).then(ids => { if (ui.data.heightPatches === picks) ui.selectDrawings(ids); });
+    else for (const a of mine) void client.setArea(a, { hz: n });
   };
   const setAdds = (v: boolean) => {
     ui.set({ heightAdds: v });
-    if (v && mode === 'paint') {
+    if (picks && !v) return;
+    if (picks || (v && mode === 'paint')) {
       ui.selectDrawings([]);
       return;
     }
@@ -229,13 +232,13 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
           <NumField label="End" value={d.rampTo} min={-1000} max={5000} step={5} unit="ft" title="How high the ground is where you let go" onCommit={(v) => ui.set({ rampTo: Math.round(v) })} />
           <div class="row wrap">
             <button class="btn small" onClick={() => ui.set({ rampFrom: d.rampTo, rampTo: d.rampFrom })}>Swap</button>
-            <span class="hint">Drag from the start to the end. The ground climbs in 5 ft steps a token can walk up.</span>
+            <span class="hint">Drag to paint successive flat levels in 5 ft steps.</span>
           </div>
         </div>
       )}
       {!rough && mode !== 'ramp' && <div class="ht-card">
         <div class="row">
-          <strong>{editing ? (one ? 'Selected ground' : `${mine.length} areas selected`) : 'Next ground you paint'}</strong>
+          <strong>{picks ? (picks.length === 1 ? 'Selected ground' : `${picks.length} areas selected`) : editing ? (one ? 'Selected ground' : `${mine.length} areas selected`) : 'Next ground you paint'}</strong>
           <span class="grow" />
           {editing && <button class="btn small" title="Let go of this ground so the next stroke starts a new one (Esc)" onClick={() => ui.selectDrawings([])}>New area</button>}
         </div>
@@ -251,14 +254,14 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
         </div>
         {editing ? (
           <div class="row wrap">
-            {paintable.length > 1 && <button class="btn small" title="Make these one area" onClick={() => void client.mergeAreas(paintable)}>Merge</button>}
-            <button class="btn small danger" onClick={() => { void client.removeDrawings(mine.flatMap((a) => a.ids), 'Delete ground'); ui.selectDrawings([]); }}>Delete {one ? 'area' : 'areas'}</button>
+            {(!picks || picks.every(p => p.whole)) && paintable.length > 1 && <button class="btn small" title="Make these one area" onClick={() => { ui.selectDrawings(paintable.flatMap(a => a.ids)); void client.mergeAreas(paintable); }}>Merge</button>}
+            <button class="btn small danger" onClick={() => { if (picks) void client.editHeightPatches(picks,'delete'); else void client.removeDrawings(mine.flatMap((a) => a.ids), 'Delete ground'); ui.selectDrawings([]); }}>Delete {one || picks?.length === 1 ? 'area' : 'areas'}</button>
           </div>
         ) : <p class="hint">{shownAdd ? 'Each separate stroke raises or lowers the ground once.' : 'Strokes join into one area until you press New area or Esc.'}</p>}
       </div>}
       {!rough && (
         <p class="hint">
-          {mode === 'paint' && 'Paint or drag across the map. Ctrl-click an area to select it, then paint more onto it or change its height.'}
+          {mode === 'paint' && 'Paint or drag across the map. Ctrl-click to select connected ground at the same height.'}
           {mode === 'erase' && (editing ? 'Erases from the selected area only.' : 'Select an area to erase only that area.')}
           {mode === 'move' && (gridless ? 'Select ground to change its height or drag it.' : `Click an area to select it and change its height. Drag to move it.`)}
         </p>
@@ -392,7 +395,7 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
           ) : <p class="hint">Select a wall to edit its corners or height.</p>}
         </div>
       )}
-      {client.drawingsSorted().some(s => s.hz != null && !s.dt && !s.dl) && <span class="terrain-key"><i />Terrain wall <i />Stairs</span>}
+      {client.drawingsSorted().some(s => s.hz != null && !s.dt && !s.dl) && <span class="terrain-key"><i />Terrain wall</span>}
       <div class="ht-card">
         <button type="button" class="fold-head" aria-expanded={d.wallMapOpen} onClick={() => ui.set({ wallMapOpen: !d.wallMapOpen })}>
           <span class="fold-caret" aria-hidden="true">{d.wallMapOpen ? '▾' : '▸'}</span>
@@ -400,7 +403,6 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
         </button>
         {d.wallMapOpen && (
           <>
-            <NumField label="Terrain wall threshold" value={meta?.cliff ?? 10} min={0} max={1000} step={5} unit="ft" title="At 10 ft, rising more than 10 ft within 10 horizontal feet creates a climbable wall. Zero turns terrain walls off." onCommit={value => void client.updateScene({ cliff: Math.max(0,Math.round(value)) })} />
             <Toggle checked={!!meta?.wallStop} onChange={(v) => void client.updateScene({ wallStop: v })} label="Apply walls to player movement" hint="Full-height walls block. Finite walls cost climbing." />
             <Toggle checked={d.wallIgnore} onChange={(v) => ui.set({ wallIgnore: v })} label="DM can move tokens through walls" hint="Holding Q while you drag does it once." />
             <Toggle checked={d.showWalls} onChange={(v) => ui.set({ showWalls: v })} label="Show walls when this tool is closed" hint="Only on your screen." />

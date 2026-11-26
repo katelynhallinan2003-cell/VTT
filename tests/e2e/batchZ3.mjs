@@ -98,11 +98,11 @@ check('a wider ramp, going down, fills the width', col[0] === col[1] && col[1] =
 await dm.evaluate(() => window.__vtt.client.updateScene({ grid: { rule: 'alt' } }));
 await sleep(300);
 const stairs = await dm.evaluate(() => { const g = window.__vtt.client.grid; const p = (i) => ({ x: g.ox + (i + 0.5) * g.cell, y: g.oy + 9.5 * g.cell }); return window.__vtt.board.moveCost([p(7), p(12)], false); });
-check('four 5 ft stairs appear in one total and follow the diagonal rule', stairs.note === '' && stairs.ft === 35, JSON.stringify(stairs));
+check('four painted rises cost 20 ft of climbing', stairs.note === '25 ft normal + 20 ft climbing' && stairs.ft === 45, JSON.stringify(stairs));
 await dm.evaluate(() => window.__vtt.client.updateScene({ grid: { rule: 'chebyshev' } }));
 await sleep(300);
 const st2 = await dm.evaluate(() => { const g = window.__vtt.client.grid; const p = (i) => ({ x: g.ox + (i + 0.5) * g.cell, y: g.oy + 9.5 * g.cell }); return window.__vtt.board.moveCost([p(7), p(12)], false); });
-check('on the 5-5-5 rule stairs use one movement total', st2.note === '' && st2.ft === 25, JSON.stringify(st2));
+check('the same vertical cost applies on the 5-5-5 rule', st2.note === stairs.note && st2.ft === 45, JSON.stringify(st2));
 const gradeAndWall = await dm.evaluate(async ({ from, to, id }) => {
   const { client, board } = window.__vtt;
   await board.chooseGridOverlay('none');
@@ -119,7 +119,7 @@ const gradeAndWall = await dm.evaluate(async ({ from, to, id }) => {
   await board.chooseGridOverlay('square');
   return { slope, cost, open, blocked, fliesOver };
 }, { from: C(8, 9), to: C(9, 9), id: tok });
-check('a 5 ft rise has a halfway elevation and one diagonal distance', gradeAndWall.slope[0] === 0 && Math.abs(gradeAndWall.slope[1] - 2.5) <= 0.1 && gradeAndWall.slope[2] === 5 && gradeAndWall.cost.note === '' && gradeAndWall.cost.ft === 7.1, JSON.stringify(gradeAndWall));
+check('a 5 ft rise keeps a discrete edge and costs 5 ft of climbing', gradeAndWall.slope[0] === 0 && [0,5].includes(gradeAndWall.slope[1]) && gradeAndWall.slope[2] === 5 && gradeAndWall.cost.note === '5 ft normal + 5 ft climbing' && gradeAndWall.cost.ft === 10, JSON.stringify(gradeAndWall));
 check('an authored 5 ft wall on the slope is climbable and clears high flyers', gradeAndWall.open && !gradeAndWall.blocked && gradeAndWall.fliesOver, JSON.stringify(gradeAndWall));
 await dm.evaluate(() => window.__vtt.client.updateScene({ grid: { rule: 'alt' } }));
 
@@ -140,14 +140,14 @@ check('walking off the top is not stopped (it is a fall)', (await mv(C(16, 4), C
 check('walking about on top is fine', (await mv(C(16, 4), C(17, 4))) === true);
 await dm.evaluate(() => window.__vtt.client.updateScene({ cliff: 40 }));
 await sleep(500);
-check('with cliffs set above the drop, there is no wall', (await dm.evaluate(() => window.__vtt.board.wallSegs().sight.length)) === 0 && (await mv(C(15, 4), C(16, 4))) === true);
+check('an older saved threshold does not change terrain walls', (await dm.evaluate(() => window.__vtt.board.wallSegs().sight.length)) === nSeg && (await mv(C(15, 4), C(16, 4))) === true);
 await dm.evaluate(() => window.__vtt.client.updateScene({ cliff: 10 }));
 await sleep(500);
 check('and it is back at 10 ft', (await dm.evaluate(() => window.__vtt.board.wallSegs().sight.length)) >= 12 && (await mv(C(15, 4), C(16, 4))));
 await dm.keyboard.press('Escape');
 await dm.keyboard.press('b');
 await dm.getByRole('button', {name:'On this map'}).click();
-check('the terrain wall threshold is a map setting', await dm.getByText('Terrain wall threshold', {exact:true}).isVisible());
+check('automatic stair threshold is gone', await dm.getByText('Terrain wall threshold', {exact:true}).count() === 0);
 await dm.screenshot({path:'/tmp/shots/z3-walls-menu.png'});
 
 // Six staggered, additive round brushes. The entire hill fits between grid centres.

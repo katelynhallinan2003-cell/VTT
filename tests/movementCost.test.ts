@@ -12,7 +12,7 @@ const rect = (id: string, left: number, right: number, hz: number): Drawing =>
 function measure(drawings: Drawing[], path: Vec[], flyer: number | null = null) {
   const terrain = terrainOf(drawings,grid);
   const ctx = { ground: (p: Vec) => groundAtTerrain(terrain,p), rough: () => false };
-  return movementCost(grid,path,flyer,ctx,terrainEdges(terrain,10),[]);
+  return movementCost(grid,path,flyer,ctx,terrainEdges(terrain),[]);
 }
 
 describe('movement over terrain', () => {

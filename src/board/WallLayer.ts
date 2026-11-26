@@ -60,10 +60,8 @@ export class WallLayer {
     g.clear();
     const px = 1 / o.z;
     const w = Math.max(2.5 * px, o.cell * 0.05);
-    for (const stair of [true,false]) {
-      for (const edge of terrain) if (edge.stair === stair) g.moveTo(edge.a.x,edge.a.y).lineTo(edge.b.x,edge.b.y);
-      g.stroke({ width: stair ? 1.5*px : w, color: stair ? 0x83d7cb : COLOR.wall, alpha: stair ? 0.75 : 0.92 });
-    }
+    for (const edge of terrain) g.moveTo(edge.a.x,edge.a.y).lineTo(edge.b.x,edge.b.y);
+    g.stroke({ width: w, color: COLOR.wall, alpha: 0.92 });
     const list = o.showAll ? walls : walls.filter((x) => x.vis);
     // under-strokes first so crossing walls do not cut each other
     for (const s of list) {

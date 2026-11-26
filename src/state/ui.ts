@@ -18,6 +18,7 @@ export function terrainBrushMode(u: UiData, gridless: boolean): UiData['heightMo
 }
 
 export interface UiData {
+  heightPatches?: import('../core/terrainEdges').HeightPatch[];
   tool: Tool;
   scaleStart: Vec | null;
   scaleEnd: Vec | null;
@@ -275,6 +276,7 @@ export class UiState {
       if (patch.sharePlot !== undefined) localStorage.setItem('vtt-share-plot', patch.sharePlot ? '1' : '0');
       if (patch.fxJump !== undefined) localStorage.setItem('vtt-fx-jump', patch.fxJump ? '1' : '0');
     } catch { /* ignore */ }
+    if (patch.drawSel && !patch.heightPatches) patch.heightPatches = undefined;
     this.data = { ...this.data, ...patch };
     if (this.queued) return;
     this.queued = true;
@@ -291,7 +293,7 @@ export class UiState {
   selectDrawings(ids: Iterable<string>) {
     const next = new Set(ids);
     const cur = this.data.drawSel;
-    if (next.size === cur.size && [...next].every((i) => cur.has(i))) return;
+    if (!this.data.heightPatches && next.size === cur.size && [...next].every((i) => cur.has(i))) return;
     this.set({ drawSel: next, ...(next.size ? { selection: new Set<string>(), mapSelected: false, extraSel: null } : {}) });
   }
 }

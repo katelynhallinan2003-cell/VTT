@@ -211,3 +211,5 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
 - [x] **#101 Measure the actual route of a test drag** (added 2026-11-26, completed 2026-11-26). Drag previews, dropped previews and shared routes retain the actual turns. A DM teleport reveals fog only at the destination.
 - [x] **#102 Put the terrain wall threshold in map-wide settings** (added 2026-11-26, completed 2026-11-26). The terrain wall threshold now lives under Walls → On this map.
 - [x] **#103 Shorten tool menus and keep labels readable** (added 2026-11-26, completed 2026-11-26). Wall controls wrap at narrow widths, the midpoint option reads Halves, and the drawing and detection hints are shorter.
+- [x] **#104 Remove automatic stairs** (added 2026-11-26, completed 2026-11-26). Every painted elevation change has a wall boundary and counts its vertical distance as climbing.
+- [x] **#105 Select connected elevation** (added 2026-11-26, completed 2026-11-26). Ctrl-click selects one connected patch at its finished elevation across brush groups. Height edits, moves and erasing respect the selected contour.

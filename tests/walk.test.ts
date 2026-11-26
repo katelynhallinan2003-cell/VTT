@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cliffSegs, cellsOnLine, rampCells, walkExtra, walkNote, STAIR_FT } from '../src/core/walk';
-import { sideOf, segsFrom } from '../src/core/walls';
-import { paintedCliffBlocks } from '../src/core/terrainMovement';
+import { cellsOnLine, rampCells, roughDistance } from '../src/core/walk';
 import { roughOf, isRough, zonesOf, groundAt } from '../src/core/height';
 import type { Drawing, GridSettings } from '../src/types';
 
@@ -9,10 +7,6 @@ const grid = (over: Partial<GridSettings> = {}): GridSettings => ({
   shape: 'square', cell: 100, ox: 0, oy: 0, visible: true, color: '#000', opacity: 0.3, ft: 5, rule: 'alt', snap: true, ...over,
 });
 const at = (i: number, j: number) => ({ x: i * 100 + 50, y: j * 100 + 50 });
-/** ground that is `h` ft high in columns i0..i1 (all rows) */
-const flat = (heights: Record<number, number>) => (p: { x: number; y: number }) => heights[Math.floor(p.x / 100)] ?? 0;
-const none = () => false;
-
 describe('cellsOnLine', () => {
   it('lists the squares a straight move passes through, starting with the first', () => {
     const cs = cellsOnLine(grid(), at(0, 0), at(3, 0));
@@ -23,121 +17,12 @@ describe('cellsOnLine', () => {
   });
 });
 
-describe('stairs cost like diagonal steps', () => {
-  const stairs = flat({ 1: 5, 2: 10, 3: 15, 4: 20 }); // four 5 ft steps going east
-  it('on the 5-10-5 rule every second stair costs one more square', () => {
-    const ex = walkExtra(grid({ rule: 'alt' }), at(0, 0), at(4, 0), { ground: stairs, rough: none });
-    expect(ex.stairs).toBe(4);
-    expect(ex.extraFt).toBe(10); // two of the four cost double
-    const two = walkExtra(grid({ rule: 'alt' }), at(0, 0), at(2, 0), { ground: stairs, rough: none });
-    expect(two.extraFt).toBe(5);
-    const one = walkExtra(grid({ rule: 'alt' }), at(0, 0), at(1, 0), { ground: stairs, rough: none });
-    expect(one.extraFt).toBe(0);
-  });
-  it('on the 5-5-5 rule a stair is a diagonal and costs nothing extra', () => {
-    expect(walkExtra(grid({ rule: 'chebyshev' }), at(0, 0), at(4, 0), { ground: stairs, rough: none }).extraFt).toBe(0);
-  });
-  it('on straight-line distances a stair costs the diagonal length', () => {
-    const ex = walkExtra(grid({ rule: 'euclid' }), at(0, 0), at(1, 0), { ground: stairs, rough: none });
-    expect(ex.extraFt).toBeCloseTo(5 * (Math.SQRT2 - 1), 1);
-  });
-  it('flat ground and big ledges are not stairs', () => {
-    expect(walkExtra(grid(), at(0, 0), at(4, 0), { ground: () => 0, rough: none })).toMatchObject({ extraFt: 0, rough: 0, stairs: 0 });
-    const ledge = flat({ 1: 10 });
-    expect(walkExtra(grid(), at(0, 0), at(2, 0), { ground: ledge, rough: none }).stairs).toBe(0);
-    expect(STAIR_FT).toBe(5);
-  });
-  it('going down a stair counts too', () => {
-    expect(walkExtra(grid(), at(3, 0), at(0, 0), { ground: flat({ 0: 0, 1: 5, 2: 10, 3: 15 }), rough: none }).stairs).toBe(3);
-  });
-  it('distinguishes a staircase from two separate cliff drops on the same route', () => {
-    const ex = walkExtra(grid(), at(0, 0), at(3, 0), { ground: flat({ 0: 25, 1: 30, 2: 15 }), rough: none });
-    expect(ex.ledges).toEqual([-15, -15]);
-    expect(walkNote(grid(), ex)).toBe('drops 15 ft (1d6 if it falls), drops 15 ft (1d6 if it falls), 5 ft of stairs');
-  });
-});
-
 describe('difficult ground', () => {
-  const rough = (p: { x: number; y: number }) => p.x > 100 && p.x < 400; // columns 1 to 3
-  it('costs one extra square for each square of it entered', () => {
-    const ex = walkExtra(grid(), at(0, 0), at(5, 0), { ground: () => 0, rough });
-    expect(ex.rough).toBe(3);
-    expect(ex.extraFt).toBe(15);
-  });
-  it('is nothing when the move stays outside it', () => {
-    expect(walkExtra(grid(), at(4, 1), at(8, 1), { ground: () => 0, rough }).extraFt).toBe(0);
-  });
-  it('says what it added', () => {
-    const flatWalk = walkExtra(grid(), at(0, 0), at(4, 0), { ground: () => 0, rough });
-    expect(walkNote(grid(), flatWalk)).toBe('difficult ground +15 ft');
-    expect(walkNote(grid(), { ...flatWalk, stairRise: 5 })).toBe('5 ft of stairs, difficult ground +15 ft');
-    expect(walkNote(grid(), { ...flatWalk, rough: 0 })).toBe('');
-  });
-});
-
-describe('cliffs', () => {
-  const area = { x: 0, y: 0, w: 600, h: 300 };
-  it('a drop of more than 10 ft makes a wall piece on every square edge along it', () => {
-    const segs = cliffSegs(grid(), area, flat({ 3: 20, 4: 20, 5: 20 }), 10);
-    // the plateau is columns 3-5 over the three rows: its west side (3 rows) and its east edge at x = 600 is outside the painted area but still a drop
-    expect(segs.length).toBeGreaterThanOrEqual(3);
-    for (const s of segs) expect(s.top).toBe(20);
-  });
-  it('is nothing for 10 ft or less, or when cliffs are off', () => {
-    expect(cliffSegs(grid(), area, flat({ 3: 10 }), 10)).toEqual([]);
-    expect(cliffSegs(grid(), area, flat({ 3: 40 }), 0)).toEqual([]);
-    expect(cliffSegs(grid(), null, flat({ 3: 40 }), 10)).toEqual([]);
-  });
-  it('stops what is below the top of it, from the low side only', () => {
-    const segs = cliffSegs(grid(), { x: 0, y: 0, w: 600, h: 100 }, flat({ 3: 20, 4: 20, 5: 20 }), 10);
-    const west = segs.filter((s) => Math.abs(s.a.x - 300) < 1 && Math.abs(s.b.x - 300) < 1 && Math.min(s.a.y, s.b.y) === 0);
-    expect(west).toHaveLength(1);
-    const lowSide = at(2, 0), highSide = at(3, 0);
-    // somebody standing on the low ground is stopped; somebody on the high ground walks (and sees) past
-    expect(segsFrom(west, lowSide, 0)).toHaveLength(1);
-    expect(segsFrom(west, highSide, 20)).toHaveLength(0);
-    // a flyer high above the top gets over it too
-    expect(segsFrom(west, lowSide, 30)).toHaveLength(0);
-    expect(sideOf(west[0], lowSide)).toBe(west[0].one);
-  });
-  it('works on hexes', () => {
-    const g = grid({ shape: 'pointy' });
-    const segs = cliffSegs(g, { x: 0, y: 0, w: 500, h: 500 }, (p) => (p.x > 250 ? 30 : 0), 10);
-    expect(segs.length).toBeGreaterThan(0);
-    for (const s of segs) { expect(s.one === 1 || s.one === -1).toBe(true); expect(s.top).toBe(30); }
-  });
-});
-
-describe('walking over painted contours', () => {
-  const p = (x: number, y = 0) => ({ x, y });
-  const circles = (spacing: number, width: number) => zonesOf(Array.from({ length: 6 }, (_, i) => ({
-    id: String(i), hg: String(i), k: 'terrain', t: i, hz: 5, ha: true,
-    p: [i * spacing, 0].join(','), w: width,
-  } as Drawing)), grid());
-  const hill = circles(3, 100);
-  it('blocks at the first contour, even inching forward or crossing the entire hill in one jump', () => {
-    expect(paintedCliffBlocks(hill, p(-80), p(100), 10)).toBe(true);
-    expect(paintedCliffBlocks(hill, p(-50.01), p(-50), 10)).toBe(true);
-    expect(paintedCliffBlocks(hill, p(-50.01), p(-50.001), 10)).toBe(false);
-    expect(paintedCliffBlocks(hill, p(-49), p(-48), 10)).toBe(false);
-    expect(paintedCliffBlocks(hill, p(0), p(-90), 10)).toBe(false);
-    expect(paintedCliffBlocks(hill, p(-80, 51), p(90, 51), 10)).toBe(false);
-  });
-  it('uses the configured limit and flying altitude against the finished height', () => {
-    expect(paintedCliffBlocks(hill, p(-80), p(3), 10, 20)).toBe(true);
-    expect(paintedCliffBlocks(hill, p(-80), p(3), 10, 35)).toBe(false);
-    expect(paintedCliffBlocks(hill, p(-80), p(3), 30)).toBe(false);
-    expect(paintedCliffBlocks(hill, p(-80), p(3), 0)).toBe(false);
-  });
-  it('allows a 30 ft staircase with five horizontal feet between rises', () => {
-    expect(paintedCliffBlocks(circles(100, 1400), p(-800), p(-100), 10)).toBe(false);
-  });
-  it('detects the side of a narrow brush stroke and leaves a rubbed-out passage open', () => {
-    const ridge = { id: 'ridge', hg: 'ridge', k: 'terrain', t: 1, hz: 30, p: '0,-100,0,100', w: 2 } as Drawing;
-    const opening = { ...ridge, id: 'gap', he: true, t: 2, p: '0,0', w: 20 };
-    const zones = zonesOf([ridge, opening], grid());
-    expect(paintedCliffBlocks(zones, p(-500, 12), p(500, 12), 10)).toBe(true);
-    expect(paintedCliffBlocks(zones, p(-500), p(500), 10)).toBe(false);
+  const rough = (p: {x:number}) => p.x > 100 && p.x < 400;
+  it('charges entered squares and measures the affected length in gridless mode', () => {
+    expect(roughDistance(grid(),at(0,0),at(5,0),rough)).toBe(15);
+    expect(roughDistance(grid({visible:false,snap:false}),at(0,0),at(5,0),rough)).toBe(15);
+    expect(roughDistance(grid(),at(4,0),at(7,0),rough)).toBe(0);
   });
 });
 

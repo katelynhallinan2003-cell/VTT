@@ -1,15 +1,30 @@
 import clip, { type MultiPolygon, type Pair, type Polygon } from 'polygon-clipping';
 import type { GridSettings, Vec } from '../types';
+import { snapToCellCenter } from './geometry';
 import { cellPoly } from './cells';
-import { paintedCliffBlocks } from './terrainMovement';
-import { type Terrain, type TStroke } from './terrain';
+import { areaAt, groundAtTerrain, type Area, type Terrain, type TStroke } from './terrain';
 import { type Seg } from './walls';
 
-export interface TerrainEdge extends Seg { low: number; top: number; stair: boolean; one: 1 | -1 }
+export interface TerrainEdge extends Seg { low: number; top: number; one: 1 | -1 }
+export const inRegion = (polygon: Polygon, p: Vec): boolean => {
+  let inside = false;
+  for (const ring of polygon) for (let i = 0, j = ring.length-1; i < ring.length; j = i++) {
+    const [x,y] = ring[i], [xx,yy] = ring[j];
+    if ((y > p.y) !== (yy > p.y) && p.x < (xx-x)*(p.y-y)/(yy-y)+x) inside = !inside;
+  }
+  return inside;
+};
+
 const pair = (p: Vec): Pair => [p.x, p.y];
 
-function footprint(s: TStroke, grid: GridSettings): MultiPolygon {
+function brushFootprint(grid: GridSettings, pts: Vec[], radius: number, cells: boolean): MultiPolygon {
+  const bounds = {x:0,y:0,w:0,h:0};
+  return footprint({kind:cells ? 'cells' : 'free',pts,r:radius,b:bounds},grid);
+}
+
+function footprint(s: Pick<TStroke,'kind'|'pts'|'r'|'b'|'rings'>, grid: GridSettings): MultiPolygon {
   const { x, y, w, h } = s.b;
+  if (s.kind === 'polygon') return [s.rings!.map(r => r.map(pair))];
   if (s.kind === 'rect') return [[[[x,y], [x+w,y], [x+w,y+h], [x,y+h]]]];
   const shapes: Polygon[] = [];
   const oval = (p: Vec, rx: number, ry: number) => {
@@ -22,7 +37,7 @@ function footprint(s: TStroke, grid: GridSettings): MultiPolygon {
     })]);
   };
   if (s.kind === 'cells') {
-    for (const p of s.pts) shapes.push([cellPoly(grid, p).map(pair)]);
+    for (const p of s.pts) shapes.push([cellPoly(grid, snapToCellCenter(grid,p)).map(({x,y}): Pair => [Math.round(x*1e7)/1e7, Math.round(y*1e7)/1e7])]);
   } else if (s.kind === 'ellipse') {
     oval({ x: x + w / 2, y: y + h / 2 }, w / 2, h / 2);
   } else {
@@ -39,7 +54,12 @@ function footprint(s: TStroke, grid: GridSettings): MultiPolygon {
 }
 
 /** Fold the paint in drawing order, retaining the boundaries of each finished elevation. */
-function heightRegions(t: Terrain) {
+interface Plan { regions: Map<number, MultiPolygon>; layers: { area: Area; shape: MultiPolygon }[] }
+const plans = new WeakMap<Terrain, Plan>();
+function heightRegions(t: Terrain): Plan {
+  const cached = plans.get(t);
+  if (cached) return cached;
+  const layers: Plan['layers'] = [];
   let regions = new Map<number, MultiPolygon>();
   const footprints = new Map<TStroke, MultiPolygon>();
   for (const area of t.areas) {
@@ -50,9 +70,10 @@ function heightRegions(t: Terrain) {
       mask = s.erase ? clip.difference(mask, shape) : clip.union(mask, shape);
     }
     if (!mask.length) continue;
+    layers.push({area, shape: mask});
     const next = new Map<number, MultiPolygon>();
     const add = (z: number, shape: MultiPolygon) => {
-      if (!z || !shape.length) return;
+      if (!shape.length) return;
       const current = next.get(z);
       next.set(z, current ? clip.union(current, shape) : shape);
     };
@@ -67,15 +88,72 @@ function heightRegions(t: Terrain) {
     add(area.h, bare);
     regions = next;
   }
-  return regions;
+  const plan = { regions, layers };
+  plans.set(t,plan);
+  return plan;
+}
+
+export interface HeightPatch {
+  polygon: Polygon;
+  height: number;
+  /** Strokes to cut away if this patch is moved, deleted or reshaped. */
+  cuts: { group: string; shape: MultiPolygon }[];
+  ids: string[];
+  whole: boolean;
+  sig: string;
+}
+
+export function connectedHeight(t: Terrain, point: Vec): HeightPatch | null {
+  if (!areaAt(t,point)) return null;
+  const { regions, layers } = heightRegions(t);
+  const height = groundAtTerrain(t,point);
+  const polygon = regions.get(height)?.find(p => inRegion(p,point));
+  if (!polygon) return null;
+  const cuts: HeightPatch['cuts'] = [];
+  const ids = new Set<string>();
+  let whole = true;
+  let exposed: MultiPolygon = [polygon];
+  // An opaque level can hide another stroke at the same height. Include both
+  // where they coincide, while preserving the supporting ground below a terrace.
+  let duplicates: MultiPolygon = [];
+  for (const {area,shape} of [...layers].reverse()) {
+    const same = !area.add && area.h === height;
+    const visible = clip.intersection(exposed,shape);
+    const cut = same && duplicates.length ? clip.union(visible,clip.intersection(duplicates,shape)) : visible;
+    if (cut.length) {
+      if (!same || clip.difference(shape,cut).length) whole = false;
+      cuts.push({group:area.id,shape:cut});
+      for (const id of area.ids) ids.add(id);
+    }
+    exposed = clip.difference(exposed,shape);
+    duplicates = same ? clip.union(duplicates,visible) : clip.difference(duplicates,shape);
+    if (!exposed.length && !duplicates.length) break;
+  }
+  return {polygon,height,cuts,ids:[...ids],whole,sig:t.sig};
+}
+
+/** Limit a brush erasure to the selected surface, even if another island shares its stroke. */
+export function brushCuts(patches: HeightPatch[], grid: GridSettings, pts: Vec[], width: number, cells: boolean) {
+  const brush = brushFootprint(grid,pts,width/2,cells);
+  return patches.map(p => ({...p,whole:false,cuts:p.cuts.map(c => ({...c,shape:clip.intersection(c.shape,brush)}))
+    .filter(c => c.shape.length)})).filter(p => p.cuts.length);
+}
+
+export function patchStroke(polygon: Polygon, group: string, height: number | null, dx = 0, dy = 0) {
+  return {
+    k: 'terrain' as const, hg: group, hz: height, he: height === null,
+    hr: polygon.map(ring => ring.length).join(','),
+    p: polygon.flatMap(ring => ring.flatMap(([x,y]) => [x+dx,y+dy])).join(','),
+    color: '#aa8855', w: 1, fill: 0, dash: false, txt: '', fs: 28, bw: 5,
+  };
 }
 
 /** Sweep both sides of each contour line together. This splits a long edge wherever
  * a neighbouring terrace ends, even when the polygon on the opposite side has no vertex there. */
-export function terrainEdges(t: Terrain, threshold: number): TerrainEdge[] {
+export function terrainEdges(t: Terrain): TerrainEdge[] {
   type Event = { s: number; left: number; right: number };
   const lines = new Map<string, { ux: number; uy: number; offset: number; events: Event[] }>();
-  for (const [height, region] of heightRegions(t)) for (const polygon of region) for (const ring of polygon) {
+  for (const [height, region] of heightRegions(t).regions) for (const polygon of region) for (const ring of polygon) {
     for (let i = 1; i < ring.length; i++) {
       const [x,y] = ring[i-1], [x2,y2] = ring[i];
       const len = Math.hypot(x2-x,y2-y);
@@ -101,14 +179,7 @@ export function terrainEdges(t: Terrain, threshold: number): TerrainEdge[] {
       if (left === right || len < 1e-6) continue;
       const one = left < right ? 1 : -1;
       const low = Math.min(left,right), top = Math.max(left,right);
-      const pieces = Math.max(1, Math.ceil(len / t.grid.cell));
-      for (let j = 0; j < pieces; j++) {
-        const mid = start + (j+0.5)*len/pieces;
-        const probe = one * t.grid.cell * 0.004;
-        const wall = threshold > 0 && (top-low > Math.max(5,threshold) || (t.areas.length > 1
-          && paintedCliffBlocks(t,at(mid,probe),at(mid,-probe),threshold)));
-        out.push({ a: at(start+j*len/pieces), b: at(start+(j+1)*len/pieces), one, low, top, stair: !wall });
-      }
+      out.push({ a: at(start), b: at(start+len), one, low, top });
     }
   }
   return out;

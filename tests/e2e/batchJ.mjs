@@ -209,7 +209,7 @@ await dm.mouse.down();
 await dm.mouse.move(g1.x, g1.y, { steps: 10 });
 await sleep(200);
 const dt = await dm.evaluate(() => { const t = window.__vtt.board.distText; return t.visible ? t.text : ''; });
-check('dragging up a grade shows a single movement total', /^\d+(?:\.\d+)? ft$/.test(dt), dt);
+check('climbing the ledge includes its height in movement', dt === '30 ft · 20 ft normal + 10 ft climbing', dt);
 await dm.mouse.up();
 await sleep(300);
 const g2 = await screen(dm, 12.5 * cell, 6.5 * cell);
@@ -218,7 +218,7 @@ await dm.mouse.down();
 await dm.mouse.move(g0.x, g0.y, { steps: 10 });
 await sleep(200);
 const dt2 = await dm.evaluate(() => { const t = window.__vtt.board.distText; return t.visible ? t.text : ''; });
-check('and descending the same grade costs the same distance', dt === dt2, dt2);
+check('and descending the same wall costs the same distance', dt === dt2, dt2);
 await dm.mouse.up();
 await sleep(300);
 

@@ -103,7 +103,7 @@ export interface SceneMeta {
   gridTried: boolean;
   /** walls stop tokens being dragged through them (for players; the DM can hold Q to pass) */
   wallStop: boolean;
-  /** drops of more than this many feet between neighbouring squares are cliffs (0: none) */
+  /** Former automatic wall threshold, retained for older scene files */
   cliff: number;
   bg: string;
   grid: GridSettings;
@@ -269,6 +269,8 @@ export interface Drawing {
   he?: boolean;
   /** terrain: the stroke is a list of whole cells (their centres), not a free brush */
   hc?: boolean;
+  /** Vertex counts of the outer ring and any holes of a clipped terrain stroke. */
+  hr?: string;
   /** a stroke of difficult ground (costs extra to walk through), not of height */
   dt?: boolean;
   /** a stroke of painted light: the ground it covers is lit (daylight, or dim light with `dd`) when the rest of the scene is dim or dark */

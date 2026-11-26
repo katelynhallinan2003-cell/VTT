@@ -48,7 +48,7 @@ Read `CLAUDE.md` (this file) and `WIP.md` before doing anything else in a sessio
 
 ## Design precedents
 
-- **Elevation and movement.** The Heights editor tints each finished elevation and labels patches where space permits. Stairs contribute to the movement total. Terrain walls charge climbing up or down. The map-wide threshold is under Walls → On this map. Derived boundaries follow the finished painted terrain, including additive strokes and erasers.
+- **Elevation and movement.** The Heights editor tints each finished elevation and labels patches where space permits. Ctrl-click selects one connected patch at its finished height. Every painted height change is a terrain wall and charges climbing up or down. Derived boundaries follow the finished painted terrain, including additive strokes and erasers.
 - **Drawn walls and flight.** Height zero blocks movement. A finite wall can be climbed, including both faces on level ground. Closed doors and windows keep their existing movement rules. Flight counts the vertical travel required to clear the terrain and finite walls along the measured route.
 - **Test moves.** Preserve turns within a drag and send them with shared previews. Only deliberate multi-step stops receive individual distance labels.
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { drawingToWire, normalizeDrawing } from '../src/core/model';
 import { isRough, roughOf } from '../src/core/height';
 import { templateRoughDraws } from '../src/core/templaterough';
-import { walkExtra } from '../src/core/walk';
+import { roughDistance } from '../src/core/walk';
 import type { Seg } from '../src/core/walls';
 import type { Drawing, GridSettings } from '../src/types';
 
@@ -68,11 +68,9 @@ describe('a spell template marked as difficult ground', () => {
   it('walking through it costs one extra square for each square entered', () => {
     const g = grid();
     const r = roughOf(templateRoughDraws([sphere({ td: true })], g), g);
-    const ctx = { ground: () => 0, rough: (p: { x: number; y: number }) => isRough(r, p) };
-    const ex = walkExtra(g, at(0, 5), at(14, 5), ctx);
-    expect(ex.rough).toBeGreaterThan(0);
-    expect(ex.extraFt).toBe(ex.rough * 5);
-    expect(walkExtra(g, at(0, 0), at(14, 0), ctx).extraFt).toBe(0);
+    const rough = (p: {x:number;y:number}) => isRough(r,p);
+    expect(roughDistance(g, at(0,5), at(14,5), rough)).toBeGreaterThan(0);
+    expect(roughDistance(g, at(0,0), at(14,0), rough)).toBe(0);
   });
 });
 

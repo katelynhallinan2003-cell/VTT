@@ -94,6 +94,34 @@ const tints = await dm.evaluate(async () => {
 check('three finished elevations have distinct translucent colours', new Set(tints.map(c=>c.slice(0,3).join(','))).size === 3 &&
   tints.every(c=>c[3]>0 && c[3]<200), JSON.stringify(tints));
 await dm.screenshot({path:'/tmp/shots/elevation-heights.png'});
+// One stroke covers both the plateau and a detached island. A separate group
+// touches the plateau, and a higher cell cuts its far end off.
+const samples = [C(8,12),C(9,12),C(10,12),C(11,12),C(12,12),C(15,12)];
+await dm.evaluate(async points => {
+  const {client} = window.__vtt;
+  const paint = (group,height,cells) => client.addDrawing({k:'terrain',hg:group,hz:height,hc:true,
+    p:cells.map(p => [p.x,p.y].join(',')).join(','),w:client.grid.cell,color:'#aaaaaa'});
+  await paint('plateau',30,[points[0],points[1],points[5]]);
+  await paint('extension',30,points.slice(2,5));
+  await paint('divider',40,[points[3]]);
+},samples);
+await dm.waitForFunction(p => window.__vtt.board.groundAtPoint(p) === 40,samples[3]);
+const click = await screen(samples[1]);
+await dm.keyboard.down('Control');
+await dm.mouse.click(click.x,click.y);
+await dm.keyboard.up('Control');
+const selected = await dm.evaluate(() => window.__vtt.ui.data.heightPatches?.[0]);
+check('Ctrl-click selects through the touching brush boundary',selected?.height === 30 && selected.cuts.length === 2);
+await dm.locator('.ht-card .numf input').fill('35');
+await dm.locator('.ht-card .numf input').press('Enter');
+await dm.waitForFunction(p => window.__vtt.board.groundAtPoint(p) === 35,samples[0]);
+const heights = () => dm.evaluate(ps => ps.map(p => window.__vtt.board.groundAtPoint(p)),samples);
+check('editing the selection stops at the higher divider and leaves the detached island alone',
+  (await heights()).join(',') === '35,35,35,40,30,30');
+await dm.locator('.ht-card .numf input').blur();
+await dm.keyboard.press('Control+z');
+await dm.waitForFunction(p => window.__vtt.board.groundAtPoint(p) === 30,samples[0]);
+check('undo restores all selected fragments together',(await heights()).join(',') === '30,30,30,40,30,30');
 await dm.keyboard.press('b');
 await dm.getByRole('button',{name:'Freehand',exact:true}).click();
 check('wall controls fit the laptop menu', await dm.locator('.flyout .seg button').evaluateAll(buttons =>

@@ -130,8 +130,9 @@ await dm.keyboard.press('Control+z');
 await sleep(300);
 check('undo removes only the last addition', await ground(cx(12), cy(13)) === 25);
 
-// ---- Sets height puts it back to an exact height
-await click([cx(12), cy(12)], { ctrl: true });
+// Select mode can still edit an individual additive brush group.
+await dm.locator('.flyout .seg button', { hasText: /^Select$/ }).click();
+await click([cx(12), cy(12)]);
 await dm.locator('.ht-card .seg button', { hasText: 'Exact height' }).click();
 await sleep(300);
 check('Sets height: that ground is exactly 5 ft, whatever is under it', (await ground(cx(12), cy(13))) === 5 && (await ground(cx(12), cy(12))) === 5);
@@ -174,13 +175,14 @@ await dm.keyboard.press('Control+z');
 await sleep(400);
 check('undo moves it back', (await ground(cx(10), cy(12))) === 25);
 
-// ---- merge two areas
-await dm.locator('.flyout .seg button', { hasText: /^Paint$/ }).click();
+// ---- Select mode merges whole authored groups, including any detached strokes.
+await dm.locator('.flyout .seg button', { hasText: /^Select$/ }).click();
 await dm.keyboard.press('Escape');
-await click([cx(10), cy(12)], { ctrl: true });
-await click([cx(14), cy(13)], { ctrl: true, shift: true });
+await dm.locator('.flyout .seg button', { hasText: /^Select$/ }).click();
+await click([cx(10), cy(12)]);
+await click([cx(14), cy(13)], { shift: true });
 ar = await areas();
-check('shift-ctrl-click adds a second area to the selection', (await dm.locator('.ht-card', { hasText: '2 areas selected' }).count()) === 1);
+check('shift-click adds a second area to the selection', (await dm.locator('.ht-card', { hasText: '2 areas selected' }).count()) === 1);
 await dm.locator('.ht-card .btn', { hasText: 'Merge' }).click();
 await sleep(400);
 ar = await areas();
@@ -188,8 +190,10 @@ check('Merge makes them one area', ar.length === 1, JSON.stringify(ar.map((a) =>
 
 // ---- delete the area
 await dm.locator('.ht-card .btn', { hasText: /^Delete area$/ }).count();
-await click([cx(12), cy(12)], { ctrl: true });
+await dm.locator('.flyout .seg button', { hasText: /^Select$/ }).click();
+await click([cx(12), cy(12)]);
 await dm.locator('.ht-card .btn', { hasText: /^Delete area/ }).click();
+await dm.locator('.flyout .seg button', { hasText: /^Paint$/ }).click();
 await sleep(400);
 check('Delete removes every stroke of the area', (await terrain()).length === 0 && (await areas()).length === 0);
 

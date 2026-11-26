@@ -10,11 +10,11 @@
 // and a 20 ft ledge painted over it is simply 20 ft.
 import type { Drawing, GridSettings, Rect, Vec } from '../types';
 import { cellPoly } from './cells';
-import { boundsOf, distToSegment, parsePts } from './draw';
+import { boundsOf, distToSegment, parsePts, pointInPoly } from './draw';
 import { snapToCellCenter, snapToCorner } from './geometry';
 import { hexAt, hexToPx, isHex } from './hex';
 
-export type StrokeKind = 'free' | 'cells' | 'rect' | 'ellipse';
+export type StrokeKind = 'free' | 'cells' | 'rect' | 'ellipse' | 'polygon';
 
 export interface TStroke {
   id: string;
@@ -31,6 +31,7 @@ export interface TStroke {
   b: Rect;
   /** the cells it covers, by key (cell strokes) */
   cells?: Set<string>;
+  rings?: Vec[][];
 }
 
 export interface Area {
@@ -107,18 +108,28 @@ export function cellsAlong(grid: GridSettings, a: Vec, b: Vec, n: number): Vec[]
 // ------------------------------------------------------------------ reading strokes and areas
 const strokeBounds = (kind: StrokeKind, pts: Vec[], r: number): Rect => {
   const b = boundsOf(pts);
-  const pad = kind === 'rect' || kind === 'ellipse' ? 0 : r;
+  const pad = kind === 'polygon' || kind === 'rect' || kind === 'ellipse' ? 0 : r;
   return { x: b.x - pad, y: b.y - pad, w: b.w + pad * 2, h: b.h + pad * 2 };
 };
 
 function strokeOf(d: Drawing, grid: GridSettings): TStroke | null {
   const pts = parsePts(d.p);
   if (!pts.length) return null;
-  const kind: StrokeKind = d.k === 'rect' ? 'rect' : d.k === 'ellipse' ? 'ellipse' : d.hc ? 'cells' : 'free';
+  const kind: StrokeKind = d.k === 'rect' ? 'rect' : d.k === 'ellipse' ? 'ellipse' : d.hr ? 'polygon' : d.hc ? 'cells' : 'free';
   if ((kind === 'rect' || kind === 'ellipse') && pts.length < 2) return null;
   // a cell stroke's pad is the reach of its cells' corners; a free stroke's is half the brush
   const r = kind === 'cells' ? (isHex(grid) ? grid.cell * 0.6 : grid.cell * 0.5) : Math.max(0.5, d.w / 2);
   const s: TStroke = { id: d.id, hg: d.hg ?? '', t: d.t, erase: !!d.he, kind, pts, r, b: strokeBounds(kind, pts, r) };
+  if (kind === 'polygon') {
+    let offset = 0;
+    s.rings = [];
+    for (const count of d.hr!.split(',').map(Number)) {
+      if (!Number.isSafeInteger(count) || count < 3 || count > pts.length - offset) return null;
+      s.rings.push(pts.slice(offset, offset + count));
+      offset += count;
+    }
+    if (offset !== pts.length) return null;
+  }
   if (kind === 'cells') s.cells = new Set(pts.map((p) => cellKey(grid, p)));
   return s;
 }
@@ -128,6 +139,7 @@ export function strokeCovers(s: TStroke, p: Vec, grid: GridSettings, key?: strin
   const b = s.b;
   if (p.x < b.x || p.x > b.x + b.w || p.y < b.y || p.y > b.y + b.h) return false;
   switch (s.kind) {
+    case 'polygon': return s.rings!.reduce((inside, ring) => pointInPoly(p, ring) !== inside, false);
     case 'rect': return true;
     case 'ellipse': {
       const rx = Math.max(1e-6, b.w / 2), ry = Math.max(1e-6, b.h / 2);
@@ -158,7 +170,7 @@ export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings, layer: '
     if (d.hz == null && d.k !== 'terrain') continue;
     // difficult ground and daylight are painted with the same brush but are layers of their own: they never change how high anything is
     if ((d.dt ? 'rough' : d.dl ? (d.dd ? 'dim' : 'day') : 'ground') !== layer) continue;
-    sigParts.push(`${d.id}|${d.k}|${d.p}|${d.w}|${d.hz}|${d.hg ?? ''}|${d.ha ? 1 : 0}|${d.he ? 1 : 0}|${d.hc ? 1 : 0}|${d.t}`);
+    sigParts.push(`${d.id}|${d.k}|${d.p}|${d.w}|${d.hz}|${d.hg ?? ''}|${d.ha ? 1 : 0}|${d.he ? 1 : 0}|${d.hc ? 1 : 0}|${d.hr ?? ''}|${d.t}`);
     if (d.k === 'terrain') {
       if (d.he) { erasers.push(d); continue; }
       if (d.hz == null) continue;
@@ -174,6 +186,11 @@ export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings, layer: '
   // old-style: bigger ones go below, so a nest drawn inside a cliff counts as the nest
   legacy.sort((a, b) => b.b.w * b.b.h - a.b.w * a.b.h || a.strokes[0].t - b.strokes[0].t);
   const eras = erasers.map((d) => strokeOf(d, grid)).filter((s): s is TStroke => !!s);
+  for (const a of legacy) {
+    const cuts = eras.filter(e => e.hg === a.id).sort((x,y) => x.t-y.t || x.id.localeCompare(y.id));
+    a.strokes.push(...cuts);
+    a.ids.push(...cuts.map(s => s.id));
+  }
   const painted: Area[] = [];
   for (const [id, g] of groups) {
     const paint = g.paint.map((d) => strokeOf(d, grid)).filter((s): s is TStroke => !!s);

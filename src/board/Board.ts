@@ -7,8 +7,8 @@ import { templateRoughDraws } from '../core/templaterough';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
 import { altitudeOf, dayOf, dimOf, groundAt, heightNote, isRough, roughOf, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
-import { DEFAULT_CLIFF_FT, rampCells } from '../core/walk';
-import { terrainEdges, type TerrainEdge } from '../core/terrainEdges';
+import { rampCells } from '../core/walk';
+import { brushCuts, connectedHeight, inRegion, terrainEdges, type TerrainEdge } from '../core/terrainEdges';
 import { movementCost } from '../core/movementCost';
 import { EMPTY_TERRAIN, MAX_STROKE_CELLS, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, heightColor, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
@@ -124,7 +124,6 @@ export class Board {
   /** where the run of walls being drawn began, and how many it has so far (coming back to the start closes the loop) */
   private wallRunFirst: Vec | null = null;
   private wallRunCount = 0;
-  private seenWallThreshold?: number;
   private seenWallRev = -1;
   private segCache: { scene: unknown; rev: number; ground: string; sight: Seg[]; move: Seg[]; terrain: TerrainEdge[] } = { scene: null, rev: -1, ground: '', sight: [], move: [], terrain: [] };
   private auraG = new Graphics();
@@ -539,8 +538,7 @@ export class Board {
       if (stale.length) this.ui.selectDrawings([...this.ui.data.drawSel].filter((id) => scene.draws.has(id)));
       this.dirty = true;
     }
-    if (scene.wallRev !== this.seenWallRev || this.seenWallThreshold !== scene.meta?.cliff) {
-      this.seenWallThreshold = scene.meta?.cliff;
+    if (scene.wallRev !== this.seenWallRev) {
       this.seenWallRev = scene.wallRev;
       this.refreshRough(); // a wall can cut a difficult spell template short
       this.onWallsChanged();
@@ -1063,7 +1061,7 @@ export class Board {
     const { terrain, move } = this.wallSegs();
     if (!terrain.length && !move.length && !this.rough.areas.length) return { ft: pathFt(grid,path), note: '' };
     return movementCost(grid, path, fly ? elevation : null, {
-      ground: p => groundAtTerrain(this.zones,p), surface: p => groundAt(this.zones,p), rough: p => isRough(this.rough,p),
+      ground: p => groundAtTerrain(this.zones,p), rough: p => isRough(this.rough,p),
     }, terrain, this.moveBlockers() ? move : []);
   }
 
@@ -1074,15 +1072,12 @@ export class Board {
     if (!scene) return { sight: [], move: [], terrain: [] };
     const c = this.segCache;
     // how tall a wall's top is depends on the ground it stands on, so the pieces are rebuilt when the ground changes too
-    const cliffFt = scene.meta?.cliff ?? DEFAULT_CLIFF_FT;
-    const gsig = `${this.zones.sig}|${cliffFt}`;
+    const gsig = this.zones.sig;
     if (c.scene !== scene || c.rev !== scene.wallRev || c.ground !== gsig) {
       const list = [...scene.walls.values()];
       const topOf = (w: Wall) => groundAt(this.zones, wallMid(w)) + w.h;
-      // a big enough drop between neighbouring squares is a cliff: a wall for whatever is lower than the top of it, nothing for what stands on top
-      const terrain = terrainEdges(this.zones, cliffFt);
-      const cliffs = terrain.filter(edge => !edge.stair);
-      this.segCache = { scene, terrain, rev: scene.wallRev, ground: gsig, sight: [...sightSegs(list, topOf), ...cliffs], move: moveSegs(list, topOf) };
+      const terrain = terrainEdges(this.zones);
+      this.segCache = { scene, terrain, rev: scene.wallRev, ground: gsig, sight: [...sightSegs(list, topOf), ...terrain], move: moveSegs(list, topOf) };
     }
     return this.segCache;
   }
@@ -1090,7 +1085,7 @@ export class Board {
   /** What stops a spell, for the template painter. */
   private wallsForSpells(): { segs: Seg[]; rev: string; ground: (p: Vec) => number } {
     // a spell also depends on how high the ground is where it starts (a wall lower than that does not stop it)
-    return { segs: this.wallSegs().sight, rev: `${this.client.scene?.wallRev ?? 0}:${this.client.scene?.meta?.cliff}:${this.zones.sig}`, ground: (p) => groundAt(this.zones, p) };
+    return { segs: this.wallSegs().sight, rev: `${this.client.scene?.wallRev ?? 0}:${this.zones.sig}`, ground: (p) => groundAt(this.zones, p) };
   }
 
   private onWallsChanged() {
@@ -1118,7 +1113,7 @@ export class Board {
     this.wallLayer.sync(this.wallsShown(), {
       z: this.cam.zoom, cell: this.client.grid.cell, showAll: dm && !u.dmPreview,
       selected: editing ? u.wallSel : NO_IDS, hover: edit ? this.wallHover : null, handles: edit,
-    }, `${scene.wallRev}:${this.wallPrevSeq}:${this.zones.sig}:${scene.meta?.cliff}`, editing || u.showWalls, dm && !u.dmPreview && (editing || u.showWalls) ? this.wallSegs().terrain : []);
+    }, `${scene.wallRev}:${this.wallPrevSeq}:${this.zones.sig}`, editing || u.showWalls, dm && !u.dmPreview && (editing || u.showWalls) ? this.wallSegs().terrain : []);
   }
 
   /** The door or window whose handle is under `p` (the DM clicks it to open or close it). */
@@ -1528,7 +1523,7 @@ export class Board {
     }
     const r = (n: number) => Math.round(n * 2) / 2;
     const painted = this.paintedLight();
-    const key = `${scene.id}|${ambient}|${scene.wallRev}:${scene.meta?.cliff}:${this.zones.sig}|${painted ? `${painted.day?.sig ?? ''}~${painted.dim?.sig ?? ''}~${Math.round(painted.edge)}` : ''}|${lights.map((l) => `${r(l.x)},${r(l.y)},${r(l.b)},${r(l.r)},${l.c},${l.alt ?? ''}`).join(';')}|${viewers.map((w) => `${r(w.x)},${r(w.y)},${r(w.r)},${r(w.dv)},${r(w.touch)},${w.alt ?? ''}`).join(';')}`;
+    const key = `${scene.id}|${ambient}|${scene.wallRev}:${this.zones.sig}|${painted ? `${painted.day?.sig ?? ''}~${painted.dim?.sig ?? ''}~${Math.round(painted.edge)}` : ''}|${lights.map((l) => `${r(l.x)},${r(l.y)},${r(l.b)},${r(l.r)},${l.c},${l.alt ?? ''}`).join(';')}|${viewers.map((w) => `${r(w.x)},${r(w.y)},${r(w.r)},${r(w.dv)},${r(w.touch)},${w.alt ?? ''}`).join(';')}`;
     return { ambient, lights, viewers, painted, key };
   }
 
@@ -2041,8 +2036,14 @@ export class Board {
     const d = this.drag;
     let li = this.plotNext;
 
+    if (u.heightPatches && u.tool === 'height') {
+      const dx = d?.kind === 'drawmove' ? d.dx : 0, dy = d?.kind === 'drawmove' ? d.dy : 0;
+      for (const patch of u.heightPatches) for (const ring of patch.polygon)
+        g.poly(ring.flatMap(([x,y]) => [x+dx,y+dy]),true).stroke({width:2/z,color:SELECT});
+    }
     // outlines around selected drawings (shifted while they are being dragged)
     for (const id of u.drawSel) {
+      if (u.heightPatches) break;
       const dd = this.shownDrawing(id);
       if (!dd || dd.k === 'terrain') continue; // painted ground outlines itself
       const b = this.drawLayer.boundsOf(dd, grid);
@@ -2051,7 +2052,7 @@ export class Board {
       g.rect(b.x - pad + (mv?.dx ?? 0), b.y - pad + (mv?.dy ?? 0), b.w + pad * 2, b.h + pad * 2).stroke({ width: 1.5 / z, color: SELECT });
     }
     // handles to drag the edges, corners or ends of one selected drawing
-    if (u.drawSel.size === 1 && d?.kind !== 'drawmove' && (u.tool === 'select' || u.tool === 'height' || (u.tool === 'draw' && u.drawTool !== 'erase') || (u.tool === 'template' && u.tplMode === 'select'))) {
+    if (!u.heightPatches && u.drawSel.size === 1 && d?.kind !== 'drawmove' && (u.tool === 'select' || u.tool === 'height' || (u.tool === 'draw' && u.drawTool !== 'erase') || (u.tool === 'template' && u.tplMode === 'select'))) {
       const dd = this.shownDrawing([...u.drawSel][0]);
       if (dd && this.client.canEditDrawing(dd)) {
         const hs = 4.5 / z;
@@ -2096,7 +2097,7 @@ export class Board {
       if (mode === 'paint' || mode === 'erase') li = this.paintBrush(g, z, this.pointerW, null, li);
     }
     this.terrainLayer.avoidBrushReadout(li > brushLabelIndex ? this.plotLabels[brushLabelIndex] : undefined);
-    if (d?.kind === 'drawmove' && d.moved) this.paintMoveGhost(g, d);
+    if (!u.heightPatches && d?.kind === 'drawmove' && d.moved) this.paintMoveGhost(g, d);
 
     // the Walls tool: the wall being drawn, the next point, a selection box
     if (u.tool === 'wall' && this.client.isDM) li = this.paintWallTool(g, z, li);
@@ -2151,7 +2152,7 @@ export class Board {
 
   /**
    * A move made in several steps: how far each step went, on the step. The steps add up to the whole
-   * (each is the difference between the cost so far and the cost one corner earlier, so stairs and rough ground are counted once).
+   * (each is the difference between the cost so far and the cost one corner earlier, so climbs and rough ground are counted once).
    */
   private stepLabels(li: number, path: Vec[], token: Token, color: number, z: number, stops: number[]): number {
     if (!stops.length) return li;
@@ -2277,7 +2278,7 @@ export class Board {
       }
       return;
     }
-    if (tool === 'select' || tool === 'height' || (tool === 'draw' && this.ui.data.drawTool !== 'erase') || (tool === 'template' && this.ui.data.tplMode === 'select')) {
+    if (tool === 'select' || (tool === 'height' && !e.ctrlKey && !e.metaKey) || (tool === 'draw' && this.ui.data.drawTool !== 'erase') || (tool === 'template' && this.ui.data.tplMode === 'select')) {
       const hh = this.handleAt(w);
       if (hh) { this.drag = { kind: 'drawresize', id: hh.d.id, handle: hh.h.id, orig: hh.d, patch: null }; return; }
     }
@@ -2446,6 +2447,13 @@ export class Board {
   }
 
   /** The areas that are selected (any of their strokes selected). */
+  private editPickedGround(edit: {delta: Vec} | 'delete') {
+    const patches = this.ui.data.heightPatches!;
+    void this.client.editHeightPatches(patches,edit).then(ids => {
+      if (this.ui.data.heightPatches === patches) this.ui.selectDrawings(ids);
+    }).catch((err: Error) => this.cb.onNotice(err.message,'error'));
+  }
+
   private selectedAreas(): Area[] {
     return areasSelected(this.zones, this.ui.data.drawSel);
   }
@@ -2456,7 +2464,7 @@ export class Board {
     const t = pv ? zonesOf(this.client.drawingsSorted().map((d) => (d.id === pv.id ? { ...d, ...pv.patch } : d)), this.client.grid) : this.zones;
     const shown = this.heightFade > 0.001;
     this.terrainLayer.container.alpha = this.heightFade;
-    const sel = new Set(this.selectedAreas().map((a) => a.id));
+    const sel = new Set(this.ui.data.heightPatches ? [] : this.selectedAreas().map((a) => a.id));
     this.terrainLayer.sync(t, sel, shown, this.ui.data.tool === 'height');
     // build the picture a moment after the ground changes, so it is ready when someone starts dragging (no hitch then)
     if (!shown && t.areas.length) {
@@ -2467,7 +2475,7 @@ export class Board {
 
   /** The resize handle under the pointer, for the one drawing that is selected. */
   private handleAt(p: Vec): { d: Drawing; h: ReturnType<typeof handlesOf>[number] } | null {
-    if (this.ui.data.drawSel.size !== 1) return null;
+    if (this.ui.data.heightPatches || this.ui.data.drawSel.size !== 1) return null;
     const d = this.shownDrawing([...this.ui.data.drawSel][0]);
     if (!d || !this.client.canEditDrawing(d)) return null;
     const r = 7 / this.cam.zoom;
@@ -2583,6 +2591,7 @@ export class Board {
 
   /** The area the brush adds to: the one area that is selected (an old-style box or circle cannot take more paint). */
   private currentArea(): Area | null {
+    if (this.ui.data.heightPatches && !(this.ui.data.heightPatches.length === 1 && this.ui.data.heightPatches[0].whole)) return null;
     const a = this.selectedAreas();
     return a.length === 1 && !a[0].legacy ? a[0] : null;
   }
@@ -2596,6 +2605,21 @@ export class Board {
     const rough = u.groundKind === 'rough';
     const gridless = currentOverlay(this.client.grid) === 'none';
     const mode = terrainBrushMode(u, gridless);
+    if (!rough && (e.ctrlKey || e.metaKey || (mode === 'move' && u.heightPatches?.some(p => inRegion(p.polygon,w))))) {
+      const hit = connectedHeight(this.zones,w);
+      if (!hit) { if (!e.shiftKey) this.ui.selectDrawings([]); return; }
+      const current = u.heightPatches ?? [];
+      const on = current.some(p => p.polygon === hit.polygon);
+      const patches = e.shiftKey ? (on ? current.filter(p => p.polygon !== hit.polygon) : [...current,hit])
+        : mode === 'move' && on && !e.ctrlKey && !e.metaKey ? current : [hit];
+      const ids = new Set(patches.flatMap(p => p.ids));
+      this.ui.set({ drawSel:ids,heightPatches:patches.length ? patches : undefined,selection:new Set(),mapSelected:false,extraSel:null });
+      if (mode === 'move' && patches.length && !(e.shiftKey && on)) {
+        const snap = !gridless && !e.altKey && this.selectedAreas().some(a => a.paint.some(s => s.kind === 'cells'));
+        this.drag = { kind:'drawmove',ids:[...ids],start:w,dx:0,dy:0,moved:false,snap };
+      }
+      return;
+    }
     if (mode === 'ramp') {
       const grid = this.client.grid;
       const free = e.altKey;
@@ -2603,7 +2627,7 @@ export class Board {
       this.drag = { kind: 'ramp', a: p, b: p };
       return;
     }
-    if (!rough && (mode === 'move' || e.ctrlKey || e.metaKey)) {
+    if (!rough && mode === 'move') {
       const a = areaAt(this.zones, w);
       if (!a) { if (!e.shiftKey) this.ui.selectDrawings([]); return; }
       const sel = new Set(u.drawSel);
@@ -2623,12 +2647,13 @@ export class Board {
     }
     const erase = mode === 'erase';
     const cur = rough ? null : this.currentArea();
-    const add = !rough && !erase && (cur?.add ?? u.heightAdds);
+    const pick = !rough && u.heightPatches?.[0];
+    const add = !pick && !rough && !erase && (cur?.add ?? u.heightAdds);
     // Each additive gesture goes above the ground already there, even if the previous area is selected.
     const group = rough ? 'dt' : erase ? cur?.id ?? '' : add ? newAreaId() : cur?.id ?? newAreaId();
     const d: Extract<Drag, { kind: 'terrain' }> = {
       kind: 'terrain', erase, group, rough,
-      h: rough ? 1 : cur?.h ?? u.heightFt, add,
+      h: rough ? 1 : (pick ? pick.height : cur?.h ?? u.heightFt), add,
       cells: !gridless && u.heightSnap !== e.altKey ? new Map() : null, pts: [], last: w, size: u.heightBrush,
     };
     this.drag = d;
@@ -2677,6 +2702,16 @@ export class Board {
       pts = d.pts.length > 2 ? fitPenPoints(d.pts, Math.max(0.5, wpx * 0.06)) : d.pts;
     }
     if (!pts.length) return;
+    const picks = this.ui.data.heightPatches;
+    if (picks && !d.rough && d.erase && !(picks.length === 1 && picks[0].whole && this.currentArea())) {
+      const cuts = brushCuts(picks,grid,pts,wpx,!!d.cells);
+      if (cuts.length) {
+        void this.client.editHeightPatches(cuts,'delete').catch((err: Error) => this.cb.onNotice(err.message,'error'));
+        this.ui.selectDrawings([]);
+      }
+      return;
+    }
+    if (picks && d.erase) this.ui.selectDrawings(picks.flatMap(p => p.ids));
     const col = d.rough ? '#c8791b' : heightColor(d.h);
     const cur = this.selectedAreas();
     const keep = cur.length === 1 && cur[0].id === d.group ? cur[0].ids : [];
@@ -2698,8 +2733,9 @@ export class Board {
     const erase = d ? d.erase : u.heightMode === 'erase';
     const rough = d ? !!d.rough : u.groundKind === 'rough';
     const cur = rough ? null : this.currentArea();
-    const h = d ? d.h : cur ? cur.h : u.heightFt;
-    const add = d ? d.add : cur ? cur.add : u.heightAdds;
+    const pick = !rough && u.heightPatches?.[0];
+    const h = d ? d.h : pick ? pick.height : cur ? cur.h : u.heightFt;
+    const add = d ? d.add : pick ? false : cur ? cur.add : u.heightAdds;
     const col = erase ? 0xff6b6b : rough ? 0xc8791b : num(heightColor(h));
     const snap = d ? !!d.cells : currentOverlay(grid) !== 'none' && u.heightSnap !== !!this.altDown;
     const n = d ? d.size : u.heightBrush;
@@ -3073,7 +3109,7 @@ export class Board {
           dx = b.x - a.x; dy = b.y - a.y;
         }
         d.moved = true; d.dx = dx; d.dy = dy;
-        this.drawLayer.setOffset(new Set(d.ids), dx, dy);
+        if (!this.ui.data.heightPatches) this.drawLayer.setOffset(new Set(d.ids), dx, dy);
         break;
       }
       case 'terrain': this.paintTerrainAt(d, w); break;
@@ -3259,7 +3295,10 @@ export class Board {
       }
       case 'drawmove':
         this.drawLayer.setOffset(new Set(), 0, 0);
-        if (d.moved) void this.client.moveDrawings(d.ids, d.dx, d.dy);
+        if (d.moved) {
+          if (this.ui.data.heightPatches) this.editPickedGround({delta:{x:d.dx,y:d.dy}});
+          else void this.client.moveDrawings(d.ids, d.dx, d.dy);
+        }
         break;
       case 'drawresize': {
         const patch = d.patch;
@@ -3346,7 +3385,8 @@ export class Board {
     }
 
     if ((e.key === 'Delete' || e.key === 'Backspace') && ui.data.drawSel.size) {
-      void c.removeDrawings([...ui.data.drawSel]);
+      if (ui.data.heightPatches) this.editPickedGround('delete');
+      else void c.removeDrawings([...ui.data.drawSel]);
       ui.selectDrawings([]);
       e.preventDefault();
       return;
@@ -3393,7 +3433,8 @@ export class Board {
       const step = c.grid.cell * (e.shiftKey ? 1 : 0.25);
       const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
       const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
-      void c.moveDrawings([...ui.data.drawSel], dx, dy);
+      if (ui.data.heightPatches) this.editPickedGround({delta:{x:dx,y:dy}});
+      else void c.moveDrawings([...ui.data.drawSel], dx, dy);
       return;
     }
     if (e.key.startsWith('Arrow') && ui.data.selection.size) {

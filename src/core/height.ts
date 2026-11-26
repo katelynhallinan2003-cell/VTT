@@ -2,9 +2,6 @@
 import type { Drawing, GridSettings, Vec } from '../types';
 import { groundAtTerrain, heightColor, terrainOf, type Terrain } from './terrain';
 
-/** Maximum change in painted height that forms a walkable grade. */
-export const STAIR_FT = 5;
-
 /** Quick heights to choose from when painting ground. */
 export const ZONE_PRESETS = [-10, 5, 10, 15, 20, 30, 40, 60];
 
@@ -23,31 +20,7 @@ export const dimOf = (draws: Iterable<Drawing>, grid: GridSettings): Terrain => 
 export const isRough = (rough: Terrain, p: Vec): boolean => rough.areas.length > 0 && groundAtTerrain(rough, p) > 0;
 
 /** How high the ground is at a point, in feet. Painted areas are stacked bottom to top (each one sets the height or adds to it); no area means 0. */
-const diagonal = Math.SQRT1_2;
-const rays = [[1, 0], [-1, 0], [0, 1], [0, -1], [diagonal, diagonal], [-diagonal, diagonal], [diagonal, -diagonal], [-diagonal, -diagonal]];
-
-export function groundAt(zones: Terrain, p: Vec): number {
-  if (!zones.areas.length) return 0;
-  const h = groundAtTerrain(zones, p);
-  const radius = zones.grid.cell * STAIR_FT / (2 * zones.grid.ft);
-  let upDistance = radius, downDistance = radius, up = 0, down = 0;
-  // Spread a small change equally across its painted boundary. A ledge keeps its full height.
-  for (const [dx, dy] of rays) {
-    const sample = (r: number) => groundAtTerrain(zones, { x: p.x + dx * r, y: p.y + dy * r });
-    const other = sample(radius);
-    if (other === h || Math.abs(other - h) > STAIR_FT) continue;
-    let lo = 0, hi = radius;
-    for (let i = 0; i < 7; i++) {
-      const mid = (lo + hi) / 2;
-      if (sample(mid) === h) lo = mid; else hi = mid;
-    }
-    const edge = sample(hi) - h;
-    if (edge > 0 && edge <= STAIR_FT && hi < upDistance) { upDistance = hi; up = edge; }
-    if (edge < 0 && edge >= -STAIR_FT && hi < downDistance) { downDistance = hi; down = edge; }
-  }
-  const change = up * (1 - upDistance / radius) + down * (1 - downDistance / radius);
-  return Math.round((h + change / 2) * 10) / 10;
-}
+export const groundAt = groundAtTerrain;
 
 export interface Altitude {
   /** feet above the map's base level */

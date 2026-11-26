@@ -1,7 +1,6 @@
 import type { GridSettings, Vec } from '../types';
 import { pathFt } from './geometry';
-import { currentOverlay } from './gridOverlay';
-import { STAIR_FT, walkExtra, type WalkCtx } from './walk';
+import { roughDistance, type WalkCtx } from './walk';
 import type { TerrainEdge } from './terrainEdges';
 import { sideOf, type Seg } from './walls';
 
@@ -47,23 +46,20 @@ export function movementCost(grid: GridSettings, path: Vec[], flyer: number | nu
   edges: TerrainEdge[], walls: Seg[]) {
   const flightRuns: number[] | undefined = flyer === null ? undefined : [];
   const flat = pathFt(grid, path, [], flightRuns);
-  const free = currentOverlay(grid) === 'none';
-  let extra = 0, climb = 0, straight = 0, rough = 0, run = 0;
+  let climb = 0, rough = 0, run = 0;
   const air: AirPoint[] = [];
-  const surface = ctx.surface ?? ctx.ground;
   for (let i = 1; i < path.length; i++) {
     const a = path[i-1], b = path[i], dx = b.x-a.x, dy = b.y-a.y;
     const length = Math.hypot(dx,dy);
     if (!length) continue;
     const ft = flightRuns ? flightRuns[i - 1] - run : length * grid.ft / grid.cell;
-    const hits = new Map<number, { rise: number; wallRise: number; wall: number }>();
+    const hits = new Map<number, { rise: number; wall: number }>();
     const hit = (t: number) => {
       const key = Math.max(0, Math.min(1, Math.round(t*1e9)/1e9));
       let h = hits.get(key);
-      if (!h) { h = {rise:0, wallRise:0, wall:0}; hits.set(key,h); }
+      if (!h) { h = {rise:0, wall:0}; hits.set(key,h); }
       return h;
     };
-    const gradients: { t: number; slope: number }[] = [];
     for (const e of edges) {
       const t = crossing(a,b,e);
       if (t === null) continue;
@@ -73,12 +69,6 @@ export function movementCost(grid: GridSettings, path: Vec[], flyer: number | nu
       if (t >= -EPS && t <= 1+EPS) {
         const h = hit(t);
         h.rise += rise;
-        if (!e.stair) h.wallRise += rise;
-      }
-      if (free && flyer === null && e.stair && normal) {
-        const width = STAIR_FT/Math.abs(normal);
-        const lo = Math.max(0,t-width/(2*ft)), hi = Math.min(1,t+width/(2*ft));
-        if (lo < hi) gradients.push({t:lo,slope:rise/width},{t:hi,slope:-rise/width});
       }
     }
     for (const w of walls) {
@@ -89,7 +79,7 @@ export function movementCost(grid: GridSettings, path: Vec[], flyer: number | nu
       h.wall = Math.max(h.wall,w.wallHeight);
     }
     const atStart = ctx.ground(a), atEnd = ctx.ground(b);
-    if (flyer !== null) air.push({run,z:Math.max(flyer,surface(a))});
+    if (flyer !== null) air.push({run,z:Math.max(flyer,atStart)});
     let height = atStart;
     for (const [t,h] of [...hits].sort((x,y)=>x[0]-y[0])) {
       // A route ending exactly on a terrain edge uses the actual endpoint elevation.
@@ -102,41 +92,27 @@ export function movementCost(grid: GridSettings, path: Vec[], flyer: number | nu
       if (flyer !== null) {
         if (rise || h.wall) air.push({run:run+t*ft,z:Math.max(flyer,summit)});
       } else {
-        if (h.wallRise && rise) climb += Math.min(Math.abs(h.wallRise),Math.abs(rise));
+        climb += Math.abs(rise);
         if (h.wall) {
           // On level ground a freestanding wall costs both faces. A wall along
           // a platform edge adds only the part above the platform.
           const above = summit-high;
           climb += above * (t === 0 || t === 1 ? 1 : 2);
-          if (!h.wallRise) climb += Math.abs(rise);
         }
       }
       height = next;
     }
     if (flyer !== null) {
       run += ft;
-      air.push({run,z:Math.max(flyer,surface(b))});
+      air.push({run,z:Math.max(flyer,atEnd)});
       continue;
     }
-    if (free) {
-      let slope = 0, prev = 0;
-      for (const g of gradients.sort((a,b)=>a.t-b.t)) {
-        extra += (Math.hypot(1,slope)-1)*(g.t-prev)*ft;
-        slope += g.slope; prev = g.t;
-      }
-    }
-    const e = walkExtra(grid,a,b,{ ...ctx, ground: free ? () => 0 : ctx.ground, surface: undefined,
-      stairAt: (p,q) => !edges.some(edge => {
-        if (edge.stair) return false;
-        const t = crossing(p,q,edge);
-        return t !== null && t > EPS && t <= 1+EPS;
-      }) },straight);
-    extra += e.extraFt; straight += e.straightStairs; rough += e.rough*grid.ft;
+    rough += roughDistance(grid,a,b,ctx.rough);
   }
   if (flyer !== null) {
     return {ft:rounded(airDistance(air)),note:''};
   }
-  const normal = rounded(flat+extra), climbing = rounded(climb);
+  const normal = rounded(flat+rough), climbing = rounded(climb);
   const note = climbing ? `${normal} ft normal + ${climbing} ft climbing` : rough ? `difficult ground +${rounded(rough)} ft` : '';
   return {ft:rounded(normal+climbing),note};
 }

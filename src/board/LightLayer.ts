@@ -5,6 +5,19 @@ import type { Seg } from '../core/walls';
 import type { Ambient, Rect, Vec } from '../types';
 import { canvasTexture } from './textures';
 
+// A broad, faint fringe breaks up the cut-paper look of distant terrain.
+// A narrower pass keeps the visible face of a nearby ledge legible.
+function paintSightEdge(ctx:CanvasRenderingContext2D, feather:number, draw:()=>void) {
+  ctx.save();
+  ctx.filter=`blur(${feather}px)`;
+  ctx.globalAlpha=.45;
+  draw();
+  ctx.filter=`blur(${Math.max(.65,feather*.28)}px)`;
+  ctx.globalAlpha=1;
+  draw();
+  ctx.restore();
+}
+
 /** A canvas, the texture on it, and the sprite that shows it. */
 class Paper {
   readonly canvas = document.createElement('canvas');
@@ -61,9 +74,10 @@ export class LightLayer {
   readonly container = new Container();
   private shade = new Paper();
   private glow = new Paper();
-  private seenPaper = new Paper(true);
+  private seenPaper = new Work();
+  sightRevision = 0;
   private seenFrame: Frame | null = null;
-  private litPaper = new Paper();
+  private litPaper = new Work();
   private liftShade = new Work();
   private liftSeen = new Work();
   private workA = new Work();
@@ -87,8 +101,7 @@ export class LightLayer {
     this.tint.visible = false;
   }
 
-  /** Whatever shows the shape of what is seen; Board adds it where the fog is and uses it as a mask. */
-  get seenSprite(): Sprite { return this.seenPaper.sprite; }
+  get sightCanvas(): HTMLCanvasElement { return this.seenPaper.canvas; }
 
   hide() { this.container.visible = false; }
 
@@ -134,7 +147,7 @@ export class LightLayer {
   /** Antialias the union in map coordinates. One fill keeps adjoining faces seamless. */
   paintBrightSeen(f: Frame, shapes: {x:number; y:number; r:number; poly:Vec[] | null}[], feather:number) {
     this.seenKey = '';
-    this.seenPaper.fit(f.w,f.h,f.origin,f.scale);
+    this.seenPaper.size(f.w,f.h);
     const ctx=this.seenPaper.ctx;
     ctx.save();
     ctx.setTransform(1,0,0,1,0,0);
@@ -149,19 +162,18 @@ export class LightLayer {
       }
       ctx.closePath();
     }
-    ctx.filter=`blur(${feather}px)`;
     ctx.fillStyle='#fff';
-    ctx.fill();
+    paintSightEdge(ctx,feather,()=>ctx.fill());
     ctx.restore();
-    this.seenPaper.upload();
+    this.sightRevision++;
   }
 
   /** Paint the shape of what the viewers can see in the dark, in the same frame as the fog's own canvas. */
   paintSeen(f: Frame, lights: LightSrc[], viewers: Viewer[], segs: Seg[], painted: PaintedLight | null, key: string, feather:number) {
     const k = `${key}|${f.w}x${f.h}|${f.origin.x},${f.origin.y},${f.scale}`;
-    const remade = this.seenPaper.fit(f.w, f.h, f.origin, f.scale);
-    this.litPaper.fit(f.w, f.h, f.origin, f.scale);
-    if (!remade && k === this.seenKey) return;
+    if (k === this.seenKey) return;
+    this.seenPaper.size(f.w,f.h);
+    this.litPaper.size(f.w,f.h);
     this.seenKey = k;
     this.seenFrame = f;
     const on = hasPaintedLight(painted) ? painted : null;
@@ -174,11 +186,20 @@ export class LightLayer {
     raw.drawImage(seen.canvas,0,0);
     raw.globalCompositeOperation='source-over';
     seen.save();
-    seen.globalCompositeOperation='copy';
+    seen.setTransform(1,0,0,1,0,0);
+    seen.clearRect(0,0,f.w,f.h);
+    seen.globalCompositeOperation='source-over';
+    // Darkness also carries fractional light levels. Blend the two soft
+    // edges additively so a uniformly dim patch retains its original alpha.
     seen.filter=`blur(${feather}px)`;
+    seen.globalAlpha=.3;
+    seen.drawImage(raw.canvas,0,0);
+    seen.globalCompositeOperation='lighter';
+    seen.filter=`blur(${Math.max(.65,feather*.28)}px)`;
+    seen.globalAlpha=.7;
     seen.drawImage(raw.canvas,0,0);
     seen.restore();
-    this.seenPaper.upload();
+    this.sightRevision++;
   }
 
   /** Can the party see this spot right now (when it is dark and sight follows the light)? */
@@ -187,7 +208,8 @@ export class LightLayer {
     if (!f) return false;
     const x = Math.floor((p.x - f.origin.x) * f.scale), y = Math.floor((p.y - f.origin.y) * f.scale);
     if (x < 0 || y < 0 || x >= f.w || y >= f.h) return false;
-    return this.seenPaper.ctx.getImageData(x, y, 1, 1).data[3] > 127;
+    // Picking uses the raw visibility, before the artwork's edge is softened.
+    return this.litPaper.ctx.getImageData(x, y, 1, 1).data[3] > 127;
   }
 
   /** Give the big canvases back when the scene is not dark. */
@@ -198,8 +220,6 @@ export class LightLayer {
   destroy() {
     this.shade.destroy();
     this.glow.destroy();
-    this.seenPaper.destroy();
-    this.litPaper.destroy();
     this.tintDay.destroy();
     this.tintDim.destroy();
     this.container.destroy({ children: false });

@@ -166,6 +166,21 @@ await sleep(250);
 const downhill = await samples();
 check('a player on the plateau sees beyond the hidden base of its wall',
   downhill[0] < bright[0]-15 && downhill[1] > before[1]-10, JSON.stringify(downhill));
+await player.evaluate(()=>window.__vtt.board.zoomBy(5));
+const zoomed=[];
+for (const cells of [1.5,7]) {
+  const screen=await player.evaluate(({id,cells})=>{
+    const {client,board}=window.__vtt,t=client.scene.tokens.get(id);
+    const p={x:t.x+cells*client.grid.cell,y:t.y};
+    board.centerOn(p);
+    return board.worldToScreen(p);
+  },{id:tokenId,cells});
+  await player.evaluate(()=>new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done))));
+  zoomed.push((await samples([screen]))[0]);
+}
+check('zooming and panning keeps the hidden cliff base and the visible ground aligned',
+  !(await player.evaluate(()=>window.__vtt.board.app.renderer.gl.isContextLost())) &&
+  zoomed[0]<zoomed[1]-15 && zoomed[1]>25,JSON.stringify(zoomed));
 await browser.close();
 console.log(errors.length ? errors.join('\n') : 'no console problems');
 console.log(`${results.filter(Boolean).length}/${results.length} checks passed`);

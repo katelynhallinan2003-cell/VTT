@@ -1704,6 +1704,18 @@ export class Board {
     this.invalidate();
   }
 
+  private useFogMask(sprite:Sprite, kind:'' | 'g' | 's') {
+    // Compose terrain sight into the bounded map bitmap. A sprite mask would
+    // allocate a full zoomed-map framebuffer even for the part off screen.
+    const light=this.lightLayer;
+    if (this.fogMask.setSight(kind==='s' ? light.sightCanvas : null,kind==='s' ? light.sightRevision : 0))
+      sprite.texture.source.update();
+    if (this.fogMaskKind===kind) return;
+    if (this.fogMaskKind==='g') sprite.setMask({mask:null});
+    if (kind==='g') sprite.setMask({mask:this.visionG,inverse:true});
+    this.fogMaskKind=kind;
+  }
+
   /** Cut the fog open where the tokens can see; returns a test for "can this spot be seen right now" (null when there is no fog). */
   private drawVisionShape(): ((p: Vec) => boolean) | null {
     const L = this.lighting();
@@ -1711,18 +1723,21 @@ export class Board {
     const sprite = this.fogSprite;
     if (!sprite?.visible) return null;
     const meta = this.client.scene?.meta;
-    const feather=Math.max(.75,Math.min(3.5,.25*this.client.grid.cell/this.client.grid.ft*this.fogMask.scale));
+    // Terrain silhouettes spread over the artwork; doors and drawn walls
+    // keep a tighter contact edge on maps without painted heights.
+    const terrainFeather=this.zones.areas.length ? .85 : .25;
+    const feather=Math.max(.75,Math.min(9,terrainFeather*this.client.grid.cell/this.client.grid.ft*this.fogMask.scale));
     // in the dark, a token only sees what is lit (or what its darkvision reaches): the fog is cut open in that shape
     if (L && L.ambient === 'dark' && sprite.visible && meta?.fog.enabled && meta.fog.vision) {
       this.brightVision = null;
       this.visionG.clear();
       if (!L.viewers.length) {
-        if (this.fogMaskKind) { sprite.setMask({ mask: null }); this.fogMaskKind = ''; }
+        this.useFogMask(sprite,'');
         return () => false;
       }
       const m = this.fogMask;
       this.lightLayer.paintSeen({ origin: m.origin, scale: m.scale, w: m.canvas.width, h: m.canvas.height }, L.lights, L.viewers, this.wallSegs().sight, L.painted, L.key, feather);
-      if (this.fogMaskKind !== 's') { sprite.setMask({ mask: this.lightLayer.seenSprite, inverse: true }); this.fogMaskKind = 's'; }
+      this.useFogMask(sprite,'s');
       return (p) => this.lightLayer.seenAt(p);
     }
     const g = this.visionG;
@@ -1730,14 +1745,18 @@ export class Board {
     if (!circles.length) {
       this.brightVision = null;
       g.clear();
-      if (this.fogMaskKind) { sprite.setMask({ mask: null }); this.fogMaskKind = ''; }
+      this.useFogMask(sprite,'');
       return sprite.visible ? () => false : null;
     }
     // a wall cuts the circle back to what the token could really see from where it stands
     const sight = this.wallSegs().sight;
     const {origin,scale,canvas}=this.fogMask;
     const key = [origin.x,origin.y,scale,canvas.width,canvas.height,...circles.flatMap(c => [c.x,c.y,c.r,c.alt])].join(',');
-    if (this.fogMaskKind && this.brightVision?.segs === sight && this.brightVision.key === key) return this.brightVision.contains;
+    if (this.fogMaskKind && this.brightVision?.segs === sight && this.brightVision.key === key) {
+      // The fog can be cleared and re-covered without moving any viewer.
+      this.useFogMask(sprite,this.fogMaskKind);
+      return this.brightVision.contains;
+    }
     g.clear();
     const shapes: { x: number; y: number; r: number; poly: Vec[] | null }[] = [];
     for (const c of circles) {
@@ -1758,11 +1777,7 @@ export class Board {
       for (const c of circles) g.circle(c.x,c.y,c.r);
       g.fill(0xffffff);
     }
-    const kind=masked ? 's' : 'g';
-    if (this.fogMaskKind!==kind) {
-      sprite.setMask({mask:masked ? this.lightLayer.seenSprite : g,inverse:true});
-      this.fogMaskKind=kind;
-    }
+    this.useFogMask(sprite,masked ? 's' : 'g');
     const contains = (p: Vec) => shapes.some(c => c.poly ? pointInPoly(p,c.poly) : Math.hypot(p.x-c.x,p.y-c.y) <= c.r);
     this.brightVision = {segs:sight,key,contains};
     return contains;
@@ -2028,7 +2043,7 @@ export class Board {
     const sizeKey = `${this.fogMask.canvas.width}x${this.fogMask.canvas.height}`;
     if (!this.fogSprite) {
       this.fogSprite = new Sprite(Texture.EMPTY);
-      this.fogLayer.addChild(this.fogSprite, this.visionG, this.lightLayer.seenSprite);
+      this.fogLayer.addChild(this.fogSprite, this.visionG);
     }
     if (sizeKey !== this.fogTexSize || this.fogSprite.texture === Texture.EMPTY) {
       const old = this.fogSprite.texture;

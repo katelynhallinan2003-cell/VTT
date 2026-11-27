@@ -38,6 +38,8 @@ export interface Seg {
   passage?: boolean;
   /** Painted terrain carries the scale used to measure how far its near face can be seen. */
   terrainPxPerFt?: number;
+  /** Live terrain only: height of a sloping rim where the sightline actually crosses. */
+  sightCrest?: (p:Vec)=>number | undefined;
   low?: number;
   climbable?: boolean;
   /** Height above the local ground for an authored wall. Cliffs carry only an absolute top. */

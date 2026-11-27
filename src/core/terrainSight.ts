@@ -129,13 +129,14 @@ function surfaceView(o: Vec, x: number, y: number, r:number, eye:number, surface
   };
 
   const walls=hits.filter(h=>h.seg.top!==undefined && (h.seg.terrainPxPerFt===undefined ||
-    (!surface.gradientVision && h.seg.top-(h.seg.low ?? -Infinity)>.05)));
+    (!surface.gradientVision && (h.seg.sightCrest || h.seg.top-(h.seg.low ?? -Infinity)>.05))));
   let skyline=-Infinity, wall=0, at=0;
   const sweep=(lo:number,hi:number,height:SightRegion['height']) => {
     while (lo<hi) {
       while (wall<walls.length && walls[wall].d<=lo) {
         const hit=walls[wall++];
-        skyline=Math.max(skyline,(hit.seg.top!-eye)/hit.d);
+        const top=hit.seg.sightCrest ? hit.seg.sightCrest({x:o.x+x*hit.d,y:o.y+y*hit.d}) : hit.seg.top;
+        if (top!==undefined) skyline=Math.max(skyline,(top-eye)/hit.d);
       }
 
       const end=Math.min(hi,walls[wall]?.d ?? hi);

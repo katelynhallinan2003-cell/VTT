@@ -370,6 +370,25 @@ export function terrainEdges(t: Terrain, levelJoins?: Seg[], maps:Rect[]=[]): Te
         if(!maps.some(r=>rectContains(r,at(mid,1e-5))) || !maps.some(r=>rectContains(r,at(mid,-1e-5)))) continue;
       }
       const ls = surfaces.get(left), rs = surfaces.get(right);
+      // All retained pieces of this boundary share the same two surfaces,
+      // including the fragments that survive a wall eraser stroke.
+      const leftHeight=left, rightHeight=right;
+      // Sample along the rim itself so a long painted control line is not
+      // re-evaluated for every ray on every frame. Both ends stay pinned.
+      const count=Math.max(1,Math.min(4096,Math.ceil(len/(t.grid.cell/t.grid.ft*.125))));
+      const samples:[number,number][]=[];
+      const sample=(index:number):[number,number]=>{
+        if (samples[index]) return samples[index];
+        const p=at(start+len*index/count);
+        return samples[index]=[ls ? surfaceHeight(ls.area,p)+ls.offset : leftHeight,
+          rs ? surfaceHeight(rs.area,p)+rs.offset : rightHeight];
+      };
+      const slopeCrest=ls || rs ? (p:Vec)=>{
+        const u=Math.max(0,Math.min(count,(ux*p.x+uy*p.y-start)*count/len));
+        const i=Math.min(count-1,Math.floor(u)), f=u-i, a=sample(i), b=sample(i+1);
+        const lh=a[0]+(b[0]-a[0])*f, rh=a[1]+(b[1]-a[1])*f;
+        return Math.abs(lh-rh)>.05 ? Math.max(lh,rh) : undefined;
+      } : undefined;
       const pieces = ls || rs ? Math.max(1,Math.ceil(len / (t.grid.cell / 2))) : 1;
       for (let j=0; j<pieces; j++) {
         const middle = at(start+len*(j+0.5)/pieces);
@@ -380,6 +399,7 @@ export function terrainEdges(t: Terrain, levelJoins?: Seg[], maps:Rect[]=[]): Te
           continue;
         }
         out.push({a:at(start+len*j/pieces), b:at(start+len*(j+1)/pieces),
+          ...(slopeCrest ? {sightCrest:slopeCrest} : {}),
           low:Math.min(lh,rh), top:Math.max(lh,rh), one:lh<rh ? 1 : -1, terrainPxPerFt:t.grid.cell/t.grid.ft});
       }
     }

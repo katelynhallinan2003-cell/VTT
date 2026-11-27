@@ -1,6 +1,6 @@
 import { DEFAULT_GRID, normalizeDrawing } from '../src/core/model';
 import { terrainOf, groundAtTerrain } from '../src/core/terrain';
-import { withSightTerrain } from '../src/core/terrainEdges';
+import { terrainEdges, withSightTerrain } from '../src/core/terrainEdges';
 import { describe, expect, it } from 'vitest';
 import { clipToConvex, darkPoly, eraseStops, lightOf, lightPoly, litSeen, ringPoly, SHADE, sightHeight, sightPoly, viewerOf, type LightSrc } from '../src/core/light';
 import { inPoly, visibilityPolygon, routeReveal } from '../src/core/walls';
@@ -228,6 +228,17 @@ describe('shadows at creature eye height', () => {
         expect(sees(190,0)).toBe(!gradientVision);
         expect(sees(52,54)).toBe(false);
       }
+    }
+  });
+
+  it('sees across the lower end of a sloping wall while its higher end still casts a shadow',()=>{
+    const gradient=[-30,30].map(y=>({id:String(y),height:6+y/5,path:[{x:40,y},{x:50,y}]}));
+    const terrain=terrainOf([normalizeDrawing('rim',{k:'rect',p:'40,-30,50,30',hz:6,gradient,gradientFixed:true})!],
+      {...DEFAULT_GRID,cell:200,ft:5});
+    const segs=withSightTerrain(terrainEdges(terrain),terrain,[],false);
+    for(const y of [-20,20]){
+      const v=visibilityPolygon({x:0,y},120,segs,64,10);
+      expect([v.poly,...v.faces].some(p=>inPoly({x:100,y},p))).toBe(y<0);
     }
   });
 

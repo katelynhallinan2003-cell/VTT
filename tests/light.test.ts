@@ -1,3 +1,6 @@
+import { DEFAULT_GRID, normalizeDrawing } from '../src/core/model';
+import { terrainOf, groundAtTerrain } from '../src/core/terrain';
+import { withSightTerrain } from '../src/core/terrainEdges';
 import { describe, expect, it } from 'vitest';
 import { clipToConvex, darkPoly, eraseStops, lightOf, lightPoly, litSeen, ringPoly, SHADE, sightHeight, sightPoly, viewerOf, type LightSrc } from '../src/core/light';
 import { inPoly, visibilityPolygon, routeReveal } from '../src/core/walls';
@@ -183,6 +186,57 @@ describe('shadows at creature eye height', () => {
     expect(sees(0,45,[rim],85)).toBe(true);
     expect(sees(0,35,[rim,shelf],68)).toBe(true);
     expect(sees(0,35,[rim,wall(100,-200,100,200)],165)).toBe(false);
+  });
+
+  it('sees a continuous rise and its crest from eleven positions inside an unbroken gradient', () => {
+    const grid={...DEFAULT_GRID,cell:5,ft:5};
+    const controls=[[0,0],[100,25],[200,0]].map(([x,height])=>({
+      id:String(x), height, path:[{x,y:-50},{x,y:50}]
+    }));
+    const slope=normalizeDrawing('hill',{k:'rect',hz:0,p:'0,-50,200,50',gradient:controls,gradientFixed:true})!;
+    const terrain=terrainOf([slope],grid);
+    // A map-wide gradient can have no wall segments whatsoever.
+    const segs=withSightTerrain([],terrain,[]);
+    for (let x=10;x<=60;x+=5) {
+      const pos={x,y:0}, eye=groundAtTerrain(terrain,pos)+5;
+      const view=visibilityPolygon(pos,220,segs,64,eye);
+      const sees=(x:number)=>[view.poly,...view.faces].some(poly=>inPoly({x,y:0},poly));
+      expect(sees(100)).toBe(true);
+      expect(sees(190)).toBe(false);
+    }
+    const start={x:40,y:0};
+    const memory=routeReveal([start],220,segs,5,groundAtTerrain(terrain,start)+5);
+    expect(memory.every(s=>s.t==='poly' && !inPoly({x:190,y:0},s.pts))).toBe(true);
+    const barrier=withSightTerrain([wall(65,-60,65,60)],terrain,[]);
+    const view=visibilityPolygon(start,220,barrier,64,groundAtTerrain(terrain,start)+5);
+    expect([view.poly,...view.faces].some(p=>inPoly({x:100,y:0},p))).toBe(false);
+  });
+
+  it('keeps a bridge passage local to its deck on a gradient map',()=>{
+    const grid={...DEFAULT_GRID,cell:5,ft:5};
+    const ground=normalizeDrawing('slope',{k:'rect',hz:0,p:'0,-80,200,80',gradientFixed:true,
+      gradient:[{id:'a',height:0,path:[{x:0,y:0}]},{id:'b',height:1,path:[{x:200,y:0}]}]})!;
+    const deck=normalizeDrawing('deck',{k:'rect',hz:20,p:'50,-40,80,40'})!;
+    const terrain=terrainOf([ground,deck],grid);
+    const entry=wall(50,-30,50,30),exit=wall(80,-30,80,30);
+    const clear=(cuts:Seg[])=>{
+      const view=visibilityPolygon({x:10,y:0},200,withSightTerrain([],terrain,cuts),64,5);
+      return [view.poly,...view.faces].some(p=>inPoly({x:140,y:0},p));
+    };
+    expect(clear([])).toBe(false);
+    expect(clear([entry])).toBe(false);
+    expect(clear([entry,exit])).toBe(true);
+  });
+
+  it('reveals farther onto an uphill terrace as the observer steps back',()=>{
+    const ledge:Seg={...wall(0,-500,0,500),one:1,top:15,low:0,terrainPxPerFt:1};
+    const seen:number[]=[];
+    for(let d=10;d<=110;d+=10) {
+      const v=visibilityPolygon({x:-d,y:0},180,[ledge],64,5);
+      seen.push(Array.from({length:30},(_,x)=>inPoly({x:x+.5,y:0},v.poly)).filter(Boolean).length);
+    }
+    expect(seen).toEqual([...seen].sort((a,b)=>a-b));
+    expect(seen.at(-1)!).toBeGreaterThan(seen[0]);
   });
 
   it('sees across a level wall top at each creature size on a hill or in flight', () => {

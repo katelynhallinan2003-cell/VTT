@@ -1,7 +1,7 @@
 // A terrain sightline can reveal several separate stretches of ground. Work with
 // those stretches directly so crossing a brush segment endpoint never opens a seam.
-import type { Vec } from '../types';
-import { closeNarrowShadows, distToSeg, rayHit, simplifyPoly, type Seg, type Visibility } from './walls';
+import type { Rect, Vec } from '../types';
+import { closeNarrowShadows, rayHit, simplifyPoly, type Seg, type Visibility } from './walls';
 
 type Edge = {seg: Seg; inset: number; groundAfter?: number};
 type Band = [number, number];
@@ -50,7 +50,124 @@ function downhillView(hits: (Edge & {d: number})[], eye: number, radius: number)
   return visible;
 }
 
-function sampleSight(o: Vec, r: number, near: Edge[], eye: number, scale: number, n: number) {
+export type SightRegion = {bounds:Rect; rings: Vec[][]; height: number | ((x:number,y:number) => number)};
+type Surface = {regions: SightRegion[]; scale: number; openings: Seg[]};
+export type SightSegments = Seg[] & {surface?: Surface};
+export function nearbySurface(surface:Surface | undefined, o:Vec, r:number): Surface | undefined {
+  if (!surface) return;
+  const regions=surface.regions.filter(({bounds:b})=>
+    o.x+r>=b.x && o.y+r>=b.y && o.x-r<=b.x+b.w && o.y-r<=b.y+b.h);
+  return regions.some(region=>typeof region.height==='function') ? {...surface,regions} : undefined;
+}
+type Hit = Edge & {d:number; incidence:number};
+type Span = {lo:number; hi:number; height:SightRegion['height']};
+
+// Intersect the finished polygons, counting each shared vertex once. Pairing
+// from the far end also handles an eye inside a region or inside one of its holes.
+function surfaceSpans(surface:Surface, o:Vec, radius:number, directions:Vec[]): Span[][] {
+  const n=directions.length, step=TAU/n;
+  const rows:Span[][]=Array.from({length:n},()=>[]);
+  for (const {rings,height} of surface.regions) {
+    const hits:number[][]=Array.from({length:n},()=>[]);
+    for (const ring of rings) for (let i=1;i<ring.length;i++) {
+      const seg={a:ring[i-1],b:ring[i]};
+      const a=Math.atan2(seg.a.y-o.y,seg.a.x-o.x);
+      const delta=wrap(Math.atan2(seg.b.y-o.y,seg.b.x-o.x)-a+Math.PI)-Math.PI;
+      const start=wrap(a+Math.min(0,delta));
+      const end=Math.ceil((start+Math.abs(delta))/step-1e-9);
+      for(let k=Math.ceil(start/step-1e-9);k<end;k++) {
+        const index=k%n, dir=directions[index];
+        const d=rayHit(o,dir.x,dir.y,seg);
+        if (Number.isFinite(d)) hits[index].push(d);
+      }
+    }
+    for(let i=0;i<n;i++) {
+      const crossings=hits[i].sort((a,b)=>a-b);
+      for (let j=crossings.length-1;j>=0;j-=2) {
+        const lo=crossings[j-1] ?? 0, hi=Math.min(crossings[j],radius);
+        if (hi>lo) rows[i].push({lo,hi,height});
+      }
+    }
+  }
+  for (const row of rows) row.sort((a,b)=>a.lo-b.lo);
+  return rows;
+}
+
+function groundRelief(height:number, eye:number) {
+  // Half a foot of ground detail downhill, up to the middle of a standing
+  // Medium creature uphill. Vary continuously as the viewer changes height.
+  return Math.max(.5,Math.min(2.5,(height-eye+5)/2));
+}
+
+// Follow the skyline across the actual painted surface. Flat intervals have
+// an analytic crossing; smooth intervals use contiguous linear pieces. Both
+// sides of a discontinuity are evaluated at the exact contour distance.
+function surfaceView(o: Vec, x: number, y: number, r:number, eye:number, surface:Surface, spans:Span[], hits:Hit[]): Band[] {
+  const cuts=surface.openings.map(s=>rayHit(o,x,y,s)).filter(d=>d<r).sort((a,b)=>a-b);
+  const visible: Band[]=[];
+  const show=(a:number,b:number) => {
+    if (b<=a) return;
+    const last=visible.at(-1);
+    if (last && a<=last[1]+1e-6) last[1]=Math.max(last[1],b);
+    else visible.push([a,b]);
+  };
+  const walls=hits.filter(h=>h.seg.terrainPxPerFt===undefined && h.seg.top!==undefined);
+  let skyline=-Infinity, wall=0, at=0;
+  const sweep=(lo:number,hi:number,height:SightRegion['height']) => {
+    while (lo<hi) {
+      while (wall<walls.length && walls[wall].d<=lo) {
+        const hit=walls[wall++];
+        skyline=Math.max(skyline,(hit.seg.top!-eye)/hit.d);
+      }
+
+      const end=Math.min(hi,walls[wall]?.d ?? hi);
+      const get=(d:number)=>typeof height==='number' ? height : height(o.x+x*d,o.y+y*d);
+      const steps=typeof height==='number' ? 1 : Math.min(512,Math.ceil((end-lo)/surface.scale));
+      let d=lo,h=get(lo);
+      for (let j=1;j<=steps;j++) {
+        const next=lo+(end-lo)*j/steps, hNext=get(next);
+        if (d>0) skyline=Math.max(skyline,(h-eye)/d);
+        const a=skyline===-Infinity ? 1 : h+groundRelief(h,eye)-eye-skyline*d;
+        const b=skyline===-Infinity ? 1 : hNext+groundRelief(hNext,eye)-eye-skyline*next;
+        if (a>=0 && b>=0) show(d,next);
+        else if ((a>=0)!==(b>=0)) {
+          const cross=d+(next-d)*a/(a-b);
+          if (a>=0) show(d,cross); else show(cross,next);
+        }
+        skyline=Math.max(skyline,(hNext-eye)/next);
+        d=next; h=hNext;
+      }
+      lo=end;
+    }
+  };
+  let floor:number | undefined, previous=0, cut=0;
+  const interval=(lo:number,hi:number,height:SightRegion['height'])=>{
+    if (hi<=lo) return;
+    if (!cuts.length) { sweep(lo,hi,height); return; }
+    const start=typeof height==='number' ? height : height(o.x+x*lo,o.y+y*lo);
+    while(cut<cuts.length && cuts[cut]<lo-1e-5) cut++;
+    const opened=cut<cuts.length && Math.abs(cuts[cut]-lo)<=1e-5;
+    // Enter under a deck only through an erased uphill edge. At a still-solid
+    // exit its back wall blocks sight; through an open exit resume ground sight.
+    if (opened && start>previous+.001) floor ??= previous;
+    if (floor!==undefined && !opened && Math.abs(start-previous)>.001) {
+      if (lo>0) skyline=Math.max(skyline,(previous-eye)/lo);
+      floor=undefined;
+    }
+    if (floor!==undefined && start<=floor+.001) floor=undefined;
+    sweep(lo,hi,floor ?? height);
+    previous=typeof height==='number' ? height : height(o.x+x*hi,o.y+y*hi);
+  };
+  for (const s of spans) {
+    if (s.lo>at) interval(at,s.lo,0);
+    if (s.hi>at) interval(Math.max(at,s.lo),s.hi,s.height);
+    at=Math.max(at,s.hi);
+  }
+  interval(at,r,0);
+  return visible;
+}
+
+function sampleSight(o: Vec, r: number, near: Edge[], eye: number, scale: number, n: number, surface?:Surface) {
   const angleStep = TAU/n;
   const buckets: Edge[][] = Array.from({length:n},() => []);
   for (const edge of near) {
@@ -63,11 +180,32 @@ function sampleSight(o: Vec, r: number, near: Edge[], eye: number, scale: number
   }
 
   const angles = buckets.map((_,i) => i*angleStep);
+  const dirs=angles.map(a=>({x:Math.cos(a),y:Math.sin(a)}));
+  const spans=surface && surfaceSpans(surface,o,r,dirs);
   const caps: number[] = [], reaches: number[] = [];
   const downhill: (Band[] | undefined)[] = [];
   const bands = buckets.map((edges,i) => {
-    const x = Math.cos(angles[i]), y = Math.sin(angles[i]);
-    const crossings = edges.map(e => ({...e,d:rayHit(o,x,y,e.seg)})).filter(h => h.d<r).sort((a,b) => a.d-b.d);
+    const {x,y} = dirs[i];
+    const crossings = edges.map(edge => {
+      const d = rayHit(o,x,y,edge.seg);
+      const {a,b} = edge.seg;
+      const ex = b.x-a.x, ey = b.y-a.y;
+      // The painted face has width across its contour. A grazing ray spends
+      // more distance crossing it, bounded near the ends of short segments.
+      const incidence = edge.inset ? Math.max(.5,Math.abs(x*ey-y*ex)/Math.hypot(ex,ey)) : 1;
+      const faceDepth = edge.inset/incidence;
+      // A one-foot detail on a terrace clears the near lip by similar triangles.
+      const inset = faceDepth && edge.groundAfter !== undefined
+        ? Math.max(faceDepth, d/(edge.seg.top!-eye)) : faceDepth;
+      return {...edge,d,inset,incidence};
+    }).filter(h => h.d<r).sort((a,b) => a.d-b.d);
+    const profiled=surface && surfaceView(o,x,y,r,eye,surface,spans![i],crossings);
+    if (profiled) {
+      const row=profiled[0]?.[0]===0 ? profiled : [[0,0] as Band,...profiled];
+      caps.push(crossings.find(h=>h.seg.top===undefined)?.d ?? r);
+      reaches.push(row[0][1]); downhill.push(undefined);
+      return row;
+    }
     const hasLowTerrain = crossings.some(h => h.groundAfter !== undefined && h.seg.top! <= eye);
     downhill.push(hasLowTerrain ? downhillView(crossings,eye,r) : undefined);
     const hits = hasLowTerrain ? crossings.filter(h => h.groundAfter === undefined || h.seg.top! > eye) : crossings;
@@ -85,7 +223,7 @@ function sampleSight(o: Vec, r: number, near: Edge[], eye: number, scale: number
       if (seg.top === undefined) break;
       const rise = seg.top-Math.max(seg.low ?? eye,eye+horizon*d);
       if (inset > 0 && previous > 0 && d+inset > reach && rise > 0) {
-        const inner = Math.max(previous,d-rise*scale);
+        const inner = Math.max(previous,d-rise*scale/hits[j].incidence);
         const outer = Math.min(d+inset,hits[j+1]?.d ?? r,horizon>0 ? (seg.top-eye)/horizon : r);
         if (outer > inner) visible.push([inner,outer]);
       }
@@ -94,8 +232,9 @@ function sampleSight(o: Vec, r: number, near: Edge[], eye: number, scale: number
     }
     return visible;
   });
-  closeNarrowShadows(angles,reaches);
   closeNarrowShadows(angles,caps);
+  if (surface) return cleanSurfaceBands(bands,caps,scale,angleStep);
+  closeNarrowShadows(angles,reaches);
   // A shadow needs a patch of ground both wide and deep enough to hide.
   // Dilate then erode in two dimensions so diagonal slivers and attached tips
   // disappear too. Restore the exact range and solid-wall limits afterwards.
@@ -119,7 +258,52 @@ function sampleSight(o: Vec, r: number, near: Edge[], eye: number, scale: number
       .filter(([lo,hi]) => hi>lo),2*margin);
   });
 
-  return rows;
+  // Remove the last half-foot of an angular stair step along a terrain
+  // silhouette. Limit the borrowed band by its *map distance* from the ray
+  // and by actual wall hits. Large distances never get a wider allowance.
+  const edgeRange = scale*.5/Math.sin(angleStep);
+  return rows.map((row,i) => {
+    const limit = Math.min(edgeRange,caps[i]);
+    const beside = intersect(merge([...rows[(i+n-1)%n],...rows[(i+1)%n]]),[[0,limit]]);
+    return merge([...row,...beside]);
+  });
+}
+
+// Compare like distances on either side of a shadow. Using a fixed angle here
+// used to erase a much wider strip of terrain as the viewer backed away.
+function cleanSurfaceBands(bands: Band[][], caps: number[], scale:number, angleStep:number): Band[][] {
+  const radius=caps.reduce((a,b)=>Math.max(a,b),0);
+  const width=2*scale;
+  const outside=(row:Band[]):Band[]=>{
+    const gaps:Band[]=[];
+    let end=0;
+    for(const [lo,hi] of row) {
+      if (lo>end) gaps.push([end,lo]);
+      end=hi;
+    }
+    if (end<radius) gaps.push([end,radius]);
+    return gaps;
+  };
+  const dilate=(rows:Band[][]) => {
+    const radial=rows.map(row=>merge(row.map(([a,b])=>[Math.max(0,a-width),Math.min(radius,b+width)])));
+    const n=rows.length, half=Math.ceil(n/36);
+    return radial.map((row,i)=>{
+      const spans=[...row];
+      for(let k=1;k<=half;k++){
+        const limit=width/Math.sin(k*angleStep);
+        for(const j of [(i+n-k)%n,(i+k)%n]) {
+          for(const [lo,hi] of radial[j]) {
+            if(lo>=limit) break;
+            spans.push([lo,Math.min(hi,limit)]);
+          }
+        }
+      }
+      return merge(spans);
+    });
+  };
+  const expanded=dilate(bands);
+  const hidden=dilate(expanded.map(outside));
+  return hidden.map((row,i)=>intersect(merge([...bands[i],...outside(row)]),[[0,caps[i]]]));
 }
 
 type Profile = Band[][];
@@ -170,96 +354,6 @@ function clearTerrainPockets(rows: Profile, scale: number): Profile {
   return rows.map(row => merge(row));
 }
 
-type ViewCache = {views: Map<string,Visibility>; projections: Map<string,Profile>};
-// The board replaces the segment array whenever its terrain or walls change.
-const profiles = new WeakMap<Seg[], ViewCache>();
-
-function cached<T>(cache: Map<string,T>, key: string, create: () => T): T {
-  let entry = cache.get(key);
-  if (!entry) {
-    entry=create();
-    if (cache.size>=48) cache.delete(cache.keys().next().value!);
-    cache.set(key,entry);
-  }
-  return entry;
-}
-
-// Express each viewpoint on the same stationary map rays before interpolation.
-// The half-open bearing interval assigns a shared polygon vertex to one edge.
-function project(view: Visibility, origin: Vec, n: number): Profile {
-  const buckets: {d:number; step:number}[][] = Array.from({length:n},() => []);
-  const angleStep=TAU/n;
-  for (const poly of [view.poly,...view.faces]) {
-    for (let i=0,a=poly[poly.length-1];i<poly.length;a=poly[i++]) {
-      const b=poly[i], seg={a,b};
-      let start=wrap(Math.atan2(a.y-origin.y,a.x-origin.x));
-      let span=wrap(Math.atan2(b.y-origin.y,b.x-origin.x)-start);
-      const step=span>Math.PI ? -1 : 1;
-      if (step<0) { start=wrap(start+span); span=TAU-span; }
-      const end=Math.ceil((start+span)/angleStep-1e-9);
-      for (let k=Math.ceil(start/angleStep-1e-9);k<end;k++) {
-        const j=(k+n)%n, angle=j*angleStep;
-        const d=rayHit(origin,Math.cos(angle),Math.sin(angle),seg);
-        if (Number.isFinite(d)) buckets[j].push({d,step});
-      }
-    }
-  }
-  return buckets.map(hits => {
-    hits.sort((a,b) => b.d-a.d);
-    let winding=0, far=0;
-    const row: Band[]=[];
-    for (const {d,step} of hits) {
-      if (!winding) far=d;
-      winding+=step;
-      if (!winding && far>d) row.push([d,far]);
-    }
-    row.push([0,winding ? far : 0]);
-    return merge(row);
-  });
-}
-
-// Signed distance along a ray is linear between band boundaries and the
-// midpoints between them. Blend the distances to let bands split or disappear.
-function blendBands(input: Band[][], weights: number[], r: number, scale: number): Band[] {
-  const first = input[0];
-  if (matchingBands(input)) {
-    return first.map((_,j) => [
-      input.reduce((v,row,k) => v+row[j][0]*weights[k],0),
-      input.reduce((v,row,k) => v+row[j][1]*weights[k],0)
-    ]);
-  }
-  const stops = new Set<number>([0,r]);
-  const edges = input.map(row => {
-    const cuts: number[] = [];
-    for (const [lo,hi] of row) {
-      if (lo>0) cuts.push(lo);
-      if (hi<r) cuts.push(hi);
-    }
-    cuts.forEach((x,j) => { stops.add(x); if (j) stops.add((x+cuts[j-1])/2); });
-    return cuts;
-  });
-  const sorted = [...stops].sort((a,b) => a-b);
-  const result: Band[] = [];
-  let start = 0, previous = 0, previousValue = 0;
-  for (const x of sorted) {
-    let value = 0;
-    for (let k=0;k<input.length;k++) {
-      let distance = edges[k].length ? Infinity : scale*2;
-      for (const cut of edges[k]) distance = Math.min(distance,Math.abs(cut-x));
-      value += weights[k]*distance*(input[k].some(([lo,hi]) => x>=lo && x<=hi) ? 1 : -1);
-    }
-    if (x && (value>=0)!==(previousValue>=0)) {
-      const crossing = previous+(x-previous)*previousValue/(previousValue-value);
-      if (value>=0) start = crossing;
-      else if (crossing>start) result.push([start,crossing]);
-    }
-    previous=x; previousValue=value;
-  }
-  if (previousValue>=0 && r>start) result.push([start,r]);
-  if (!result.length || result[0][0]>0) result.unshift([0,0]);
-  return result;
-}
-
 // Interpolate boundaries only when each visible face AND the intervening
 // shadow have a common range in every sample. Otherwise interpolation can
 // invent a shadow between unrelated ledges, on ground all the samples see.
@@ -283,82 +377,10 @@ function matchingBands(rows: Band[][]): boolean {
   return true;
 }
 
-export function terrainSight(o: Vec, r: number, near: Edge[], eye: number, steps: number, geometry: Seg[],
-  nearAt: (p: Vec, range: number) => Edge[]): Visibility {
-  const scale = near.find(e => e.seg.terrainPxPerFt !== undefined)!.seg.terrainPxPerFt!;
+export function terrainSight(o: Vec, r: number, near: Edge[], eye: number, steps: number, surface?: Surface): Visibility {
+  const scale = surface?.scale ?? near.find(e => e.seg.terrainPxPerFt !== undefined)!.seg.terrainPxPerFt!;
   const n = Math.max(steps,360,Math.min(720,Math.ceil(TAU*r/Math.max(1,scale))));
-  const angleStep = TAU/n;
-  // Adjacent positions share the four corner views. Short sight ranges need
-  // closer samples to distinguish a nearby shelf from the face beyond it.
-  const spacing = Math.min(6*scale,r/16);
-  const gx=o.x/spacing, gy=o.y/spacing, ix=Math.floor(gx), iy=Math.floor(gy);
-  const fx=gx-ix, fy=gy-iy;
-  const corners = [[ix,iy,(1-fx)*(1-fy)],[ix+1,iy,fx*(1-fy)],
-    [ix,iy+1,(1-fx)*fy],[ix+1,iy+1,fx*fy]].filter(c => c[2]>0);
-  const direct = () => outline(o,r,scale,sampleSight(o,r,near,eye,scale,n));
-  const origin={x:(ix+.5)*spacing,y:(iy+.5)*spacing};
-  const dx=o.x-origin.x, dy=o.y-origin.y;
-  const offsetDistance=Math.hypot(dx,dy);
-  const authored=near.filter(e => e.seg.terrainPxPerFt===undefined);
-  // Keep the exact shadow of a drawn wall or door. Its bearing from the
-  // stationary rays can differ from its bearing at the viewer by this margin.
-  const exactBearings=new Uint8Array(n);
-  for (const {seg} of authored) {
-    const distance=distToSeg(o,seg);
-    if (distance<=offsetDistance) return direct();
-    const margin=Math.asin(offsetDistance/distance)+angleStep;
-    const a=Math.atan2(seg.a.y-o.y,seg.a.x-o.x);
-    const b=Math.atan2(seg.b.y-o.y,seg.b.x-o.x);
-    const span=wrap(b-a+Math.PI)-Math.PI;
-    const start=Math.floor((a+Math.min(0,span)-margin)/angleStep);
-    const end=Math.ceil((a+Math.max(0,span)+margin)/angleStep);
-    for (let i=start;i<=end;i++) exactBearings[(i%n+n)%n]=1;
-  }
-  const padded=r+2*spacing;
-  let cache = profiles.get(geometry);
-  if (!cache) { cache={views:new Map(),projections:new Map()}; profiles.set(geometry,cache); }
-  const weights=corners.map(c => c[2]);
-  const samples=corners.map(([x,y]) => {
-    const key=[r,n,eye,scale,x,y].join(',');
-    return cached(cache.projections,key+'|'+ix+','+iy,() => {
-      const view=cached(cache.views,key,() => {
-        const p={x:x*spacing,y:y*spacing};
-        const terrain=nearAt(p,padded).filter(e => e.seg.terrainPxPerFt!==undefined);
-        const rows=sampleSight(p,padded,terrain,eye,scale,n);
-        return outline(p,padded,scale,rows);
-      });
-      return project(view,origin,n);
-    });
-  });
-  const blended = samples[0].map((_,i) => blendBands(samples.map(s => s[i]),weights,padded+spacing,scale));
-  // A notch in the far edge can appear where neighboring views meet. Bridge
-  // only the ground visible from both sides, keeping intervening shelves.
-  const reaches = blended.map(row => row.at(-1)![1]);
-  closeNarrowShadows(blended.map((_,i) => i*angleStep),reaches);
-  const bridged = blended.map((row,i) => {
-    const end=row.at(-1)![1];
-    if (end>=reaches[i]) return row;
-    let left=i, right=i;
-    while (blended[left].at(-1)![1]<reaches[i]) left=(left+n-1)%n;
-    while (blended[right].at(-1)![1]<reaches[i]) right=(right+1)%n;
-    const common=intersect(blended[left],blended[right]);
-    return merge([...row,...intersect(common,[[end,reaches[i]]])]);
-  });
-  const terrainRows = clearTerrainPockets(bridged,scale);
-  let directRows: Profile | undefined;
-  const rows=terrainRows.map((row,i) => {
-    const angle=i*angleStep, x=Math.cos(angle), y=Math.sin(angle);
-    if (exactBearings[i]) {
-      directRows ??= project(direct(),origin,n);
-      return directRows[i];
-    }
-    const offset=dx*x+dy*y;
-    const limit=offset+Math.sqrt(r*r-dx*dx-dy*dy+offset*offset);
-    return row.filter(([a]) => a<limit).map(([a,b]): Band => [a,Math.min(b,limit)]);
-  });
-  const result=outline(origin,r,scale,rows);
-  result.free=!authored.length && samples.every(sample => sample.every(row => row.length===1 && row[0][1]>=r+spacing));
-  return result;
+  return outline(o,r,scale,clearTerrainPockets(sampleSight(o,r,near,eye,scale,n,surface),scale));
 }
 
 function outline(o: Vec, r: number, scale: number, rows: Profile): Visibility {

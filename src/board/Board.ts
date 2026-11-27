@@ -9,7 +9,8 @@ import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
 import { altitudeOf, dayOf, dimOf, groundAt, heightNote, isRough, roughOf, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
 import { dragGradient, gradientPath, initialGradientLine } from '../core/gradientGeometry';
-import { areaShape, brushCuts, clippedBrush, patchStroke, connectedHeight, type TerrainEdge } from '../core/terrainEdges';
+import type { SightSegments } from '../core/terrainSight';
+import { withSightTerrain, areaShape, brushCuts, clippedBrush, patchStroke, connectedHeight, type TerrainEdge } from '../core/terrainEdges';
 import { movementCost } from '../core/movementCost';
 import { EMPTY_TERRAIN, MAX_STROKE_CELLS, slopeAt, surfaceHeight, standingGround, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
@@ -130,7 +131,7 @@ export class Board {
   private wallRunFirst: Vec | null = null;
   private wallRunCount = 0;
   private seenWallRev = -1;
-  private segCache: { scene: unknown; rev: number; ground: string; sight: Seg[]; move: Seg[]; terrain: TerrainEdge[]; levelJoins: Seg[]; openings: Seg[] } = { scene: null, rev: -1, ground: '', sight: [], move: [], terrain: [], levelJoins: [], openings: [] };
+  private segCache: { scene: unknown; rev: number; ground: string; sight: SightSegments; move: Seg[]; terrain: TerrainEdge[]; levelJoins: Seg[]; openings: Seg[] } = { scene: null, rev: -1, ground: '', sight: [], move: [], terrain: [], levelJoins: [], openings: [] };
   private auraG = new Graphics();
   private ghostLayer = new Container();
   private overlayG = new Graphics();
@@ -1179,7 +1180,7 @@ export class Board {
 
   // ------------------------------------------------------------------ walls
   /** The wall pieces that stop sight and walking, kept until the walls change. */
-  wallSegs(): { sight: Seg[]; move: Seg[]; terrain: TerrainEdge[]; levelJoins: Seg[]; openings: Seg[] } {
+  wallSegs(): { sight: SightSegments; move: Seg[]; terrain: TerrainEdge[]; levelJoins: Seg[]; openings: Seg[] } {
     const scene = this.client.scene;
     if (!scene) return { sight: [], move: [], terrain: [], levelJoins: [], openings: [] };
     const c = this.segCache;
@@ -1189,7 +1190,7 @@ export class Board {
       const {walls,terrain,levelJoins,openings}=this.client.wallGeometry();
       const list = [...walls.values()].filter(w=>!w.face);
       const topOf = (w: Wall) => groundAt(this.zones, wallMid(w)) + w.h;
-      this.segCache = { scene, terrain, levelJoins, openings, rev: scene.wallRev, ground: gsig, sight: [...sightSegs(list, topOf), ...terrain], move: moveSegs(list, topOf) };
+      this.segCache = { scene, terrain, levelJoins, openings, rev: scene.wallRev, ground: gsig, sight: withSightTerrain([...sightSegs(list, topOf), ...terrain],this.zones,openings), move: moveSegs(list, topOf) };
     }
     return this.segCache;
   }
@@ -1738,7 +1739,7 @@ export class Board {
     g.clear();
     const shapes: { x: number; y: number; r: number; poly: Vec[] | null }[] = [];
     for (const c of circles) {
-      if (sight.length) {
+      if (sight.length || sight.surface) {
         const v = visibilityPolygon({ x: c.x, y: c.y }, c.r, sight, 64, c.alt);
         if (!v.free) {
           for (const poly of [v.poly, ...v.faces]) {

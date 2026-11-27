@@ -9,7 +9,7 @@
 import type { GridSettings, Vec } from '../types';
 import { hexEdgeMid, isHex } from './hex';
 import { snapToCorner } from './geometry';
-import { terrainSight } from './terrainSight';
+import { nearbySurface, terrainSight, type SightSegments } from './terrainSight';
 
 export type WallKind = 'wall' | 'door' | 'window';
 /** 0 is a wall that stops both sides. 1 or -1 stops only what stands on that side of the line (see `sideOf`). */
@@ -243,13 +243,14 @@ function nearSightEdges(o: Vec, r: number, segs: Seg[], alt?: number) {
  * What a viewer at `o` can see out to distance `r`: a ring around them, cut back wherever a wall gets in the way.
  * Rays are cast at both sides of every wall end in range (so the outline hugs corners exactly) and at regular steps (so open ground stays round).
  */
-export function visibilityPolygon(o: Vec, r: number, segs: Seg[], steps = 64, alt?: number): Visibility {
+export function visibilityPolygon(o: Vec, r: number, segs: SightSegments, steps = 64, alt?: number): Visibility {
   const near = nearSightEdges(o,r,segs,alt);
   const ring = (n: number): Vec[] => Array.from({ length: n }, (_, i) => ({ x: o.x + Math.cos((i / n) * Math.PI * 2) * r, y: o.y + Math.sin((i / n) * Math.PI * 2) * r }));
-  if (!near.length) return { poly: ring(steps), faces: [], free: true };
-  if (near.some(n => n.seg.terrainPxPerFt !== undefined)) {
-    return terrainSight(o,r,near,alt ?? 0,steps,segs,(p,range) => nearSightEdges(p,range,segs,alt));
+  const surface=nearbySurface(segs.surface,o,r);
+  if (surface || near.some(n => n.seg.terrainPxPerFt !== undefined)) {
+    return terrainSight(o,r,near,alt ?? 0,steps,surface);
   }
+  if (!near.length) return { poly: ring(steps), faces: [], free: true };
   const angles: number[] = [];
   for (let i = 0; i < steps; i++) angles.push((i / steps) * Math.PI * 2 - Math.PI);
   const EPS = 1e-4;

@@ -26,7 +26,7 @@ import type {
   Handout, Rect, SceneMeta, TableMeta, TableSettings, Token, Vec, ViewCall,
 } from '../types';
 import { newAreaId } from '../core/terrain';
-import { terrainEdges, fillTerrainHoles, patchStroke, type HeightPatch, type TerrainEdge } from '../core/terrainEdges';
+import { withSightTerrain, terrainEdges, fillTerrainHoles, patchStroke, type HeightPatch, type TerrainEdge } from '../core/terrainEdges';
 import { groundAt, zonesOf } from '../core/height';
 import { sightHeight, isLightMark, litSeen, lightOf, viewerOf, type LightSrc } from '../core/light';
 import { carveWalls, joinAt, normalizeWall, routeReveal, sightSegs, splitPieces, wallMid, wallToWire, type Seg, type Wall } from '../core/walls';
@@ -1658,7 +1658,7 @@ export class TableClient {
     const mode: FogMode = m.fog.dim ? 'x' : 'r';
     const zones = zonesOf(s.draws.values(), g);
     const geometry=this.wallGeometry();
-    const segs = [...sightSegs([...geometry.walls.values()].filter(w=>!w.face), w => groundAt(zones, wallMid(w)) + w.h), ...geometry.terrain];
+    const segs = withSightTerrain([...sightSegs([...geometry.walls.values()].filter(w=>!w.face), w => groundAt(zones, wallMid(w)) + w.h), ...geometry.terrain], zones, geometry.openings);
     // in the dark a token remembers what its own light, its darkvision and its touch reach as it walks, and what other lights show it where it stands
     const dark = m.light.ambient === 'dark';
     const altOf = (t: Token, p: Vec = t) => sightHeight(t, standingGround(zones, p));

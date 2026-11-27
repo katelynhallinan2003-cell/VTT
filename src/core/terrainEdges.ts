@@ -1,9 +1,11 @@
+import { boundsOf } from './draw';
 import { rectContains } from './geometry';
 import clip, { type MultiPolygon, type Pair, type Polygon } from 'polygon-clipping';
 import type { GridSettings, Rect, Vec } from '../types';
 import { snapToCellCenter } from './geometry';
 import { cellPoly } from './cells';
 import { areaAt, newAreaId, groundAtTerrain, surfaceHeight, type Area, type Terrain, type TStroke } from './terrain';
+import type { SightRegion, SightSegments } from './terrainSight';
 import { type Seg } from './walls';
 
 export interface TerrainEdge extends Seg { low: number; top: number; one: 1 | -1 }
@@ -154,6 +156,52 @@ function heightRegions(t: Terrain): Plan {
   const plan = { regions, layers, surfaces };
   plans.set(t,plan);
   return plan;
+}
+
+// Geometry for sight on continuous ground. The rings retain exact cliffs and
+// holes. Cache heights for each smooth surface separately so interpolation never
+// averages the two sides of a cliff. Only samples visited by a viewer are built.
+const sightRegions = new WeakMap<Terrain, SightRegion[]>();
+export function withSightTerrain(segs: Seg[], t: Terrain, openings: Seg[]): SightSegments {
+  if (!t.areas.some(a => (a.gradient?.length ?? 0) >= 2)) return segs;
+  let regions = sightRegions.get(t);
+  const scale = t.grid.cell/t.grid.ft;
+  if (!regions) {
+    regions = [];
+    const plan = heightRegions(t);
+    for (const [key,shape] of plan.regions) {
+      const surface = plan.surfaces.get(key);
+      let height: SightRegion['height'] = key;
+      if (surface) {
+        const {area,offset} = surface;
+        // At most 512 steps across a region, even on very large maps.
+        const step = Math.max(2*scale,area.b.w/512,area.b.h/512);
+        const stride = Math.ceil(area.b.w/step)+3;
+        const samples = new Map<number,number>();
+        const sample = (ix:number,iy:number) => {
+          const k = iy*stride+ix;
+          let h = samples.get(k);
+          if (h === undefined) {
+            h = surfaceHeight(area,{x:area.b.x+ix*step,y:area.b.y+iy*step})+offset;
+            samples.set(k,h);
+          }
+          return h;
+        };
+        height = (x,y) => {
+          const u=(x-area.b.x)/step, v=(y-area.b.y)/step;
+          const ix=Math.floor(u), iy=Math.floor(v), fx=u-ix, fy=v-iy;
+          return (1-fy)*((1-fx)*sample(ix,iy)+fx*sample(ix+1,iy))
+            + fy*((1-fx)*sample(ix,iy+1)+fx*sample(ix+1,iy+1));
+        };
+      }
+      for (const poly of shape) {
+        const rings=poly.map(r=>r.map(([x,y])=>({x,y})));
+        regions.push({height,rings,bounds:boundsOf(rings[0])});
+      }
+    }
+    sightRegions.set(t,regions);
+  }
+  return Object.assign(segs,{surface:{regions,scale,openings}});
 }
 
 // Cache by paint geometry so dragging a height control does not repeat polygon clipping.

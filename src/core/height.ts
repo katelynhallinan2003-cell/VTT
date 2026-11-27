@@ -46,8 +46,8 @@ export const zoneColor = heightColor;
  */
 export function altLabel(a: Altitude, flying: boolean): string {
   if (a.alt === 0 && a.clear === 0) return '';
-  if (flying && a.clear > 0) return `↑${Math.round(a.clear * 10) / 10}`;
-  return `${a.alt > 0 ? '▲' : '▼'}${Math.abs(a.alt)}`;
+  if (flying && a.clear > 0) return `↑${Math.round(a.clear)}`;
+  return `${a.alt > 0 ? '▲' : '▼'}${Math.abs(Math.round(a.alt))}`;
 }
 
 /** 5e falling damage: 1d6 for every 10 feet, up to 20d6. */
@@ -59,9 +59,9 @@ export function fallDice(ft: number): number {
 export function heightChangeNote(fromAlt: number, toAlt: number): string {
   const d = toAlt - fromAlt;
   if (Math.abs(d) < 1) return '';
-  if (d > 0) return `climbs ${d} ft`;
+  if (d > 0) return `climbs ${Math.round(d)} ft`;
   const dice = fallDice(-d);
-  return dice ? `drops ${-d} ft (${dice}d6 if it falls)` : `drops ${-d} ft`;
+  return dice ? `drops ${Math.round(-d)} ft (${dice}d6 if it falls)` : `drops ${Math.round(-d)} ft`;
 }
 
 /** The move that puts a token `up` feet above the ground that is under it (0 or less lands it). */
@@ -77,5 +77,5 @@ export function setAltitude(alt: number, ground: number): { fly: boolean; elev: 
 
 /** " (30 across, 20 up)" for a measurement with a height difference, or nothing. */
 export function heightNote(across: number, up: number): string {
-  return up ? ` (${across} across, ${Math.abs(up)} ${up > 0 ? 'up' : 'down'})` : '';
+  return Math.round(Math.abs(up)) ? ` (${Math.round(across)} across, ${Math.round(Math.abs(up))} ${up > 0 ? 'up' : 'down'})` : '';
 }

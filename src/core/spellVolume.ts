@@ -37,15 +37,49 @@ function hull(points:Vec[]) {
   return [...half(sorted),...half(sorted.reverse())];
 }
 
+export function spellAxis(d:Spell,a:Vec,target:Vec,grid:GridSettings,ground:(p:Vec)=>number=()=>0) {
+  const px=grid.cell/grid.ft, settings=d.spell ?? {};
+  const elevated=settings.elevation!==false, aimed=aimedSpell(d.k);
+  const start=elevated ? settings.start ?? ground(a) : 0;
+  const endAt=(p:Vec)=>aimed && elevated ? settings.end ?? ground(p) : start;
+  const raw=distance(a,target), ux=raw ? (target.x-a.x)/raw : 1, uy=raw ? (target.y-a.y)/raw : 0;
+  const at=(r:number)=>({x:a.x+ux*r,y:a.y+uy*r});
+  const offset=d.k==='emanation' ? templateWidthPx(grid,d)/2 : 0;
+  let end=endAt(target),run=raw;
+  const feet=settings.range ?? Math.max(0,Math.hypot(raw,(end-start)*px)-offset)/px;
+  if(settings.range!==undefined) {
+    const range=feet*px;
+    const project=(height:number)=>Math.sqrt(Math.max(0,range*range-((height-start)*px)**2));
+    run=project(end)+offset;
+    if(aimed && elevated && settings.end===undefined && Math.abs(endAt(at(run))-end)>1e-6) {
+      // Intersect the range sphere with the ground along the cast bearing.
+      // A jump in ground height intersects the vertical face of that cliff.
+      let lo=0,hi=range;
+      for(let i=0;i<32;i++) {
+        const mid=(lo+hi)/2;
+        if(Math.hypot(mid,(endAt(at(mid))-start)*px)<=range) lo=mid; else hi=mid;
+      }
+      run=(lo+hi)/2;
+      const sign=Math.sign(endAt(at(hi))-start);
+      end=start+sign*Math.sqrt(Math.max(0,range*range-run*run))/px;
+    } else end=start+clamp(end-start,-feet,feet);
+  }
+  return {b:at(run),start,end,run,ux,uy,feet};
+}
+
+export function snapSpellFeet(feet:number,gridded:boolean) {
+  return gridded ? Math.max(5,Math.round(feet/5)*5) : feet;
+}
+
 /** All distances inside the volume calculation use the same unit, including Z. */
 export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWorld={segs:[]}) {
   const px=grid.cell/grid.ft, settings=d.spell ?? {}, ground=world.ground ?? (()=>0);
   const elevated=settings.elevation!==false, aimed=aimedSpell(d.k);
-  const start=elevated ? settings.start ?? ground(a) : 0;
-  const end=aimed && elevated ? settings.end ?? ground(b) : start;
-  const run=distance(a,b), rise=(end-start)*px, length=Math.hypot(run,rise);
+  const axis=spellAxis(d,a,b,grid,ground);
+  const {start,end,run,ux,uy}=axis;
+  b=axis.b;
+  const rise=(end-start)*px, length=Math.hypot(run,rise);
   const cos=length ? run/length : 1, sin=length ? rise/length : 0;
-  const ux=run ? (b.x-a.x)/run : 1, uy=run ? (b.y-a.y)/run : 0;
   const width=templateWidthPx(grid,d), half=(d.k==='cube' ? length : width)/2;
   const hex=grid.shape==='square' ? undefined : grid.shape;
   const own=d.k==='emanation' ? footprintPoly(a,width,hex) : undefined;
@@ -227,5 +261,5 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
     }
     return out;
   }
-  return {geom,bounds,hits,cells,hasWalls:walls.length>0,feet:(aimed ? length : radius)/px};
+  return {geom,bounds,hits,cells,hasWalls:walls.length>0,feet:axis.feet};
 }

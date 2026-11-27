@@ -234,6 +234,7 @@ export function spellSettings(raw: unknown): import('../types').SpellSettings {
   const out: import('../types').SpellSettings={};
   if (!raw || typeof raw!=='object') return out;
   const v=raw as Record<string,unknown>;
+  if(typeof v.range==='number' && Number.isFinite(v.range) && v.range>0) out.range=v.range;
   for (const key of ['walls','wrap','elevation'] as const) if (typeof v[key]==='boolean') out[key]=v[key];
   for (const key of ['start','end'] as const) if (typeof v[key]==='number' && Number.isFinite(v[key])) out[key]=v[key];
   return out;

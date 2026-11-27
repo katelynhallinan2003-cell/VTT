@@ -220,9 +220,9 @@ export const beamWidthPx = (grid: GridSettings, bwFt: number) => (beamWidthFt(bw
 
 /** Text such as "20 ft sphere" for a template while it is being placed. */
 export function templateLabel(kind: DrawKind, grid: GridSettings, a: Vec, b: Vec, bwFt: number, footprint = grid.cell, spatialFt?:number): string {
-  const ft = spatialFt===undefined ? templateFt(grid,a,b,kind,footprint) : Math.round(spatialFt*10)/10;
+  const ft = Math.round(spatialFt ?? templateFt(grid,a,b,kind,footprint));
   if (kind === 'sphere') return `${ft} ft radius`;
-  if (kind === 'beam') return `${ft} ft × ${bwFt} ft line`;
+  if (kind === 'beam') return `${ft} ft × ${Math.round(bwFt)} ft line`;
   return `${ft} ft ${kind}`;
 }
 
@@ -349,7 +349,7 @@ export function boundsOf(pts: Vec[]): Rect {
  * Is `p` on (or, for filled shapes and templates, inside) the drawing? `tol` is the extra reach in world pixels.
  * With `solid` false only the outline counts (and a template's starting point), so big shapes don't block clicks.
  */
-export function hitDrawing(d: Drawing, p: Vec, tol: number, grid: GridSettings, solid = true): boolean {
+export function hitDrawing(d: Drawing, p: Vec, tol: number, grid: GridSettings, solid = true, projected?:TemplateGeom): boolean {
   const pts = parsePts(d.p);
   if (!pts.length) return false;
   const reach = d.w / 2 + tol;
@@ -387,7 +387,7 @@ export function hitDrawing(d: Drawing, p: Vec, tol: number, grid: GridSettings, 
     }
     default: {
       if (pts.length < 2) return false;
-      const g = templateGeom(d.k, pts[0], pts[1], templateWidthPx(grid, d), grid.shape === 'square' ? undefined : grid.shape);
+      const g = projected ?? templateGeom(d.k, pts[0], pts[1], templateWidthPx(grid, d), grid.shape === 'square' ? undefined : grid.shape);
       if (solid) {
         if (g.type === 'circle') return Math.hypot(p.x - g.c.x, p.y - g.c.y) <= g.r + tol;
         return pointInPoly(p, g.pts);

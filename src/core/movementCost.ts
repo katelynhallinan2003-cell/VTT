@@ -159,7 +159,7 @@ export function movementCost(grid: GridSettings, path: Vec[], flyer: number | nu
     return {ft:rounded(airDistance(air)),note:''};
   }
   const normal = rounded(flat+rough+slopeExtra), climbing = rounded(ascent+descent);
-  const directions = ascent && descent ? ` (${rounded(ascent)} ft up, ${rounded(descent)} ft down)` : '';
-  const note = climbing ? `${normal} ft normal + ${climbing} ft climbing${directions}` : rough ? `difficult terrain +${rounded(rough)} ft` : '';
+  const directions = ascent && descent ? ` (${Math.round(ascent)} ft up, ${Math.round(descent)} ft down)` : '';
+  const note = climbing ? `${Math.round(normal)} ft normal + ${Math.round(climbing)} ft climbing${directions}` : rough ? `difficult terrain +${Math.round(rough)} ft` : '';
   return {ft:rounded(normal+climbing),note};
 }

@@ -273,3 +273,7 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
 - [x] **#163 Conditional clear templates button** (added 2026-11-27, completed 2026-11-27). The red button appears above Advanced when there are templates the viewer can clear.
 - [x] **#164 Wall blocking across wide spell lines** (added 2026-11-27, completed 2026-11-27). Parallel paths from the near face cast wall shadows across the beam. Checked partial walls, doorways, angled casts and elevated targets.
 - [x] **#165 Custom spell line widths** (added 2026-11-27, completed 2026-11-27). Enter a positive width in feet or choose a preset when placing or editing a line.
+- [x] **#166 Snap and preserve spatial spell ranges** (added 2026-11-27, completed 2026-11-27). Square and hex maps snap in 5 ft steps. Store the range and project the tip when the elevation changes.
+- [x] **#167 Match selected spell outlines to their footprint** (added 2026-11-27, completed 2026-11-27). The selection uses the same projected outline and map clipping as the spell.
+- [x] **#168 Show current spell endpoint elevations side by side** (added 2026-11-27, completed 2026-11-27). Show resolved elevations and restore ground tracking when a field is cleared.
+- [x] **#169 Round displayed board measurements to whole numbers** (added 2026-11-27, completed 2026-11-27). Round spell, ruler, movement and elevation readouts at display time.

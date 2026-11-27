@@ -232,6 +232,8 @@ export type DrawKind = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 
 export interface GradientControl { id: string; height: number; path: (Vec & { rise?: number })[]; boundary?: "height" | "path" | "both" | "hidden" }
 
 export interface SpellSettings {
+  /** Spatial range in feet. The stored points supply the origin and bearing. */
+  range?: number;
   walls?: boolean;
   wrap?: boolean;
   elevation?: boolean;

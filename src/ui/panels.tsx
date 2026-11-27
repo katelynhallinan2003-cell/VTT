@@ -139,8 +139,8 @@ function HeightPop(props: { client: TableClient; tokens: Token[]; zones: ReturnT
     tokens.forEach((t, i) => { void client.updateTokens([t.id], setAltitude(f(alts[i]), alts[i].ground)); });
   };
   const aboveGround = (n: number) => apply((a) => a.ground + n);
-  const groundTxt = alts.every((a) => a.ground === alts[0].ground) ? (alts[0].ground ? `The ground here is ${alts[0].ground} ft above the base level.` : 'The ground here is at the base level.') : 'The ground differs under each token.';
-  const abs = alts.length === 1 && alts[0].clear > 0 && alts[0].ground !== 0 ? ` That is ${alts[0].alt} ft above the base level.` : '';
+  const groundTxt = alts.every((a) => a.ground === alts[0].ground) ? (alts[0].ground ? `The ground here is ${Math.round(alts[0].ground)} ft above the base level.` : 'The ground here is at the base level.') : 'The ground differs under each token.';
+  const abs = alts.length === 1 && alts[0].clear > 0 && alts[0].ground !== 0 ? ` That is ${Math.round(alts[0].alt)} ft above the base level.` : '';
   return (
     <div class="tt-pop height-pop" onKeyDown={(e) => e.stopPropagation()}>
       <div class="row wrap">
@@ -149,7 +149,7 @@ function HeightPop(props: { client: TableClient; tokens: Token[]; zones: ReturnT
         <button class="btn small" title="Down 5 feet" onClick={() => apply((a) => a.alt - 5)}>−5</button>
         <label class="numf" title="Feet above the ground right under it">
           <span>Above ground</span>
-          <input key={same ? alts[0].clear : 'x'} type="number" step={5} min={0} defaultValue={same ? alts[0].clear : ''} placeholder="Mixed" aria-label="Feet above the ground"
+          <input key={same ? alts[0].clear : 'x'} type="number" step={5} min={0} defaultValue={same ? Math.round(alts[0].clear) : ''} placeholder="Mixed" aria-label="Feet above the ground"
             onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
             onChange={(e) => { const v = (e.target as HTMLInputElement).value; if (v === '') return; const n = Number(v); if (Number.isFinite(n)) aboveGround(Math.max(0, Math.min(5000, n))); }} />
           <span class="unit">ft</span>

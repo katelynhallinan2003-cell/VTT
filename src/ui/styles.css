@@ -493,7 +493,9 @@ input[type=text], input[type=number], input[type=password], select { border-radi
 .spell-advanced { margin: 8px 0; }
 .spell-advanced summary { cursor: pointer; }
 .spell-advanced .field { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:6px; }
-.spell-advanced input[type=number] { width:76px; }
+.spell-heights { display:flex; gap:8px; }
+.spell-heights .field { flex:1; min-width:0; flex-direction:column; align-items:stretch; justify-content:flex-end; gap:3px; }
+.spell-heights input[type=number] { width:100%; min-width:0; box-sizing:border-box; }
 .dt-body .seg { margin-bottom: 0; }
 .drawtag .hint { margin-top: 6px; font-size: 11.5px; }
 .swatches.small { gap: 5px; }

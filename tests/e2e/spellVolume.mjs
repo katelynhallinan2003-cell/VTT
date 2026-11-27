@@ -83,8 +83,50 @@ try {
   const placedWidth=dm.locator('.drawtag').getByRole('spinbutton',{name:/Line width/});
   await placedWidth.fill('8.25');await placedWidth.press('Enter');
   await dm.waitForFunction(()=>[...window.__vtt.client.scene.draws.values()].some(d=>d.k==='beam' && d.bw===8.25));
+  const length=selected.getByRole('spinbutton',{name:/Length/});
+  await length.fill('59');await length.press('Enter');
+  await dm.waitForFunction(()=>[...window.__vtt.client.scene.draws.values()].some(d=>d.k==='beam' && d.spell.range===60));
+  await selected.locator('summary',{hasText:'Advanced'}).click();
+  const origin=selected.getByLabel('Starting elevation (ft)');
+  const end=selected.getByLabel('Ending elevation (ft)');
+  assert.equal(await origin.inputValue(),'0');
+  assert.equal(await end.inputValue(),'0');
+  assert.equal((await origin.boundingBox()).y,(await end.boundingBox()).y);
+  await end.fill('36');await end.press('Enter');
+  const projected=await dm.evaluate(()=>{
+    const {board,client}=window.__vtt;
+    const line=[...client.scene.draws.values()].find(d=>d.k==='beam'),[x,y]=line.p.split(',').map(Number);
+    const [tip]=board.drawingHandles(line);
+    return Math.hypot(tip.x-x,tip.y-y)*client.grid.ft/client.grid.cell;
+  });
+  assert(Math.abs(projected-48)<0.01);
+  assert.equal(await length.inputValue(),'60');
+  await dm.evaluate(async()=>{
+    const {client}=window.__vtt, line=[...client.scene.draws.values()].find(d=>d.k==='beam');
+    const [x,y]=line.p.split(',').map(Number);
+    await client.updateDrawings([line.id],{p:[x,y,x+100,y+45].join(',')});
+  });
+  await dm.waitForFunction(()=>{
+    const {board,client}=window.__vtt, line=[...client.scene.draws.values()].find(d=>d.k==='beam');
+    const polygons=g=>g.context.instructions.filter(i=>i.action==='stroke').flatMap(i=>i.data.path.instructions)
+      .filter(i=>i.action==='poly').map(i=>JSON.stringify(i.data[0]));
+    const rendered=polygons(board.drawLayer.items.get(line.id).g);
+    return polygons(board.overlayG).some(p=>rendered.includes(p));
+  });
+  for(const shape of ['square','flat','pointy']) {
+    await dm.evaluate(async shape=>{
+      const {client}=window.__vtt;
+      await client.updateScene({grid:{...client.grid,shape,ft:10,visible:true,snap:true}});
+    },shape);
+    const snapped=await dm.evaluate(()=>{
+      const {board,client}=window.__vtt, a=board.viewCenterWorld(), step=client.grid.cell;
+      const result=board.templateSnap('beam',a,{x:a.x+step*2.4,y:a.y+step*.6},{});
+      return result.range;
+    });
+    assert(snapped>0 && snapped%5===0);
+  }
   await clear.click();
   await clear.waitFor({state:'detached'});
   assert.deepEqual(errors,[]);
-  console.log('Passed placement, spell selection, token priority, line widths, clearing, overlapping effects, and reload.');
+  console.log('Passed spell controls, token hits, reload, fixed spatial range, projected outlines, and square/hex snapping.');
 } finally { await browser.close(); }

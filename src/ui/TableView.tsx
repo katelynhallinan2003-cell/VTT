@@ -387,7 +387,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
           </div>
         </div>
       )}
-      {d.tool === 'template' && <TemplateFlyout ui={ui} client={client} />}
+      {d.tool === 'template' && <TemplateFlyout ui={ui} client={client} board={board} />}
       {d.tool === 'ruler' && <RulerFlyout ui={ui} client={client} />}
       {d.tool === 'height' && client.isDM && <HeightFlyout ui={ui} client={client} onFromColor={() => setModal({ kind: 'colorHeights' })} />}
       {d.tool === 'wall' && client.isDM && <WallFlyout ui={ui} client={client} onDetect={() => setModal({ kind: 'detectWalls' })} />}

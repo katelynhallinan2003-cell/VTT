@@ -1,5 +1,6 @@
 import { describe,it,expect } from 'vitest';
-import { spellVolume, type Spell, type SpellWorld } from '../src/core/spellVolume';
+import { spellAxis, snapSpellFeet, spellVolume, type Spell, type SpellWorld } from '../src/core/spellVolume';
+import {heightNote} from '../src/core/height';
 import { DEFAULT_GRID, normalizeDrawing, drawingToWire } from '../src/core/model';
 import { terrainEdges, patchStroke } from '../src/core/terrainEdges';
 import { terrainOf } from '../src/core/terrain';
@@ -11,6 +12,20 @@ function spell(k:Spell['k'], length:number, settings:Spell['spell']={}, world:Sp
   return spellVolume({k,bw:5,spell:settings},a,point(length),grid,world);
 }
 describe('spell volumes',()=>{
+  it('keeps 60 ft of spatial range when editing elevations or following a gradient',()=>{
+    const axis=(settings:Spell['spell'],ground=(p:{x:number})=>0)=>spellAxis({k:'beam',bw:10,spell:{range:60,...settings}},a,point(60),grid,ground);
+    expect(axis({start:0,end:36}).b.x).toBe(48);
+    expect(axis({start:36,end:0}).b.x).toBe(48);
+    expect(axis({start:36,end:36}).b.x).toBe(60);
+    expect(axis({},p=>p.x*.75).b.x).toBeCloseTo(48,6);
+    expect(axis({start:0,end:95})).toMatchObject({end:60,b:{x:0,y:0},feet:60});
+    const cliff=axis({},p=>p.x<48 ? 0 : 50);
+    expect(cliff.b.x).toBeCloseTo(48,6);
+    expect(cliff.end).toBeCloseTo(36,6);
+    expect(snapSpellFeet(19.3,true)).toBe(20);
+    expect(snapSpellFeet(19.3,false)).toBe(19.3);
+    expect(heightNote(35,-12.432860714)).toBe(' (35 across, 12 down)');
+  });
   it('clears a level bridge rim and tests a sloped line at the crossing',()=>{
     const bridge={segs:[{...wall,top:15}],ground:()=>15};
     expect(spell('beam',20,{},bridge).hits(point(16))).toBe(true);

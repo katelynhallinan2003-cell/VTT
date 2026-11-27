@@ -49,7 +49,7 @@ function ellipsePts(cx: number, cy: number, rx: number, ry: number): Vec[] {
 }
 
 /** Paint a shape onto a Graphics object. Text is handled separately by DrawLayer. `sight` holds the walls that stop a spell. */
-export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1, cover = false, sight?: Seg[], groundAt?: (p: Vec) => number, maps:Rect[] = []) {
+export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1, cover = false, sight?: Seg[], groundAt?: (p: Vec) => number, maps:Rect[] = [], outlineWidth?:number) {
   const pts = s.pts;
   if (!pts.length) return;
   const col = hex(s.color);
@@ -84,6 +84,11 @@ export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1,
       }
     };
     const outline=geom.type==='circle' ? ellipsePts(geom.c.x,geom.c.y,geom.r,geom.r) : geom.pts;
+    if(outlineWidth!==undefined) {
+      paint(outline,null,outlineWidth);
+      if(s.k==='emanation') paint(footprintPoly(pts[0],widthPx,hexShape),null,outlineWidth);
+      return;
+    }
     if(cover || volume.hasWalls) {
       // Without a visible grid, sample finely enough to show wall shadows without square outlines.
       const sampling=cover ? grid : {...grid,shape:'square' as const,cell:Math.max(grid.cell/10,Math.max(volume.bounds.w,volume.bounds.h)/140)};
@@ -219,7 +224,7 @@ export class DrawLayer {
     }
     const fs = Math.max(8, Math.min(grid.cell * 0.34, Math.min(b.w, b.h) * 0.45));
     it.text.visible = true;
-    it.text.text = `${d.hz > 0 ? '+' : ''}${d.hz} ft`;
+    it.text.text = `${d.hz > 0 ? '+' : ''}${Math.round(d.hz)} ft`;
     it.text.style.fontSize = fs;
     (it.text.style.stroke as { width: number }).width = Math.max(2, fs * 0.2);
     it.text.resolution = textRes;

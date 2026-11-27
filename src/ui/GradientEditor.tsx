@@ -86,11 +86,12 @@ export function GradientEditor({board,ui,client}: {board: Board; ui: UiState; cl
         <div class="gradient-box" style={pos(screen[0])} onKeyDown={e=>e.stopPropagation()}>
           <label><input ref={field=>{if(field) fields.current.set(c.id,field); else fields.current.delete(c.id);}}
             key={c.height} type="number" aria-label="Gradient height" min="-1000" max="5000" step="any"
-            defaultValue={c.height} onKeyDown={e=>{if(e.key==='Enter') e.currentTarget.blur();}}
+            defaultValue={Math.round(c.height)} onKeyDown={e=>{if(e.key==='Enter') e.currentTarget.blur();}}
             onBlur={e=>{
               const field=e.currentTarget, value=field.valueAsNumber;
+              if(field.value===field.defaultValue) return;
               if(Number.isFinite(value) && field.validity.valid && value!==c.height) update(c.id,control=>({...control,height:value,path:control.path.map(({x,y})=>({x,y}))}));
-              else field.value=String(c.height);
+              field.value=String(Math.round(c.height));
             }}/> ft</label>
           <button aria-label="Delete height point" class="gradient-delete" onClick={()=>update(c.id,()=>null)}>×</button>
           <button class="gradient-convert" onClick={()=>{

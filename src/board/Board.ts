@@ -1,9 +1,9 @@
-import { spellVolume, mapPoint, onMap } from '../core/spellVolume';
+import { spellAxis, spellVolume, snapSpellFeet, mapPoint, onMap, type Spell } from '../core/spellVolume';
 import { Application, Container, FillPattern, Graphics, Matrix, Sprite, Text, Texture } from 'pixi.js';
 import {
   clamp, cornerTotals, distanceFt, fitCamera, pathFt, gridFromRect, mapFootprints, mapRect, normRect, sceneRect, pointInToken, rectContains, snapDragCenter, snapTokenCenter, snapToCellCenter, snapToCorner, zoomAt,
 } from '../core/geometry';
-import { FILL_LEVEL, STROKE_CELLS, beamWidthPx, parsePts, dashSegments, fitPenPoints, handlesOf, hitDrawing, pointInPoly, isTemplate, joinPts, resizeDrawing, setLineMeasurer, footprintPx, snapTemplate, templateLabel, templateWidthPx, type HandleId, type TemplateSnapState } from '../core/draw';
+import { FILL_LEVEL, STROKE_CELLS, parsePts, dashSegments, fitPenPoints, handlesOf, hitDrawing, pointInPoly, isTemplate, joinPts, resizeDrawing, setLineMeasurer, footprintPx, snapTemplate, templateLabel, templateWidthPx, type HandleId, type TemplateSnapState } from '../core/draw';
 import { templateRoughDraws } from '../core/templaterough';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
@@ -27,7 +27,7 @@ import { terrainBrushMode, type StrokeSize, type UiState } from '../state/ui';
 import type { Ambient, Aura, DrawKind, Drawing, GridSettings, Ping, Rect, Token, Vec } from '../types';
 import { throttle } from '../core/throttle';
 import { TokenView, isLightMark, type TokenCtx } from './TokenView';
-import { DrawLayer, paintShape } from './DrawLayer';
+import { DrawLayer, paintShape, shapeOf } from './DrawLayer';
 import { TerrainLayer } from './TerrainLayer';
 import { WallLayer } from './WallLayer';
 import { WALL_NAME, boxSegments, chainSegments, circlePoints, distToSeg, endNear, freehandCorners, hatchTicks, moveSegs, rayHit, sideOf, sightSegs, snapWallPoint, visibilityPolygon, wallMid, wallNear, wallVisDefault, type Seg, type Wall } from '../core/walls';
@@ -57,7 +57,7 @@ type Drag =
   | { kind: 'xmap'; id: string; start: Vec; orig: Vec; moved: boolean; cur: Vec }
   | { kind: 'shape'; dk: DrawKind; start: Vec; pts: Vec[]; /** set while drawing a height zone: its height in feet */ hz?: number;
       /** an emanation from a creature: where it comes out, and how wide that creature's space is in feet */ of?: number; fixedOrigin?: Vec;
-      /** what the last template snap decided (so it only changes when the pointer clearly moves on) */ snap?: TemplateSnapState }
+      /** what the last template snap decided (so it only changes when the pointer clearly moves on) */ snap?: TemplateSnapState; range?:number }
   | { kind: 'erase'; ids: Set<string> }
   /** painting (or rubbing out) ground with the Heights brush */
   | { kind: 'lightpaint'; /** taking painted light away instead of adding it */ erase: boolean; /** dim light (half as strong) instead of daylight */ dim: boolean; pts: Vec[]; last: Vec; /** brush width in pixels */ size: number }
@@ -1163,6 +1163,14 @@ export class Board {
 
   /** What stops a spell, for the template painter. */
   spellMaps() { return this.terrainMaps; }
+  placementElevations() {
+    const u=this.ui.data,d=this.drag;
+    const here=this.pointerW ?? this.viewCenterWorld();
+    const pts=d?.kind==='shape' ? d.pts : [here,here];
+    const axis=spellAxis({k:u.tplKind,bw:u.tplWidth,of:d?.kind==='shape' ? d.of : undefined,
+      spell:{...u.tplSettings,range:d?.kind==='shape' ? d.range : undefined}},pts[0],pts[1] ?? pts[0],this.client.grid,p=>this.groundAtPoint(p));
+    return {start:Math.round(axis.start),end:Math.round(axis.end)};
+  }
 
   private wallsForSpells() {
     // a spell also depends on how high the ground is where it starts (a wall lower than that does not stop it)
@@ -1510,7 +1518,7 @@ export class Board {
     const line = (a: Vec, b: Vec, alpha: number) => { g.moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ width, color: col, alpha, cap: 'round' }); };
     const label = (a: Vec, b: Vec) => {
       const ft = Math.round((Math.hypot(b.x - a.x, b.y - a.y) / grid.cell) * grid.ft * 10) / 10;
-      if (ft > 0) this.plotLabel(li++, `${ft} ft`, (a.x + b.x) / 2, (a.y + b.y) / 2 - 10 / z, col);
+      if (ft > 0) this.plotLabel(li++, `${Math.round(ft)} ft`, (a.x + b.x) / 2, (a.y + b.y) / 2 - 10 / z, col);
     };
     const marker = (p: Vec) => { g.circle(p.x, p.y, 4.5 / z).fill({ color: 0x000000, alpha: 0.35 }).stroke({ width: 1.5 / z, color: 0xffffff }); };
     if (u.wallMode==='erase' && this.pointerW) {
@@ -1547,7 +1555,7 @@ export class Board {
         else if (d.shape === 'circle') {
           segs(this.wallShapeSegs('circle', d.a, d.b, []), 0.9);
           const ft = Math.round((Math.hypot(d.b.x - d.a.x, d.b.y - d.a.y) / grid.cell) * grid.ft * 10) / 10;
-          if (ft > 0) this.plotLabel(li++, `${ft} ft radius`, d.a.x, d.a.y - 10 / z, col);
+          if (ft > 0) this.plotLabel(li++, `${Math.round(ft)} ft radius`, d.a.x, d.a.y - 10 / z, col);
         } else { segs([{ a: d.a, b: d.b }], 0.9); label(d.a, d.b); }
         marker(d.b);
       } else if (!d && this.pointerW) {
@@ -1570,7 +1578,7 @@ export class Board {
       const ids = new Set([...u.wallSel, ...(this.wallHover ? [this.wallHover] : [])]);
       for (const id of ids) {
         const wl = this.client.wallGeometry().walls.get(id);
-        if (wl && wl.h > 0 && li < 12) { const m = wallMid(wl); this.plotLabel(li++, `${wl.h} ft tall`, m.x, m.y - 10 / z, WALL_COLOR[wl.k]); }
+        if (wl && wl.h > 0 && li < 12) { const m = wallMid(wl); this.plotLabel(li++, `${Math.round(wl.h)} ft tall`, m.x, m.y - 10 / z, WALL_COLOR[wl.k]); }
       }
     }
     return li;
@@ -2097,7 +2105,7 @@ export class Board {
         this.dashedLine(g, path, 0xffffff, z, move.stops);
         const cost = this.moveCost(path, a.token.fly, a.token.elev, move.stops);
         this.plotNext = this.stepLabels(this.plotNext, path, a.token, 0xffffff, z, move.stops);
-        this.distText.text = `${cost.ft} ft${move.stops.length ? ' total' : ''}${cost.note ? ` · ${cost.note}` : ''}`;
+        this.distText.text = `${Math.round(cost.ft)} ft${move.stops.length ? ' total' : ''}${cost.note ? ` · ${cost.note}` : ''}`;
         this.distText.scale.set(1 / z);
         this.distText.position.set(a.display.x, a.display.y - (a.token.size * grid.cell) / 2 - 6 / z);
         this.distText.visible = true;
@@ -2140,13 +2148,13 @@ export class Board {
       const up = rise[0];
       const flat = distanceFt(grid, r.a, r.b);
       const ft = up ? distanceFt(grid, r.a, r.b, grid.rule, up) : flat;
-      this.plotLabel(li++, `${name ? name + ': ' : ''}${ft} ft${heightNote(flat, up)}`, r.b.x, r.b.y - 12 / z, color);
+      this.plotLabel(li++, `${name ? name + ': ' : ''}${Math.round(ft)} ft${heightNote(flat, up)}`, r.b.x, r.b.y - 12 / z, color);
       return li;
     }
     // several legs: the distance so far at every corner (the first leg's end too), and the whole at the end
     cornerTotals(grid, pts, rise).forEach((total, k) => {
       const i = k + 1;
-      this.plotLabel(li++, i === pts.length - 1 ? `${name ? name + ': ' : ''}${total} ft` : `${total} ft`, pts[i].x, pts[i].y - 12 / z, color);
+      this.plotLabel(li++, i === pts.length - 1 ? `${name ? name + ': ' : ''}${Math.round(total)} ft` : `${Math.round(total)} ft`, pts[i].x, pts[i].y - 12 / z, color);
     });
     return li;
   }
@@ -2170,8 +2178,14 @@ export class Board {
       if (u.heightPatches) break;
       const dd = this.shownDrawing(id);
       if (!dd || dd.k === 'terrain') continue; // painted ground outlines itself
-      const b = this.drawLayer.boundsOf(dd, grid);
       const mv = d?.kind === 'drawmove' && d.ids.includes(id) ? d : null;
+      if(isTemplate(dd.k)) {
+        const shape=shapeOf(dd);
+        if(mv) shape.pts=shape.pts.map(p=>({x:p.x+mv.dx,y:p.y+mv.dy}));
+        paintShape(g,{...shape,color:'#4da3ff'},grid,1,false,undefined,p=>this.groundAtPoint(p),this.terrainMaps,1.5/z);
+        continue;
+      }
+      const b = this.drawLayer.boundsOf(dd, grid);
       const pad = 5 / z;
       g.rect(b.x - pad + (mv?.dx ?? 0), b.y - pad + (mv?.dy ?? 0), b.w + pad * 2, b.h + pad * 2).stroke({ width: 1.5 / z, color: SELECT });
     }
@@ -2180,7 +2194,7 @@ export class Board {
       const dd = this.shownDrawing([...u.drawSel][0]);
       if (dd && this.client.canEditDrawing(dd)) {
         const hs = 4.5 / z;
-        for (const h of handlesOf(dd)) g.rect(h.x - hs, h.y - hs, hs * 2, hs * 2).fill(0xffffff).stroke({ width: 1.5 / z, color: SELECT });
+        for (const h of this.drawingHandles(dd)) g.rect(h.x - hs, h.y - hs, hs * 2, hs * 2).fill(0xffffff).stroke({ width: 1.5 / z, color: SELECT });
       }
     }
 
@@ -2190,12 +2204,16 @@ export class Board {
       if (d.hz != null) {
         const zc = zoneColor(d.hz);
         paintShape(g, { k: d.dk, pts: d.pts, color: zc, w: Math.max(2, grid.cell * 0.05), fill: 0.4, fc: zc, dash: false, bw: 5 }, grid, 0.85, false);
-        if (d.pts.length >= 2) this.plotLabel(li++, `${d.hz} ft`, (d.pts[0].x + d.pts[1].x) / 2, Math.min(d.pts[0].y, d.pts[1].y) - 8 / z, num(zc));
+        if (d.pts.length >= 2) this.plotLabel(li++, `${Math.round(d.hz)} ft`, (d.pts[0].x + d.pts[1].x) / 2, Math.min(d.pts[0].y, d.pts[1].y) - 8 / z, num(zc));
       } else paintShape(g, {
         k: d.dk, pts: d.pts, color: u.drawColor, w: isT ? Math.max(2, this.strokePx()) : this.strokePx(),
-        fill: !isT && (d.dk === 'rect' || d.dk === 'ellipse') ? FILL_LEVEL[u.drawFillMode] : 0, fc: u.drawFillColor, dash: !isT && u.drawDash, bw: u.tplWidth, of: d.of, spell:u.tplSettings,
+        fill: !isT && (d.dk === 'rect' || d.dk === 'ellipse') ? FILL_LEVEL[u.drawFillMode] : 0, fc: u.drawFillColor, dash: !isT && u.drawDash, bw: u.tplWidth, of: d.of, spell:{...u.tplSettings,range:d.range},
       }, grid, 0.85, this.coverOn(), this.wallSegs().sight, (p) => groundAt(this.zones, p),this.terrainMaps);
-      if (isT && d.pts.length >= 2) this.plotLabel(li++, templateLabel(d.dk, grid, d.pts[0], d.pts[1], u.tplWidth, footprintPx(grid, d.of ?? 0), spellVolume({k:d.dk,bw:u.tplWidth,of:d.of,spell:u.tplSettings},d.pts[0],d.pts[1],grid,{segs:[],ground:p=>this.groundAtPoint(p)}).feet), d.pts[1].x, d.pts[1].y - 12 / z, num(u.drawColor));
+      if (isT && d.pts.length >= 2) {
+        const axis=spellAxis({k:d.dk,bw:u.tplWidth,of:d.of,spell:{...u.tplSettings,range:d.range}},d.pts[0],d.pts[1],grid,p=>this.groundAtPoint(p));
+        const tip=mapPoint(axis.b,this.terrainMaps);
+        this.plotLabel(li++,templateLabel(d.dk,grid,d.pts[0],tip,u.tplWidth,footprintPx(grid,d.of ?? 0),axis.feet),tip.x,tip.y-12/z,num(u.drawColor));
+      }
     }
 
     // the Heights brush: where it would paint, the stroke so far, and areas being carried to a new place
@@ -2257,7 +2275,7 @@ export class Board {
     const to = path[path.length - 1];
     const cost = this.moveCost(path, t.fly,t.elev, stops);
     li = this.stepLabels(li, path, t, color, this.cam.zoom, stops);
-    this.plotLabel(li, `${name ? name + ': ' : ''}${cost.ft} ft${stops.length ? ' total' : ''}${cost.note ? ` (${cost.note})` : ''}`, to.x, to.y - (t.size * grid.cell) / 2 - 6 / this.cam.zoom, color);
+    this.plotLabel(li, `${name ? name + ': ' : ''}${Math.round(cost.ft)} ft${stops.length ? ' total' : ''}${cost.note ? ` (${cost.note})` : ''}`, to.x, to.y - (t.size * grid.cell) / 2 - 6 / this.cam.zoom, color);
     return li + 1;
   }
 
@@ -2270,7 +2288,7 @@ export class Board {
     let prev = 0;
     for (const i of [...stops, path.length - 1]) {
       const sofar = this.moveCost(path.slice(0, i + 1), token.fly,token.elev,stops).ft;
-      const leg = Math.round((sofar - prev) * 10) / 10;
+      const leg = Math.round(sofar) - Math.round(prev);
       prev = sofar;
       const a = path[i - 1], b = path[i];
       this.plotLabel(li++, `${leg} ft`, (a.x + b.x) / 2, (a.y + b.y) / 2 - 10 / z, color);
@@ -2595,21 +2613,38 @@ export class Board {
   }
 
   /** The resize handle under the pointer, for the one drawing that is selected. */
+  private drawingHandles(d:Drawing):ReturnType<typeof handlesOf> {
+    if(!isTemplate(d.k)) return handlesOf(d);
+    const [a,b]=parsePts(d.p);
+    if(!b) return [];
+    const tip=spellAxis(d,a,b,this.client.grid,p=>this.groundAtPoint(p)).b;
+    return [{id:'b',...mapPoint(tip,this.terrainMaps)}];
+  }
+
   private handleAt(p: Vec): { d: Drawing; h: ReturnType<typeof handlesOf>[number] } | null {
     if (this.ui.data.heightPatches || this.ui.data.drawSel.size !== 1) return null;
     const d = this.shownDrawing([...this.ui.data.drawSel][0]);
     if (!d || !this.client.canEditDrawing(d)) return null;
     const r = 7 / this.cam.zoom;
-    for (const h of handlesOf(d)) if (Math.abs(p.x - h.x) <= r && Math.abs(p.y - h.y) <= r) return { d, h };
+    for (const h of this.drawingHandles(d)) if (Math.abs(p.x - h.x) <= r && Math.abs(p.y - h.y) <= r) return { d, h };
     return null;
   }
 
   private hitSelectedDrawingInside(p: Vec): Drawing | null {
     for (const id of this.ui.data.drawSel) {
       const d = this.client.scene?.draws.get(id);
-      if (d && this.client.canEditDrawing(d) && hitDrawing(d, p, 6 / this.cam.zoom, this.client.grid, true)) return d;
+      if (d && this.client.canEditDrawing(d) && this.drawingHit(d,p,6/this.cam.zoom,true)) return d;
     }
     return null;
+  }
+
+  private drawingHit(d:Drawing,p:Vec,tolerance:number,solid:boolean) {
+    const grid=this.client.grid;
+    if(!isTemplate(d.k)) return hitDrawing(d,p,tolerance,grid,solid);
+    const [a,b]=parsePts(d.p);
+    if(!b || !onMap(p,this.terrainMaps)) return false;
+    const volume=spellVolume(d,a,b,grid,{segs:[],ground:q=>this.groundAtPoint(q)});
+    return solid ? volume.hits(p) : hitDrawing(d,p,tolerance,grid,false,volume.geom);
   }
 
   private hitDrawingAt(p: Vec, solid: boolean): Drawing | null {
@@ -2617,7 +2652,7 @@ export class Board {
     const tol = 6 / this.cam.zoom;
     for (let i = list.length - 1; i >= 0; i--) {
       const d = list[i];
-      if (this.client.canEditDrawing(d) && hitDrawing(d, p, tol, this.client.grid, solid)) return d;
+      if (this.client.canEditDrawing(d) && this.drawingHit(d,p,tol,solid)) return d;
     }
     return null;
   }
@@ -2707,7 +2742,7 @@ export class Board {
     const t0 = this.client.scene!.tokens.get(ids[0])!;
     const a0 = this.heightOf(t0);
     const to = Math.max(a0.ground, a0.alt + ft);
-    this.cb.onNotice(ids.length === 1 ? (to > a0.ground ? `${t0.name || 'Token'} flies ${to - a0.ground} ft above the ground` : `${t0.name || 'Token'} lands`) : `${ids.length} tokens ${ft > 0 ? 'up' : 'down'} ${Math.abs(ft)} ft`, 'info');
+    this.cb.onNotice(ids.length === 1 ? (to > a0.ground ? `${t0.name || 'Token'} flies ${Math.round(to - a0.ground)} ft above the ground` : `${t0.name || 'Token'} lands`) : `${ids.length} tokens ${ft > 0 ? 'up' : 'down'} ${Math.round(Math.abs(ft))} ft`, 'info');
   }
 
   private gradientAnchor(id: string) {
@@ -3039,16 +3074,26 @@ export class Board {
   }
 
   /** A template from the pointer-down point to the pointer, put on the grid the way the 2024 rules and the table expect. */
-  private templateSnap(kind: DrawKind, start: Vec, w: Vec, e: PointerEvent, d?: Extract<Drag, { kind: 'shape' }>): { a: Vec; b: Vec; st: TemplateSnapState } {
+  private templateSnap(kind: DrawKind, start: Vec, w: Vec, e: PointerEvent, d?: Extract<Drag, { kind: 'shape' }>,placed?:Drawing) {
     const grid = this.client.grid;
     const sphereAt = this.ui.data.tplSphereSnap;
     const free = kind === 'sphere' && sphereAt === 'off'; // a sphere that is told not to snap goes exactly where it is put
-    const snap=snapTemplate(grid, start, mapPoint(w,this.terrainMaps), {
-      origin: grid.snap && !free, length: !free,
-      kind, widthPx: kind === 'emanation' ? footprintPx(grid, d?.of ?? 0) : beamWidthPx(grid, this.ui.data.tplWidth), sphereAt,
+    const gridded=this.coverOn(),target=mapPoint(w,this.terrainMaps);
+    const spell:Spell=placed ?? {k:kind,bw:this.ui.data.tplWidth,of:d?.of,spell:this.ui.data.tplSettings};
+    const snap=snapTemplate(grid, start, target, {
+      origin: !placed && grid.snap && !free, length: gridded,
+      kind, widthPx: templateWidthPx(grid,spell), sphereAt,
       fixedOrigin: d?.fixedOrigin, prev: d?.snap,
     });
-    return {...snap,a:mapPoint(snap.a,this.terrainMaps),b:mapPoint(snap.b,this.terrainMaps)};
+    const a=mapPoint(snap.a,this.terrainMaps);
+    const angle=Math.atan2(snap.b.y-snap.a.y,snap.b.x-snap.a.x);
+    const run=Math.hypot(target.x-a.x,target.y-a.y);
+    const b=mapPoint({x:a.x+Math.cos(angle)*run,y:a.y+Math.sin(angle)*run},this.terrainMaps);
+    const raw=spellAxis({...spell,spell:{...spell.spell,range:undefined}},a,b,grid,p=>this.groundAtPoint(p));
+    const range=snapSpellFeet(raw.feet,gridded);
+    const axis=spellAxis({...spell,spell:{...spell.spell,range}},a,b,grid,p=>this.groundAtPoint(p));
+    // Keep the bearing even when a vertical cast projects to a single point.
+    return {a,b:axis.run<.1 ? b : mapPoint(axis.b,this.terrainMaps),range,st:snap.st};
   }
 
   /** The token an emanation comes out of: the one under the pointer, or the one standing in the square it snapped to. */
@@ -3067,8 +3112,10 @@ export class Board {
   private moveShape(d: Extract<Drag, { kind: 'shape' }>, w: Vec, e: PointerEvent) {
     const k = d.dk;
     if (isTemplate(k)) {
+      if(d.range===undefined && Math.hypot(w.x-d.start.x,w.y-d.start.y)*this.cam.zoom<3) return;
       const sn = this.templateSnap(k, d.start, w, e, d);
       d.pts = [sn.a, sn.b];
+      d.range=sn.range;
       d.snap = sn.st;
       return;
     }
@@ -3100,7 +3147,7 @@ export class Board {
     const isT = isTemplate(k);
     let pts = d.pts;
     const len = pts.length >= 2 ? Math.hypot(pts[pts.length - 1].x - pts[0].x, pts[pts.length - 1].y - pts[0].y) : 0;
-    if (isT) { if (len < grid.cell * 0.4) return; }
+    if (isT) { if (!d.range) return; }
     else if (k === 'pen') { if (pts.length > 2) pts = fitPenPoints(pts, Math.max(0.6, 1 / this.cam.zoom)); }
     else if (len * this.cam.zoom < 4) return;
     const stroke = this.strokePx();
@@ -3115,7 +3162,7 @@ export class Board {
       k, p: joinPts(pts), color: u.drawColor, w: isT ? Math.max(2, stroke) : stroke,
       fill: !isT && closed ? FILL_LEVEL[u.drawFillMode] : 0, fc: closed ? u.drawFillColor : '',
       dash: !isT && u.drawDash, txt: '', fs: 28, bw: u.tplWidth, of: k === 'emanation' && d.of ? d.of : undefined, pv: isT && !u.tplShare ? true : undefined,
-      spell:isT ? u.tplSettings : undefined,
+      spell:isT ? {...u.tplSettings,range:d.range} : undefined,
       td: isT && u.tplRough ? true : undefined,
     }, { onId: (id) => { if (closed || k === 'line' || k === 'arrow' || k === 'pen') this.ui.selectDrawings([id]); } }).catch((err: Error) => this.cb.onNotice(err.message, 'error'));
   }
@@ -3254,8 +3301,10 @@ export class Board {
       case 'shape': this.moveShape(d, w, e); break;
       case 'drawresize': {
         const spell=isTemplate(d.orig.k);
-        d.patch = resizeDrawing(d.orig,d.handle,spell ? mapPoint(w,this.terrainMaps) : w,{shift:!spell && e.shiftKey,alt:!spell && e.altKey,grid:this.client.grid});
-        if(spell && d.patch.p) d.patch.p=joinPts(parsePts(d.patch.p).map(p=>mapPoint(p,this.terrainMaps)));
+        if(spell) {
+          const sn=this.templateSnap(d.orig.k,parsePts(d.orig.p)[0],w,e,undefined,d.orig);
+          d.patch={p:joinPts([sn.a,sn.b]),spell:{...d.orig.spell,range:sn.range}};
+        } else d.patch=resizeDrawing(d.orig,d.handle,w,{shift:e.shiftKey,alt:e.altKey,grid:this.client.grid});
         this.drawPreview = { id: d.id, patch: d.patch };
         this.refreshDraws();
         break;

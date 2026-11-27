@@ -14,7 +14,7 @@ import { uploadImage } from './uploads';
 function sizeNote(client: TableClient, size: number): string {
   const g = client.grid;
   const squares = size === 0.5 ? 'half a square' : size === 1 ? '1 square' : `${size} squares`;
-  return `Fills ${squares} across (${Math.round(size * g.ft * 10) / 10} ft)`;
+  return `Fills ${squares} across (${Math.round(size * g.ft)} ft)`;
 }
 
 /**

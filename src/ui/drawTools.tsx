@@ -1,6 +1,6 @@
-import { aimedSpell, spellVolume, mapPoint } from '../core/spellVolume';
+import { aimedSpell, mapPoint, spellAxis, snapSpellFeet } from '../core/spellVolume';
 import { joinPts, parsePts } from '../core/draw';
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { Board } from '../board/Board';
 import { DRAW_COLORS, DRAW_NAME, FILL_LEVEL, FONTS, LINE_H, STROKE_CELLS, fillModeOf, fontStack, isTemplate, sizeFt, withSizeFt, type FillMode } from '../core/draw';
 import type { TableClient } from '../state/client';
@@ -87,12 +87,12 @@ function NumField(props: { label: string; value: number; min?: number; max?: num
   return (
     <label class="numf" title={props.title}>
       <span>{props.label}</span>
-      <input key={props.value} type="number" defaultValue={props.value} min={props.min} max={props.max} step={props.step ?? 1}
+      <input key={props.value} type="number" defaultValue={Math.round(props.value)} min={props.min} max={props.max} step={props.step ?? 1}
         onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
         onChange={(e) => {
           const n = Number((e.target as HTMLInputElement).value);
           if (Number.isFinite(n) && (props.min === undefined || n >= props.min) && (props.max === undefined || n <= props.max) && n !== props.value) props.onCommit(n);
-          else (e.target as HTMLInputElement).value = String(props.value);
+          (e.target as HTMLInputElement).value = String(Math.round(props.value));
         }} />
       {props.unit && <span class="unit">{props.unit}</span>}
     </label>
@@ -429,21 +429,22 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
   );
 }
 
-function SpellAdvanced({settings,kind,placed=false,onChange}:{settings:SpellSettings;kind:Drawing['k'];placed?:boolean;onChange:(v:SpellSettings)=>void}) {
+function SpellAdvanced({settings,kind,heights,placed=false,onChange}:{settings:SpellSettings;kind:Drawing['k'];heights:{start:number;end:number};placed?:boolean;onChange:(v:SpellSettings)=>void}) {
   const heightField=(key:'start'|'end',label:string)=><label class="field"><span>{label} (ft)</span>
-    <input key={key+String(settings[key])} type="number" step="any" placeholder="Ground" defaultValue={settings[key] ?? ''}
+    <input key={key+':'+settings[key]+':'+Math.round(heights[key])} type="number" step="any" title="Clear to follow ground elevation" defaultValue={Math.round(heights[key])}
       onBlur={e=>{
         const input=e.currentTarget, next={...settings};
-        if (!input.validity.valid) return;
+        if (!input.validity.valid || input.value===input.defaultValue) return;
         if (input.value==='') delete next[key]; else next[key]=input.valueAsNumber;
+        input.value=String(Math.round(heights[key]));
         if (next[key]!==settings[key]) onChange(next);
       }} onKeyDown={e=>{if(e.key==='Enter') e.currentTarget.blur();}}/></label>;
   return <details class="spell-advanced"><summary>Advanced</summary>
     <Toggle checked={settings.walls!==false} onChange={walls=>onChange({...settings,walls})} label={placed?'This spell considers walls':'Consider walls'} />
     {settings.walls!==false && kind!=='beam' && <Toggle checked={settings.wrap!==false} onChange={wrap=>onChange({...settings,wrap})} label={placed?'This spell wraps around corners':'Wrap around corners'} />}
     <Toggle checked={settings.elevation!==false} onChange={elevation=>onChange({...settings,elevation})} label={placed?'This spell considers elevation':'Consider elevation'} />
-    {settings.elevation!==false && <>{heightField('start','Starting elevation')}
-      {aimedSpell(kind) && <>{heightField('end','Ending elevation')}<p class="hint">Ending elevation sets the center of the far face.</p></>}</>}
+    {settings.elevation!==false && <><div class="spell-heights">{heightField('start','Starting elevation')}{aimedSpell(kind) && heightField('end','Ending elevation')}</div>
+      {aimedSpell(kind) && <p class="hint">Ending elevation sets the center of the far face.</p>}</>}
   </details>;
 }
 
@@ -458,13 +459,29 @@ function LineWidth({value,onChange}:{value:number;onChange:(feet:number)=>void})
   </div>;
 }
 
-export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
-  const { ui, client } = props;
+export function TemplateFlyout(props: { ui: UiState; client: TableClient; board:Board|null }) {
+  const { ui, client, board } = props;
   const d = useUi(ui);
   useClient(client);
   const hex=isHex(client.grid);
+  const panel=useRef<HTMLDivElement>(null);
+  const [aim,setAim]=useState<{start:number;end:number}>();
+  useEffect(()=>{
+    const canvas=board?.app?.canvas;
+    if(!board || !canvas) return;
+    const sync=()=>{
+      if(!panel.current?.querySelector('details[open]')) return;
+      const h=board.placementElevations();
+      setAim(old=>old?.start===h.start && old.end===h.end ? old : h);
+    };
+    sync();
+    canvas.addEventListener('pointermove',sync);
+    const el=panel.current;
+    el?.addEventListener('toggle',sync,true);
+    return ()=>{ canvas.removeEventListener('pointermove',sync); el?.removeEventListener('toggle',sync,true); };
+  },[board,d.tplKind,d.tplMode,d.tplSettings]);
   return (
-    <div class="flyout">
+    <div class="flyout" ref={panel}>
       <div class="flyout-title">Spell templates</div>
       {!client.canDo('template') && <p class="hint">Placing templates is turned off for players.</p>}
       <div class="seg" role="group" aria-label="What a click does">
@@ -496,7 +513,7 @@ export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
           {client.isDM ? 'Clear all templates' : 'Clear my templates'}
         </button>
       </div>}
-      {d.tplMode === 'place' && <SpellAdvanced settings={d.tplSettings} kind={d.tplKind} onChange={tplSettings=>ui.set({tplSettings})} />}
+      {d.tplMode === 'place' && <SpellAdvanced settings={d.tplSettings} heights={{start:d.tplSettings.start ?? aim?.start ?? 0,end:d.tplSettings.end ?? aim?.end ?? 0}} kind={d.tplKind} onChange={tplSettings=>ui.set({tplSettings})} />}
     </div>
   );
 }
@@ -607,8 +624,15 @@ export function DrawInspector(props: { ui: UiState; client: TableClient; board: 
   const strokeKey = (['thin', 'medium', 'thick'] as StrokeSize[]).reduce((best, k) => (Math.abs(STROKE_CELLS[k] * client.grid.cell - first.w) < Math.abs(STROKE_CELLS[best] * client.grid.cell - first.w) ? k : best), 'medium' as StrokeSize);
   const size = one ? sizeFt(one, client.grid) : null;
   const ends=one && allTemplates ? parsePts(one.p) : [];
-  const measure=(end:typeof ends[number])=>spellVolume(one!,ends[0],end,client.grid,{segs:[],ground:p=>board?.groundAtPoint(p) ?? 0}).feet;
-  if (size && 'len' in size && ends.length===2) size.len=Math.round(measure(ends[1])*10)/10;
+  const axis=one && ends.length===2 ? spellAxis(one,ends[0],ends[1],client.grid,p=>board?.groundAtPoint(p) ?? 0) : null;
+  const gridded=currentOverlay(client.grid)!=='none';
+  if (size && 'len' in size && axis) size.len=axis.feet;
+  const changeSpell=(spell:SpellSettings)=>{
+    if(!one || !axis) return;
+    const next={...spell,range:spell.range ?? snapSpellFeet(axis.feet,gridded)};
+    const projected=spellAxis({...one,spell:next},ends[0],ends[1],client.grid,p=>board?.groundAtPoint(p) ?? 0);
+    upd({spell:next,...(projected.run>=.1 ? {p:joinPts([ends[0],mapPoint(projected.b,board?.spellMaps() ?? [])])} : {})});
+  };
   const ft = client.grid.ft;
   return (
     <div class="drawtag" onMouseDown={(e) => e.stopPropagation()}>
@@ -664,15 +688,13 @@ export function DrawInspector(props: { ui: UiState; client: TableClient; board: 
           </div>
         )}
         {one && size && 'len' in size && (
-          <NumField label="Length" value={size.len} min={1} max={2000} step={ft} unit="ft" title="Length in feet" onCommit={(n) => { if (!allTemplates || ends.length!==2) { const p=withSizeFt(one,client.grid,'len',n); if(p.p) upd(p); return; }
-            const [a,b]=ends, run=Math.hypot(b.x-a.x,b.y-a.y), ux=run ? (b.x-a.x)/run : 1, uy=run ? (b.y-a.y)/run : 0;
-            const at=(r:number)=>mapPoint({x:a.x+ux*r,y:a.y+uy*r},board?.spellMaps() ?? []);
-            let lo=0,hi=(n/client.grid.ft+Math.max(1,(one.of ?? 0)/client.grid.ft))*client.grid.cell;
-            for(let i=0;i<32;i++) { const mid=(lo+hi)/2; if(measure(at(mid))<=n) lo=mid; else hi=mid; }
-            upd({p:joinPts([a,at(lo)])}); }} />
+          <NumField label="Length" value={size.len} min={axis && gridded ? 5 : 1} max={2000} step={axis ? gridded ? 5 : 'any' : ft} unit="ft" title="Length in feet" onCommit={(n) => {
+            if(axis) changeSpell({...one.spell,range:snapSpellFeet(n,gridded)});
+            else { const patch=withSizeFt(one,client.grid,'len',n); if(patch.p) upd(patch); }
+          }} />
         )}
         {one?.k==='beam' && <LineWidth value={one.bw} onChange={bw=>upd({bw})}/>}
-        {one && allTemplates && <SpellAdvanced key={one.id} placed settings={one.spell ?? {}} kind={one.k} onChange={spell=>upd({spell})}/>}
+        {one && axis && <SpellAdvanced key={one.id} placed settings={one.spell ?? {}} heights={axis} kind={one.k} onChange={changeSpell}/>}
         {allText && (
           <div class="row wrap">
             <FontSelect value={first.font} onChange={(k) => upd({ font: k })} />

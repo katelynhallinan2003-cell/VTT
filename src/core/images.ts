@@ -22,7 +22,7 @@ export async function diagnoseImage(url: string): Promise<string> {
   } catch {
     try {
       await fetch(url, { mode: 'no-cors', cache: 'no-store' });
-      return 'the image host does not allow other websites to use its images (CORS)';
+      return 'the link may be missing or the image host may have blocked access from the board';
     } catch {
       return 'the browser could not reach the image host (offline, or an ad/privacy blocker?)';
     }

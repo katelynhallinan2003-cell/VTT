@@ -1,8 +1,10 @@
-import { useRef, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { TableClient } from '../state/client';
 import type { Handout } from '../types';
 import { Field, Modal, toast, useClient } from './common';
 import { uploadImage } from './uploads';
+import { fetchPicture, MissingHostedPicture } from '../core/hostedPicture';
+import { hostedPicture, keepPicture, savedPicture } from '../core/pictureStore';
 
 type View = { v: 'list' } | { v: 'edit'; id: string | null } | { v: 'show'; id: string } | { v: 'read'; id: string };
 
@@ -15,13 +17,39 @@ export function shownTo(client: TableClient, h: Handout): string {
 }
 
 /** A handout to read: the picture, then the words. */
-function Reader(props: { h: Handout }) {
+function HandoutPicture({url,title,client}:{url:string;title:string;client:TableClient}) {
+  const [local,setLocal]=useState('');
+  const active=useRef(true);
+  const backup=useRef('');
+  useEffect(()=>()=>{
+    active.current=false;
+    if(backup.current) URL.revokeObjectURL(backup.current);
+  },[]);
+  const failed=async()=>{
+    if(!active.current || !hostedPicture(url)) return;
+    client.pictures.failed(url);
+    const blob=await savedPicture(url);
+    if(!blob || !active.current || backup.current) return;
+    backup.current=URL.createObjectURL(blob);
+    setLocal(backup.current);
+  };
+  return <img class="handout-img" src={local || url} alt={title}
+    onError={()=>{if(!local) void failed();}}
+    onLoad={()=>{
+      if(local || !hostedPicture(url)) return;
+      void fetchPicture(url,'force-cache').then(({blob})=>keepPicture(url,blob)).catch(error=>{
+        if(error instanceof MissingHostedPicture) void failed();
+      });
+    }}/>;
+}
+
+function Reader(props: { h: Handout; client: TableClient }) {
   const { h } = props;
   return (
     <div class="handout-read">
       {h.img && (
         <a href={h.img} target="_blank" rel="noreferrer" title="Open the picture full size">
-          <img class="handout-img" src={h.img} alt={h.title} />
+          <HandoutPicture key={h.img} url={h.img} title={h.title} client={props.client}/>
         </a>
       )}
       {h.text && <p class="handout-text">{h.text}</p>}
@@ -84,7 +112,7 @@ export function HandoutsModal(props: { client: TableClient; openId?: string | nu
           {(dm || list.length > 1) && <button class="btn" onClick={back}>All handouts</button>}
           <button class="btn primary" onClick={props.onClose}>Close</button>
         </>}>
-        {h ? <Reader h={h} /> : <p class="muted">This handout is no longer being shown.</p>}
+        {h ? <Reader h={h} client={client} /> : <p class="muted">This handout is no longer being shown.</p>}
       </Modal>
     );
   }

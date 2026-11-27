@@ -48,6 +48,8 @@ Read `CLAUDE.md` (this file) and `WIP.md` before doing anything else in a sessio
 
 ## Design precedents
 
+- Store recoverable image originals once per hosted URL in a bounded local store. Only the GM publishes verified replacements. Preserve scene geometry and edit only references that still name the missing image.
+
 - **Sight across elevation.** Measure sight and carried lights from the token’s standing or flying altitude plus 5 ft per token size unit. A finite wall level with the eyes can be seen over. Painted terrain above the eyes shows a strip of its near side that gets shallower as the rise grows. Beyond that strip, a higher face can rise above the sightline over earlier wall tops. The hidden shelf between faces stays covered. Looking downhill, the sightline from the eyes across the rim determines where lower ground becomes visible again. Resolve terrain sight across neighboring rays as one surface. Blend nearby viewpoints in map coordinates as the viewer moves. Drawn walls use the current viewpoint. Measure enclosed pockets on the combined terrain view. Clear pockets up to 50 square feet and taper them to full size at 100 square feet. Reveal thin terrain shadows and narrow tips, including those attached to broad shadows. Shadows narrower than 10° disappear from sight and lighting. Movement uses the ground contours.
 
 - **Hide everything.** Cover the scene and enable token sight together. Current sight still follows walls, lighting and darkvision. Undo restores the previous fog and sight settings. A completely clear fog mask skips token sight and exploration until fog returns. Ambient darkness and lamps still apply.

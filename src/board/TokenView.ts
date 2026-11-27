@@ -5,7 +5,7 @@ import { addFx, tintColor } from '../core/effects';
 import { colorNum } from '../core/colornum';
 import { isLightMark } from '../core/light';
 import type { Effect, GridSettings, Token } from '../types';
-import { loadTexture, type LoadedTexture } from './textures';
+import { loadTexture, releaseTexture, type LoadedTexture } from './textures';
 
 export interface TokenCtx {
   spells?:string[];
@@ -111,6 +111,7 @@ export class TokenView {
       this.redraw(token, ctx);
     }
     if (token.img !== this.imgUrl) {
+      if (this.imgUrl) releaseTexture(this.imgUrl, 'token');
       this.imgUrl = token.img;
       this.tex = null;
       this.sprite?.destroy();
@@ -410,6 +411,8 @@ export class TokenView {
   }
 
   destroy() {
+    if (this.imgUrl) releaseTexture(this.imgUrl, 'token');
+    this.imgUrl = null;
     this.container.destroy({ children: true });
   }
 }

@@ -34,6 +34,7 @@ import { buildCampaign, newLibraryItems, planImport, type CampaignFile, type Cam
 import { addLibraryItem, removeTokenFromLib, saveTokenToLib, watchTokenLib } from './account';
 import { History } from './history';
 import { P } from './paths';
+import { PictureRecovery } from './pictureRecovery';
 
 export interface SceneState {
   id: string;
@@ -85,6 +86,7 @@ const hpWire = (hp: number, max: number, tmp: number) => ({ hp, max, ...(tmp > 0
 const NO_MAP_GRIDS: MapGrid[] = [];
 
 export class TableClient {
+  readonly pictures = new PictureRecovery(this, () => this.bump());
   meta: TableMeta | null = null;
   metaLoaded = false;
   settings: TableSettings = { perm: { ...PRESETS.trusting }, preset: 'trusting' };
@@ -230,8 +232,8 @@ export class TableClient {
 
     this.unsubs.push(() => { this.libUnsub?.(); this.libUnsub = null; clearTimeout(this.mergeTimer); });
     this.unsubs.push(b.listenChildren(P.players(tid), {
-      added: (k, v) => { this.players.set(k, normalizePlayer(k, v)); this.playersChanged(k); this.bump(); },
-      changed: (k, v) => { this.players.set(k, normalizePlayer(k, v)); this.playersChanged(k); this.bump(); },
+      added: (k, v) => { this.pictures.receive(k, v?.pictureRequests); this.players.set(k, normalizePlayer(k, v)); this.playersChanged(k); this.bump(); },
+      changed: (k, v) => { this.pictures.receive(k, v?.pictureRequests); this.players.set(k, normalizePlayer(k, v)); this.playersChanged(k); this.bump(); },
       removed: (k) => { this.players.delete(k); this.bump(); },
     }, this.fail('players')));
 
@@ -240,6 +242,10 @@ export class TableClient {
     this.handoutReady = false;
     clearTimeout(this.handoutTimer);
     const handoutRow = (k: string, v: any) => {
+      if (this.isDM) {
+        this.pictures.refresh(P.dmHandout(tid,k) + '/img', v?.img);
+        if (v?.shown) this.pictures.refresh(P.handout(tid,k) + '/img', v.img);
+      }
       const h = normalizeHandout(k, v);
       this.handouts.set(k, h);
       const prev = this.handoutSeen.get(k);
@@ -267,6 +273,7 @@ export class TableClient {
     }, this.fail('upload key')));
 
     if (this.role === 'dm') {
+      this.unsubs.push(this.pictures.start());
       this.unsubs.push(b.listenChildren(P.sceneIndex(tid), {
         added: (k, v) => this.setIndex(k, v),
         changed: (k, v) => this.setIndex(k, v),
@@ -294,6 +301,7 @@ export class TableClient {
   stop() {
     this.clearLive();
     this.stopped = true;
+    this.pictures.stop();
     for (const u of this.unsubs) u();
     for (const u of this.sceneUnsubs) u();
     this.unsubs = [];
@@ -458,6 +466,11 @@ export class TableClient {
     this.sceneUnsubs.push(b.listen(P.sceneMeta(tid, sid), (v) => {
       if (!live()) return;
       s.meta = v ? normalizeSceneMeta(v) : null;
+      if (this.isDM && s.meta) {
+        const path = P.sceneMeta(tid,sid);
+        this.pictures.refresh(path + '/mapUrl', s.meta.mapUrl);
+        for (const m of s.meta.maps) this.pictures.refresh(path + '/maps/' + m.id + '/u', m.url);
+      }
       s.loaded = true;
       s.metaRev++;
       this.tokensChanged(); // switching "remember explored ground" on reveals where the tokens stand right away
@@ -467,12 +480,17 @@ export class TableClient {
     const tokenHandlers = (hidden: boolean) => ({
       added: (k: string, v: any) => {
         if (!live()) return;
+        if (this.isDM) this.pictures.refresh((hidden ? P.dmSceneToken : P.sceneToken)(tid,sid,k) + '/img', v?.img);
         const t = this.withHp(s, normalizeToken(k, v, hidden));
         s.tokens.set(k, t); s.tokensRev++; this.tokensChanged(); this.characterSeen(k); this.bump();
         // a hidden light kept in the DM-only part (from before lights shone for players) moves to where players can read it
         if (hidden && isLightMark(t)) this.queueLightMove(s, k);
       },
-      changed: (k: string, v: any) => { if (live()) { s.tokens.set(k, this.withHp(s, normalizeToken(k, v, hidden))); s.tokensRev++; this.tokensChanged(); this.characterSeen(k); this.bump(); } },
+      changed: (k: string, v: any) => {
+        if (!live()) return;
+        if (this.isDM) this.pictures.refresh((hidden ? P.dmSceneToken : P.sceneToken)(tid,sid,k) + '/img', v?.img);
+        s.tokens.set(k, this.withHp(s, normalizeToken(k, v, hidden))); s.tokensRev++; this.tokensChanged(); this.characterSeen(k); this.bump();
+      },
       removed: (k: string) => {
         if (!live()) return;
         const cur = s.tokens.get(k);
@@ -1945,6 +1963,11 @@ export class TableClient {
     for (const e of [...this.sceneIndex].sort((a, b) => a.order - b.order)) {
       const [pub, dm] = await Promise.all([this.backend.get(P.scene(tid, e.id)), this.backend.get(P.dmScene(tid, e.id))]);
       if (!pub || !pub.meta) continue;
+      if (pub.meta.mapUrl) pub.meta.mapUrl = this.pictures.current(pub.meta.mapUrl);
+      for (const m of Object.values<any>(pub.meta.maps ?? {})) if (m?.u) m.u = this.pictures.current(m.u);
+      for (const source of [pub.tokens, dm?.tokens]) {
+        for (const token of Object.values<any>(source ?? {})) if (token?.img) token.img = this.pictures.current(token.img);
+      }
       const fid = folderOf(e, this.sceneFolders);
       const folder = fid ? this.sceneFolders.find((f) => f.id === fid)?.name : undefined;
       scenes.push({ name: e.name, active: e.id === this.activeSceneId, ...(folder ? { folder } : {}), pub, dm: dm ?? {} });
@@ -1965,7 +1988,7 @@ export class TableClient {
       name: this.meta?.name ?? 'Campaign',
       settings: { perm: this.settings.perm, preset: this.settings.preset },
       scenes,
-      handouts: [...this.handouts.values()],
+      handouts: [...this.handouts.values()].map(h => ({ ...h, img: h.img ? this.pictures.current(h.img) : null })),
       library,
       now: Date.now(),
     });

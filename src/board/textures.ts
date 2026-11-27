@@ -1,5 +1,7 @@
 import { CanvasSource, ImageSource, Texture } from 'pixi.js';
 import { loadImage } from '../core/images';
+import { fetchPicture } from '../core/hostedPicture';
+import { hostedPicture, keepPicture, savedPicture, storePicture } from '../core/pictureStore';
 import { hideGrid, scaleCut, WORK_SIDE, type GridCut, type PixelImage } from '../core/gridcut';
 import { hideHexGrid } from '../core/hexcut';
 
@@ -33,6 +35,11 @@ async function loadImageWithRetry(url: string): Promise<HTMLImageElement> {
   for (let i = 0; i <= (remote ? RETRY_DELAYS.length : 0); i++) {
     try {
       // retries add a harmless query so a cached "not found" answer is not reused
+      if (hostedPicture(url)) {
+        const remote = await fetchPicture(url, i ? 'reload' : 'default');
+        void keepPicture(url, remote.blob);
+        return remote.image;
+      }
       return await loadImage(i === 0 ? url : `${url}${url.includes('?') ? '&' : '?'}r=${i}`, true);
     } catch (e) {
       last = e;
@@ -43,8 +50,9 @@ async function loadImageWithRetry(url: string): Promise<HTMLImageElement> {
 }
 
 const cache = new Map<string, Promise<LoadedTexture | null>>();
+const users = new Map<string, number>();
 
-type FailHandler = (kind: 'map' | 'token', url: string) => void;
+type FailHandler = (kind: 'map' | 'token', url: string, recovered?: boolean) => void;
 let onFail: FailHandler | null = null;
 /** Called whenever a texture could not be loaded (the board turns this into a visible message). */
 export function setTextureFailHandler(fn: FailHandler | null) { onFail = fn; }
@@ -58,11 +66,17 @@ function fitSize(w: number, h: number, maxSide: number, maxPixels: number) {
 
 export function loadTexture(url: string, kind: 'map' | 'token'): Promise<LoadedTexture | null> {
   const key = `${kind}:${url}`;
+  users.set(key, (users.get(key) ?? 0) + 1);
   let p = cache.get(key);
   if (!p) {
     p = (async () => {
       try {
-        const img = await loadImageWithRetry(url);
+        const img = await loadImageWithRetry(url).catch(async error => {
+          const backup = hostedPicture(url) ? await savedPicture(url) : null;
+          if (!backup) throw error;
+          onFail?.(kind, url, true);
+          return loadImage(backup);
+        });
         const nw = img.naturalWidth;
         const nh = img.naturalHeight;
         const limit = kind === 'map'
@@ -89,8 +103,23 @@ export function loadTexture(url: string, kind: 'map' | 'token'): Promise<LoadedT
   return p;
 }
 
+export async function fullSizePicture(url: string) {
+  const loaded = await (cache.get('map:' + url) ?? cache.get('token:' + url));
+  if (!loaded || loaded.scale !== 1 || loaded.texture.destroyed) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = loaded.w;
+  canvas.height = loaded.h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.drawImage(loaded.texture.source.resource, 0, 0);
+  return new Promise<Blob | null>(resolve => canvas.toBlob(resolve, /\.jpe?g$/i.test(url) ? 'image/jpeg' : 'image/png', 0.98));
+}
+
 export function releaseTexture(url: string, kind: 'map' | 'token') {
   const key = `${kind}:${url}`;
+  const left = (users.get(key) ?? 1) - 1;
+  if (left > 0) { users.set(key, left); return; }
+  users.delete(key);
   const p = cache.get(key);
   if (!p) return;
   cache.delete(key);
@@ -151,12 +180,21 @@ async function pictureCache(key: string) {
 export async function savedGridlessTexture(key: string): Promise<LoadedTexture | null> {
   try {
     await pendingSaves.get(key);
-    const { cache, path } = await pictureCache(key);
-    const entry = await cache.match(path);
-    if (!entry) return null;
-    const w = Number(entry.headers.get('X-Map-Width')), h = Number(entry.headers.get('X-Map-Height'));
+    const stored = await savedPicture('gridless:' + key);
+    let w: number, h: number, blob: Blob;
+    if (stored) {
+      const header = new DataView(await stored.slice(0, 8).arrayBuffer());
+      w = header.getUint32(0); h = header.getUint32(4);
+      blob = stored.slice(8, stored.size, 'image/png');
+    } else {
+      const { cache, path } = await pictureCache(key);
+      const entry = await cache.match(path);
+      if (!entry) return null;
+      w = Number(entry.headers.get('X-Map-Width')); h = Number(entry.headers.get('X-Map-Height'));
+      blob = await entry.blob();
+    }
     if (!(w > 0 && h > 0)) return null;
-    const bitmap = await createImageBitmap(await entry.blob());
+    const bitmap = await createImageBitmap(blob);
     return { w, h, scale: w / bitmap.width, texture: new Texture({ source: new ImageSource({
       resource: bitmap, scaleMode: 'linear', autoGenerateMipmaps: true,
     }) }) };
@@ -166,11 +204,10 @@ export async function savedGridlessTexture(key: string): Promise<LoadedTexture |
 function saveGridless(key: string, canvas: HTMLCanvasElement, w: number, h: number) {
   if (pendingSaves.has(key)) return;
   const save = (async () => {
-    const { cache, path } = await pictureCache(key);
     const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
-    if (blob) await cache.put(path, new Response(blob, { headers: {
-      'Content-Type': 'image/png', 'X-Map-Width': String(w), 'X-Map-Height': String(h),
-    } }));
+    const header = new DataView(new ArrayBuffer(8));
+    header.setUint32(0, w); header.setUint32(4, h);
+    if (blob) await storePicture('gridless:' + key, new Blob([header.buffer, blob]), 0);
   })().catch(() => {}).finally(() => pendingSaves.delete(key));
   pendingSaves.set(key, save);
 }

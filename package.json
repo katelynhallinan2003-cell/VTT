@@ -17,7 +17,7 @@
     "test:vision": "vitest run tests/autolight.test.ts tests/daylight.test.ts tests/fog3.test.ts tests/light.test.ts tests/lightmodel.test.ts tests/paintedlight.test.ts tests/walls.test.ts tests/walltrace.test.ts",
     "test:drawing": "vitest run tests/colornum.test.ts tests/draw.test.ts tests/emanation.test.ts tests/templates7b.test.ts tests/spellVolume.test.ts tests/wand.test.ts",
     "test:tokens": "vitest run tests/combat.test.ts tests/effects.test.ts tests/grouphp.test.ts tests/tokenlib.test.ts tests/charlib.test.ts",
-    "test:table": "vitest run tests/campaign.test.ts tests/client.test.ts tests/core.test.ts tests/folders.test.ts tests/handouts.test.ts tests/imgbb.test.ts tests/rules.test.ts tests/tables.test.ts"
+    "test:table": "vitest run tests/pictureRecovery.test.ts tests/campaign.test.ts tests/client.test.ts tests/core.test.ts tests/folders.test.ts tests/handouts.test.ts tests/imgbb.test.ts tests/rules.test.ts tests/tables.test.ts"
   },
   "dependencies": {
     "firebase": "^13.4.0",

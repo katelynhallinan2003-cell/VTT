@@ -31,7 +31,7 @@ import { DrawLayer, paintShape, shapeOf } from './DrawLayer';
 import { TerrainLayer } from './TerrainLayer';
 import { WallLayer } from './WallLayer';
 import { WALL_NAME, boxSegments, chainSegments, circlePoints, distToSeg, endNear, freehandCorners, hatchTicks, moveSegs, rayHit, sideOf, sightSegs, snapWallPoint, visibilityPolygon, wallMid, wallNear, wallVisDefault, type Seg, type Wall } from '../core/walls';
-import { canvasTexture, loadTexture, releaseTexture, setTextureFailHandler, type LoadedTexture, gridlessKey, gridlessTexture, savedGridlessTexture, readGridSample } from './textures';
+import { canvasTexture, fullSizePicture, loadTexture, releaseTexture, setTextureFailHandler, type LoadedTexture, gridlessKey, gridlessTexture, savedGridlessTexture, readGridSample } from './textures';
 import { diagnoseImage } from '../core/images';
 import { currentOverlay, overlaySettings, type GridOverlay } from '../core/gridOverlay';
 
@@ -174,6 +174,17 @@ export class Board {
   private mapScaleToWorld = 1;
   /** the map with its printed grid filled in (shown instead of the original while that is switched on) */
   private mapCutTex: Texture | null = null;
+  private originalRequest?: Promise<LoadedTexture | null>;
+  private heldMap: { url?: string; cut: Texture | null } | null = null;
+  private mapLayout = '';
+  private swappedPicture = false;
+
+  private releaseHeldMap() {
+    if (!this.heldMap) return;
+    if (this.heldMap.url) releaseTexture(this.heldMap.url, 'map');
+    this.heldMap.cut?.destroy(true);
+    this.heldMap = null;
+  }
   private mapCutKey = '';
 
   private views = new Map<string, TokenView>();
@@ -234,7 +245,10 @@ export class Board {
     // text sizes come from a canvas, so boxes around text match what is drawn
     const mctx = document.createElement('canvas').getContext('2d');
     if (mctx) setLineMeasurer((css, line) => { mctx.font = css; return mctx.measureText(line).width; });
-    setTextureFailHandler((kind, url) => {
+    this.client.pictures.liveOriginal = fullSizePicture;
+    setTextureFailHandler((kind, url, recovered) => {
+      this.client.pictures.failed(url);
+      if (recovered) return;
       if (kind !== 'token' || this.failedTokenUrls.has(url)) return;
       this.failedTokenUrls.add(url);
       if (url.startsWith('blob:')) { this.cb.onTokenImageError('A token picture was only kept in this browser tab (demo mode), so it is gone after a reload.'); return; }
@@ -306,6 +320,7 @@ export class Board {
     this.roughPattern?.destroy();
     this.cancelPress();
     if (this.liveSent) this.client.setLive({ ruler: null, ghosts: {} });
+    this.client.pictures.liveOriginal = undefined;
     setTextureFailHandler(null);
     cancelAnimationFrame(this.raf);
     this.resizeObs?.disconnect();
@@ -314,8 +329,9 @@ export class Board {
     this.sendMoves.cancel();
     this.sendMap.cancel();
     this.clearExtras();
+    this.releaseHeldMap();
     this.resetCut();
-    if (this.mapUrl) releaseTexture(this.mapUrl, 'map');
+    this.releaseOriginal();
     if (this.app) {
       try { this.app.destroy(true, { children: true }); } catch { /* already gone */ }
     }
@@ -594,8 +610,9 @@ export class Board {
     if (this.mapSprite) { this.mapSprite.destroy(); this.mapSprite = null; }
     if (this.pageSprite) { this.pageSprite.destroy(); this.pageSprite = null; }
     this.clearExtras();
+    this.releaseHeldMap();
     this.resetCut();
-    if (this.mapUrl) releaseTexture(this.mapUrl, 'map');
+    this.releaseOriginal();
     this.mapUrl = undefined;
     this.mapTex = null;
     this.cb.onMapError(null);
@@ -619,15 +636,23 @@ export class Board {
     this.dirty = true;
     if (!meta) return;
 
+    const layout = JSON.stringify([meta.mapX, meta.mapY, meta.mapW, meta.mapH, meta.mapScale, meta.mapGrid, meta.gridTried]);
     if (meta.mapUrl !== this.mapUrl) {
-      if (this.ui.data.tool === 'scale') this.ui.set({ tool: 'select' });
+      this.swappedPicture = !!this.mapUrl && !!meta.mapUrl && (this.client.isDM
+        ? this.client.pictures.current(this.mapUrl) === meta.mapUrl : layout === this.mapLayout);
+      if (!this.swappedPicture) this.releaseHeldMap();
+      if (!this.swappedPicture && this.ui.data.tool === 'scale') this.ui.set({ tool: 'select' });
       const saved = this.mapUrl === undefined ? this.cams.get(scene.id) : undefined;
-      if (this.mapUrl) releaseTexture(this.mapUrl, 'map');
+      if (this.swappedPicture && this.mapSprite && this.mapUrl && !this.heldMap) {
+        this.heldMap = { url: this.originalRequest ? this.mapUrl : undefined, cut: this.mapCutTex };
+        this.originalRequest = undefined;
+        this.mapCutTex = null;
+      } else this.releaseOriginal();
       this.mapUrl = meta.mapUrl;
       this.mapTex = null;
-      if (this.mapSprite) { this.mapSprite.destroy(); this.mapSprite = null; }
+      if (!this.heldMap && this.mapSprite) { this.mapSprite.destroy(); this.mapSprite = null; }
       this.resetCut();
-      this.fitPending = true;
+      this.fitPending = !this.swappedPicture;
       if (saved && saved.mapUrl === meta.mapUrl) {
         this.cam = { ...saved.camera };
         this.fitPending = false;
@@ -635,6 +660,7 @@ export class Board {
       }
       this.ui.set({ status: null });
     }
+    this.mapLayout = layout;
     if (meta.mapUrl) void this.loadMap(meta.mapUrl);
     if (this.mapSprite) {
       this.mapSprite.position.set(meta.mapX, meta.mapY);
@@ -701,7 +727,7 @@ export class Board {
         if (isBlankMap(m.url)) sprite.texture = Texture.WHITE; // an empty grid has no picture to load
         else void loadTexture(m.url, 'map').then((t) => {
           if (!t) return;
-          if (this.destroyed || this.extras.get(m.id) !== entry || this.client.scene?.id !== sid) { releaseTexture(m.url, 'map'); return; }
+          if (this.destroyed || this.extras.get(m.id) !== entry || this.client.scene?.id !== sid) return;
           sprite.texture = t.texture;
           (sprite as Sprite & { natScale?: number }).natScale = t.scale;
           this.extrasKey = '';
@@ -739,12 +765,18 @@ export class Board {
     if (this.mapCutTex) { this.mapCutTex.destroy(true); this.mapCutTex = null; }
   }
 
+  private releaseOriginal() {
+    if (this.originalRequest && this.mapUrl) releaseTexture(this.mapUrl, 'map');
+    this.originalRequest = undefined;
+  }
+
   /** Load the original on demand for pixel tools and for showing the printed grid. */
   private async originalMap(url: string) {
     const seq = this.mapLoadSeq;
     const scene = this.client.scene;
-    const tex = this.mapTex ?? await loadTexture(url, 'map');
+    const tex = this.mapTex ?? await (this.originalRequest ??= loadTexture(url, 'map'));
     if (this.destroyed || seq !== this.mapLoadSeq || scene !== this.client.scene || scene?.meta?.mapUrl !== url) return null;
+    if (!tex) this.releaseOriginal();
     this.mapTex = tex;
     return tex;
   }
@@ -854,6 +886,7 @@ export class Board {
     this.mapScaleToWorld = tex.scale;
     const sprite = this.mapSprite ?? new Sprite();
     sprite.texture = tex.texture;
+    this.releaseHeldMap();
     if (!this.mapSprite) this.mapLayer.addChild(sprite);
     this.mapSprite = sprite;
     this.mapCutTex?.destroy(true);
@@ -867,7 +900,7 @@ export class Board {
     this.gridDirty = true;
     this.updateFog();
     this.invalidate();
-    if (this.client.isDM && meta.mapUrl && !meta.gridTried && !meta.mapGrid) {
+    if (this.client.isDM && !this.swappedPicture && meta.mapUrl && !meta.gridTried && !meta.mapGrid) {
       // with the setting off the map is still marked as looked at, so switching it on later does not surprise anyone
       if (this.ui.data.autoGrid) void this.autoMapGrid(current);
       else void this.client.updateScene({ gridTried: true }, { record: false });

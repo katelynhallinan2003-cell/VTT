@@ -7,7 +7,7 @@ import type { Handout } from '../types';
 
 export const CAMPAIGN_FORMAT = 'vtt-campaign';
 export const CAMPAIGN_VERSION = 1;
-const MAX_SCENES = 200;
+const MAX_SCENES = 1000;
 const MAX_NODES = 1_500_000;
 
 type Json = any;

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { Board } from '../board/Board';
 import * as geometry from '../core/geometry';
 import { snapTokenCenter } from '../core/geometry';
+import { PictureRepairDialog } from './pictureRepairDialog';
 import { GridChoices } from './GridChoices';
 import { loadImage } from '../core/images';
 import type { TableClient } from '../state/client';
@@ -536,6 +537,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
             ui.set({ tool: 'select' });
           }} />
       )}
+      {client.isDM && client.pictures.pending[0] && <PictureRepairDialog key={JSON.stringify([client.pictures.pending[0].sid,client.pictures.pending[0].url])} client={client} item={client.pictures.pending[0]} />}
       <Toasts />
     </div>
   );

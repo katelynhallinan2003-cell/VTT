@@ -1,4 +1,5 @@
 import { prepareMapImage, prepareTokenImage } from '../core/images';
+import { keepPicture } from '../core/pictureStore';
 import { uploadToImgbb, type UploadResult } from '../core/imgbb';
 import type { TableClient } from '../state/client';
 
@@ -52,6 +53,7 @@ export async function uploadImage(client: TableClient, file: Blob, kind: 'map' |
       : 'The DM has not set up picture uploads yet.');
   }
   const res = await uploadToImgbb(prepared.blob, key, prepared.name);
+  void keepPicture(res.url, prepared.blob);
   const out = { ...res, w: res.w || prepared.w, h: res.h || prepared.h };
   if (kind === 'token') addRecent({ url: out.url, name: name ?? 'token' });
   return out;

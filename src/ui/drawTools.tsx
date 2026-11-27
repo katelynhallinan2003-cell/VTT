@@ -272,9 +272,14 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
         </p>
       )}
       {rough && <p class="hint">{mode === 'paint' ? 'Paint or drag across the map.' : 'Erases difficult ground wherever you drag.'}</p>}
-      <Toggle label="Always show terrain" checked={d.heightView==='always'} onChange={v=>ui.set({heightView:v ? 'always' : 'auto'})} />
       {!rough && n>0 && <button class="btn small danger" onClick={async () => { await client.clearDrawings(x=>!x.dt && !x.dl && (x.hz!=null || x.k==='terrain'),'Clear all heights'); ui.selectDrawings([]); }}>Clear all heights</button>}
-      {!rough && props.onFromColor && <details><summary>Advanced</summary><button class="btn small" onClick={props.onFromColor}>Paint height from a colour...</button></details>}
+      <details>
+        <summary>Advanced</summary>
+        <Toggle label="Always show terrain" checked={d.heightView==='always'} onChange={v=>ui.set({heightView:v ? 'always' : 'auto'})} />
+        <Toggle label="Always show terrain to players" checked={!!client.scene?.meta?.showPlayerTerrain}
+          onChange={v=>void client.updateScene({showPlayerTerrain:v}).catch(e=>toast(e.message,'error'))} />
+        {!rough && props.onFromColor && <button class="btn small" onClick={props.onFromColor}>Paint height from a colour...</button>}
+      </details>
     </div>
   );
 }

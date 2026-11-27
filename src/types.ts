@@ -103,6 +103,7 @@ export interface SceneMeta {
   gridTried: boolean;
   /** walls stop tokens being dragged through them (for players; the DM can hold Q to pass) */
   wallStop: boolean;
+  showPlayerTerrain: boolean;
   /** Former automatic wall threshold, retained for older scene files */
   cliff: number;
   bg: string;

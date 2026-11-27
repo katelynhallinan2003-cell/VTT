@@ -51,9 +51,13 @@ describe('editable gradients',()=>{
   });
   it('keeps a continuous tint through zero on a slope and a neutral tint on flat zero ground',()=>{
     const levels=[-10,-5,0,5,10,15];
-    const rgb=(h:number)=>heightColor(h,levels,true).slice(1).match(/../g)!.map(c=>parseInt(c,16));
+    const rgb=(h:number)=>heightColor(h,levels).slice(1).match(/../g)!.map(c=>parseInt(c,16));
     for (const h of [-0.1,0.1]) expect(rgb(h).every((c,i)=>Math.abs(c-rgb(0)[i])<4)).toBe(true);
     expect(heightColor(0,levels)).toBe('#a8b0ba');
+    for (const end of [-5,5]) {
+      const midpoint=rgb(end/2);
+      expect(midpoint.every((c,i)=>Math.abs(c-(rgb(0)[i]+rgb(end)[i])/2)<=1)).toBe(true);
+    }
   });
   it('immediately makes an edge segment and extends it beyond half the perimeter',()=>{
     const shape=areaShape(terrainOf([area([])],grid),'hill');

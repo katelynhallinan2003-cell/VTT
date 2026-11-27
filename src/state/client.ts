@@ -72,7 +72,7 @@ export type ScenePatch = Partial<Omit<SceneMeta, 'grid' | 'fog' | 'light'>> & {
 };
 
 let tokenClipboard: Token[] = [];
-const UNDOABLE_SCENE_KEYS = new Set(['mapX', 'mapY', 'mapScale', 'mapLocked', 'mapGrid', 'maps', 'wallStop', 'cliff', 'bg', 'grid', 'fog', 'light']);
+const UNDOABLE_SCENE_KEYS = new Set(['mapX', 'mapY', 'mapScale', 'mapLocked', 'mapGrid', 'maps', 'wallStop', 'showPlayerTerrain', 'cliff', 'bg', 'grid', 'fog', 'light']);
 
 /**
  * Everything the app knows about one table, kept in sync with the backend.

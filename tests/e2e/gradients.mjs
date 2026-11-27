@@ -113,8 +113,54 @@ await dm.evaluate(async()=>{const {board}=window.__vtt; await board.chooseGridOv
 await dm.mouse.move(630,390); await dm.mouse.down(); await dm.mouse.move(740,430,{steps:4}); await dm.mouse.up();
 await dm.getByRole('button',{name:'Clear difficult ground'}).waitFor();
 assert.ok(await dm.evaluate(()=>[...window.__vtt.client.scene.draws.values()].some(d=>d.dt && !d.hc)));
-await dm.getByRole('checkbox',{name:'Always show terrain'}).check();
+await dm.locator('.terrain-menu summary',{hasText:'Advanced'}).click();
+await dm.getByRole('checkbox',{name:'Always show terrain',exact:true}).check();
 assert.equal(await dm.evaluate(()=>window.__vtt.ui.data.heightView),'always');
+// Sample the actual overlay across a flat 0 ft / 0–5 ft slope / flat 5 ft join, with nothing selected.
+await dm.evaluate(async()=>{
+  const {client,ui}=window.__vtt;
+  await client.createScene({name:'Slope joins',makeActive:true});
+  const rect=(x,right,h)=>({k:'rect',p:[x,0,right,200].join(','),hz:h,color:'#fff',w:1,fill:0,dash:false,txt:'',fs:28,bw:5});
+  await client.addDrawings([rect(0,100,0),{...rect(100,400,0),gradientEnabled:true,gradientFixed:true,
+    gradient:[{id:'low',height:0,path:[{x:100,y:0},{x:100,y:200}]},{id:'high',height:5,path:[{x:400,y:0},{x:400,y:200}]}]},
+    rect(400,500,5),rect(500,600,15)]);
+  ui.set({tool:'select',drawSel:new Set(),heightView:'always'});
+});
+await dm.waitForFunction(()=>{
+  const {board}=window.__vtt;
+  return board.zones.areas.length===4 && board.terrainLayer.levels.includes(15) && !board.terrainLayer.running && board.heightFade===1;
+});
+const samples=await dm.evaluate(()=>{
+  const layer=window.__vtt.board.terrainLayer, sprite=layer.sprite, ctx=layer.canvas.getContext('2d');
+  return [90,99,100,103,240,398,400,410,499,500].map(x=>Array.from(ctx.getImageData(
+    Math.floor((x-sprite.x)/sprite.scale.x),Math.floor((100-sprite.y)/sprite.scale.y),1,1).data));
+});
+const difference=(a,b)=>Math.max(...a.map((v,i)=>Math.abs(v-b[i])));
+assert.ok(difference(samples[1],samples[2])<=4 && difference(samples[5],samples[6])<=4,JSON.stringify(samples));
+assert.ok(difference(samples[0],samples[3])<=5 && difference(samples[0],samples[4])>10,JSON.stringify(samples));
+assert.ok(difference(samples[8],samples[9])>12,JSON.stringify(samples));
+
+// Player visibility is a live scene setting, independent of the DM's own overlay.
+await dm.evaluate(()=>window.__vtt.ui.set({tool:'height',groundKind:'height',heightView:'auto'}));
+const shared=dm.getByRole('checkbox',{name:'Always show terrain to players',exact:true});
+if (!await shared.isVisible()) await dm.locator('.terrain-menu summary',{hasText:'Advanced'}).click();
+assert.equal(await shared.isChecked(),false);
+const pl=await context.newPage();
+watch(pl,'player',errors);
+await pl.goto(BASE+await dm.evaluate(()=>location.hash));
+await pl.getByPlaceholder('e.g. Aria').fill('Aria');
+await pl.getByRole('button',{name:'Join table'}).click();
+await pl.waitForFunction(()=>window.__vtt?.client?.scene?.meta?.name==='Slope joins');
+await shared.check();
+await dm.evaluate(()=>window.__vtt.ui.set({tool:'select'}));
+await pl.waitForFunction(()=>window.__vtt.board.heightFade===1 && window.__vtt.board.roughG.visible);
+await dm.waitForFunction(()=>window.__vtt.board.heightFade===0);
+await pl.reload();
+await pl.waitForFunction(()=>window.__vtt?.board?.heightFade===1);
+await dm.evaluate(()=>window.__vtt.ui.set({tool:'height'}));
+if (!await shared.isVisible()) await dm.locator('.terrain-menu summary',{hasText:'Advanced'}).click();
+await shared.uncheck();
+await pl.waitForFunction(()=>window.__vtt.board.heightFade===0 && !window.__vtt.board.roughG.visible);
 assert.deepEqual(errors.filter(e=>e.includes('pageerror')),[]);
 console.log('PASS gradient placement, heights, line conversion, drag, deletion and gridless difficult terrain');
 } finally { await browser.close(); }

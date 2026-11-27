@@ -142,10 +142,11 @@ await sleep(300);
 // ---- the setting is in the panel and remembered
 await dm.keyboard.press('h');
 await dm.locator('.flyout-title', { hasText: /^Elevation$/ }).waitFor();
-await dm.getByRole('checkbox',{name:'Always show terrain'}).check();
+await dm.locator('.terrain-menu summary',{hasText:'Advanced'}).click();
+await dm.getByRole('checkbox',{name:'Always show terrain',exact:true}).check();
 check('choosing one changes the setting', (await dm.evaluate(() => window.__vtt.ui.data.heightView)) === 'always');
 check('and remembers it', (await dm.evaluate(() => localStorage.getItem('vtt-height-view'))) === 'always');
-await dm.getByRole('checkbox',{name:'Always show terrain'}).uncheck();
+await dm.getByRole('checkbox',{name:'Always show terrain',exact:true}).uncheck();
 await dm.keyboard.press('v');
 
 // ---- flyers are measured above the ground

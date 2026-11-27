@@ -341,14 +341,21 @@ export function totalWith(below: number, h: number, add: boolean): number {
 }
 
 /** Topographical colours by rank among the finished elevations on the map. */
-export function heightColor(h: number, levels: readonly number[] = [-10,0,5,10,15,20,25,30,35,40,60], continuous = false): string {
-  if (h === 0 && !continuous) return '#a8b0ba';
+export function heightColor(h: number, levels: readonly number[] = [-10,0,5,10,15,20,25,30,35,40,60]): string {
+  if (h === 0) return '#a8b0ba';
   const stops = [[53,139,177],[65,174,150],[169,197,105],[236,203,111],[216,140,111],[157,122,172]];
-  let rank = levels.findIndex(level => level >= h);
+  // Neutral ground is a palette stop on both sides of zero, including inside a slope.
+  const neighbor=h>0 ? levels.find(level=>level>0) ?? 5 : levels.reduce((nearest,level)=>level<0 ? level : nearest,-5);
+  const blend=Math.min(1,h/neighbor);
+  const sample=blend<1 ? neighbor : h;
+  let rank = levels.findIndex(level => level >= sample);
   if (rank < 0) rank = levels.length-1;
-  else if (rank > 0) rank -= (levels[rank]-h)/(levels[rank]-levels[rank-1]);
+  else if (rank > 0) rank -= (levels[rank]-sample)/(levels[rank]-levels[rank-1]);
   const v = levels.length < 2 ? 1 : rank*(stops.length-1)/(levels.length-1);
   const lo = Math.floor(v), hi = Math.ceil(v);
-  return '#' + stops[lo].map((value,c) =>
-    Math.round(value+(stops[hi][c]-value)*(v-lo)).toString(16).padStart(2,'0')).join('');
+  const neutral=[168,176,186];
+  return '#' + stops[lo].map((value,c) => {
+    const color=value+(stops[hi][c]-value)*(v-lo);
+    return Math.round(neutral[c]+(color-neutral[c])*blend).toString(16).padStart(2,'0');
+  }).join('');
 }

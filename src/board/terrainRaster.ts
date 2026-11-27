@@ -48,7 +48,7 @@ export function paintTerrain(t:Terrain,selected:Set<string>,context:(w:number,h:
   const cov = new Uint8Array(N);
   const sel = new Uint8Array(N);
 
-  const smooth = new Uint8Array(N);
+  const smooth = new Uint32Array(N);
   for (const a of areas) {
     mctx.setTransform(1, 0, 0, 1, 0, 0);
     mctx.clearRect(0, 0, W, H);
@@ -96,7 +96,7 @@ export function paintTerrain(t:Terrain,selected:Set<string>,context:(w:number,h:
         const x=(i%W)/stride,y=Math.floor(i/W)/stride,k=Math.floor(y)*cols+Math.floor(x);
         const fx=x%1,fy=y%1;
         hgt[i]=(field[k]*(1-fx)+field[k+1]*fx)*(1-fy)+(field[k+cols]*(1-fx)+field[k+cols+1]*fx)*fy;
-        smooth[i]=1;
+        smooth[i]=a.order+1;
       } else {
         hgt[i] = a.add && cov[i] ? hgt[i] + a.h : a.h;
         if (!a.add) smooth[i]=0;
@@ -112,13 +112,25 @@ export function paintTerrain(t:Terrain,selected:Set<string>,context:(w:number,h:
   // a faint contour wherever the height changes, softened by a small blur
   const rad = Math.max(1, Math.round(s * Math.max(0.5, grid.cell * 0.01)));
   const edge = new Float32Array(N);
+  // Compare the jump across the join with the rise already taking place inside
+  // either slope. A continuous rise into the next pixel is not a cliff.
+  const contour = (i:number,j:number) => {
+    const jump=Math.abs(hgt[i]-hgt[j]);
+    if (!jump) return 0;
+    if (!smooth[i] && !smooth[j]) return 1;
+    if (smooth[i]===smooth[j]) return 0;
+    const before=i+(i-j), after=j+(j-i);
+    const riseBefore=smooth[i] && smooth[before]===smooth[i] ? Math.abs(hgt[i]-hgt[before]) : 0;
+    const riseAfter=smooth[j] && smooth[after]===smooth[j] ? Math.abs(hgt[after]-hgt[j]) : 0;
+    return Math.min(1,Math.max(0,jump-Math.max(riseBefore,riseAfter)-0.05));
+  };
   for (let y = rad; y < H - rad; y++) {
     for (let x = rad; x < W - rad; x++) {
       const i = y * W + x;
       if (!cov[i]) continue;
       const l = i - rad, r = i + rad, u = i - rad * W, d = i + rad * W;
-      if (smooth[i] && smooth[l] && smooth[r] && smooth[u] && smooth[d]) continue;
-      if (Math.max(Math.abs(hgt[l] - hgt[i]), Math.abs(hgt[r] - hgt[i]), Math.abs(hgt[u] - hgt[i]), Math.abs(hgt[d] - hgt[i])) > 0) edge[i] = 1;
+      if (smooth[i] && smooth[i]===smooth[l] && smooth[i]===smooth[r] && smooth[i]===smooth[u] && smooth[i]===smooth[d]) continue;
+      edge[i]=Math.max(contour(i,l),contour(i,r),contour(i,u),contour(i,d));
     }
   }
   const line = blur(edge, W, H, 1);
@@ -137,15 +149,13 @@ export function paintTerrain(t:Terrain,selected:Set<string>,context:(w:number,h:
   const heights = new Set<number>();
   for (let i = 0; i < N; i++) if (cov[i]) heights.add(smooth[i] ? Math.round(hgt[i]/5)*5 : hgt[i]);
   const levels = [...heights].sort((a,b) => a-b);
-  const colour = (h: number, continuous: boolean) => {
+  const colour = (h: number) => {
     const key = Math.round(h * 10) / 10;
-    // A flat 0 ft area is neutral. A slope passing through 0 uses its continuous palette.
-    const slot = continuous && key === 0 ? Infinity : key;
-    let rgb = lut.get(slot);
+    let rgb = lut.get(key);
     if (!rgb) {
-      const c = parseInt(heightColor(key,levels,continuous).slice(1),16);
+      const c = parseInt(heightColor(key,levels).slice(1),16);
       rgb = [(c >> 16) & 255,(c >> 8) & 255,c & 255];
-      lut.set(slot,rgb);
+      lut.set(key,rgb);
     }
     return rgb;
   };
@@ -153,12 +163,13 @@ export function paintTerrain(t:Terrain,selected:Set<string>,context:(w:number,h:
     // tint, only on the ground itself
     let a = 0, R_ = 0, G_ = 0, B_ = 0;
     const coverage = cov[i];
-    if (coverage) { const c = colour(hgt[i],!!smooth[i]); R_ = c[0]; G_ = c[1]; B_ = c[2]; a = 0.36 * coverage; }
+    if (coverage) { const c = colour(hgt[i]); R_ = c[0]; G_ = c[1]; B_ = c[2]; a = 0.36 * coverage; }
     // shadow on the low side of a drop, light on the high side
     const d = around[i] - hgt[i];
-    const k = Math.min(1, Math.abs(d) / 6) ** 0.7;
-    const sh = d > 0.05 ? 0.28 * k : 0;
-    const hi = d < -0.05 ? 0.18 * k : 0;
+    const relief = Math.abs(d);
+    const k = Math.min(1, relief / 6) ** 0.7 * Math.min(1, relief);
+    const sh = d > 0 ? 0.28 * k : 0;
+    const hi = d < 0 ? 0.18 * k : 0;
     const over = (cr: number, cg: number, cb: number, ca: number) => {
       if (ca <= 0) return;
       const oa = ca + a * (1 - ca);
@@ -167,7 +178,7 @@ export function paintTerrain(t:Terrain,selected:Set<string>,context:(w:number,h:
     };
     over(10, 12, 20, sh);
     over(255, 255, 255, hi);
-    if (cov[i] && line[i] > 0.02) { const c = colour(hgt[i],!!smooth[i]); over(c[0] * 0.4, c[1] * 0.4, c[2] * 0.4, 0.58 * line[i]); }
+    if (cov[i] && line[i] > 0.02) { const c = colour(hgt[i]); over(c[0] * 0.4, c[1] * 0.4, c[2] * 0.4, 0.58 * line[i]); }
     if (ring[i]) over(SELECT_RGB[0], SELECT_RGB[1], SELECT_RGB[2], 1);
     const o = i * 4;
     px[o] = R_; px[o + 1] = G_; px[o + 2] = B_; px[o + 3] = Math.round(Math.min(1, a) * 255);

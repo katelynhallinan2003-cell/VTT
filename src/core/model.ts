@@ -120,6 +120,7 @@ export function normalizeSceneMeta(raw: any): SceneMeta {
     maps: normalizeMaps(m.maps),
     gridTried: bool(m.gridTried, true),
     wallStop: bool(m.wallStop, true),
+    showPlayerTerrain: bool(m.showPlayerTerrain, false),
     cliff: Math.min(1000, Math.max(0, Math.round(num(m.cliff, 10)))),
     bg: OLD_DEFAULT_BGS.has(str(m.bg, '')) ? DEFAULT_BG : str(m.bg, DEFAULT_BG),
     grid: normalizeGrid(m.grid),

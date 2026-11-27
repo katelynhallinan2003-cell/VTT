@@ -2455,13 +2455,17 @@ export class Board {
     return pv ? list.map((d) => (d.id === pv.id ? { ...d, ...pv.patch } : d)) : list;
   }
 
-  /** height zones show when the view setting is on, or while the Heights tool is open */
-  private zonesVisible(): boolean { return this.ui.data.heightView === 'always' || this.ui.data.tool === 'height'; }
+  private zonesVisible(): boolean {
+    const u=this.ui.data;
+    const playerView=!this.client.isDM || u.dmPreview;
+    if (playerView && this.client.scene?.meta?.showPlayerTerrain) return true;
+    if (u.dmPreview) return false;
+    return u.heightView==='always' || u.tool==='height';
+  }
 
   /** Should the ground be on show right now? (the setting says: always, only in the Heights tool, or while something moves over it) */
   private heightsWanted(): boolean {
-    const u = this.ui.data;
-    if (u.tool === 'height' || u.heightView === 'always') return true;
+    if (this.zonesVisible()) return true;
     const d = this.drag;
     if ((d?.kind === 'tokens' && d.moved) || d?.kind === 'ruler') return true;
     return performance.now() < this.heightsUntil;

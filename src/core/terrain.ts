@@ -269,10 +269,22 @@ export function surfaceHeight(a: Pick<Area, "gradient" | "h">, p: Vec): number {
   let weights = 0, total = 0;
   for (const {path,height} of a.gradient) {
     let d = Math.hypot(p.x-path[0].x,p.y-path[0].y);
-    for (let i=1; i<path.length; i++) d = Math.min(d,distToSegment(p,path[i-1],path[i]));
-    if (d < 1e-7) return height;
+    let value=height;
+    if (path[0].rise===undefined) {
+      for (let i=1; i<path.length; i++) d = Math.min(d,distToSegment(p,path[i-1],path[i]));
+    } else {
+      // A line matched to a pre-painted slope carries the height along its contour.
+      value+=path[0].rise;
+      for (let i=1;i<path.length;i++) {
+        const a=path[i-1], b=path[i], dx=b.x-a.x, dy=b.y-a.y;
+        const t=Math.max(0,Math.min(1,((p.x-a.x)*dx+(p.y-a.y)*dy)/(dx*dx+dy*dy || 1)));
+        const sep=Math.hypot(p.x-a.x-t*dx,p.y-a.y-t*dy);
+        if (sep<d) { d=sep; value=height+(1-t)*(a.rise ?? 0)+t*(b.rise ?? 0); }
+      }
+    }
+    if (d < 1e-7) return value;
     weights += 1/d;
-    total += height/d;
+    total += value/d;
   }
   return total/weights;
 }

@@ -89,7 +89,7 @@ export function GradientEditor({board,ui,client}: {board: Board; ui: UiState; cl
             defaultValue={c.height} onKeyDown={e=>{if(e.key==='Enter') e.currentTarget.blur();}}
             onBlur={e=>{
               const field=e.currentTarget, value=field.valueAsNumber;
-              if(Number.isFinite(value) && field.validity.valid && value!==c.height) update(c.id,control=>({...control,height:value}));
+              if(Number.isFinite(value) && field.validity.valid && value!==c.height) update(c.id,control=>({...control,height:value,path:control.path.map(({x,y})=>({x,y}))}));
               else field.value=String(c.height);
             }}/> ft</label>
           <button aria-label="Delete height point" class="gradient-delete" onClick={()=>update(c.id,()=>null)}>×</button>

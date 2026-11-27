@@ -1,4 +1,4 @@
-import clip, { type MultiPolygon, type Polygon, type Pair } from 'polygon-clipping';
+import clip, { type MultiPolygon, type Pair } from 'polygon-clipping';
 import type { GradientControl, Vec } from '../types';
 import {groundAtTerrain, type Terrain} from './terrain';
 import { inRegion, terrainLayers } from './terrainEdges';
@@ -15,7 +15,7 @@ function edges(shape:MultiPolygon) {
 }
 
 /** Split at crossings and at both ends of collinear overlaps. */
-function splits(a:Vec,b:Vec,others:ReturnType<typeof edges>) {
+export function boundarySplits(a:Vec,b:Vec,others:ReturnType<typeof edges>) {
   const dx=b.x-a.x, dy=b.y-a.y, len=dx*dx+dy*dy, cuts=[0,1];
   if (!len) return cuts;
   const put=(t:number)=>{ if(t>eps && t<1-eps) cuts.push(t); };
@@ -39,7 +39,7 @@ function trim(path:Vec[],shape:MultiPolygon,outline:ReturnType<typeof edges>):Ve
   const runs:Vec[][]=[];
   let run:Vec[] | undefined;
   for(let i=1;i<path.length;i++) {
-    const a=path[i-1],b=path[i],cuts=splits(a,b,outline);
+    const a=path[i-1],b=path[i],cuts=boundarySplits(a,b,outline);
     for(let j=1;j<cuts.length;j++) {
       if(!locate(shape,along(a,b,(cuts[j-1]+cuts[j])/2),1e-5)) { run=undefined; continue; }
       if(!run) { run=[along(a,b,cuts[j-1])]; runs.push(run); }
@@ -48,15 +48,6 @@ function trim(path:Vec[],shape:MultiPolygon,outline:ReturnType<typeof edges>):Ve
   }
   const length=(p:Vec[])=>p.reduce((sum,v,i)=>sum+(i?distance(v,p[i-1]):0),0);
   return runs.sort((a,b)=>length(b)-length(a))[0] ?? [];
-}
-
-/** Retain controls on the surviving piece after existing terrain cuts a draft. */
-export function clipGradientControls(controls:GradientControl[], polygon:Polygon) {
-  const shape=[polygon], outline=edges(shape);
-  return controls.flatMap(c=>{
-    const path=trim(c.path,shape,outline);
-    return path.length ? [{...c,path}] : [];
-  });
 }
 
 type BoundaryRun={key:string; height:number; path:Vec[]; bare:boolean; id?:string};
@@ -112,7 +103,7 @@ function boundaryShape(layer:Layer, neighbors:Layer[], cell:number, protectedIds
     for(let i=1;i<ring.length;i++) {
       const a=vec(ring[i-1]),b=vec(ring[i]),len=distance(a,b);
       if(len<eps) continue;
-      const cuts=splits(a,b,neighborEdges);
+      const cuts=boundarySplits(a,b,neighborEdges);
       for(let j=1;j<cuts.length;j++) {
         const p=along(a,b,(cuts[j-1]+cuts[j])/2);
         // Clipping rings keep the filled ground to their left, including holes.

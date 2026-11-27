@@ -224,7 +224,7 @@ function readGradient(raw: unknown): Drawing['gradient'] {
   const controls = values(raw).flatMap(c => {
     if (!c || typeof c.id !== 'string' || !Number.isFinite(c.height)) return [];
     const path = values(c.path);
-    if (!path.length || !path.every(p => p && Number.isFinite(p.x) && Number.isFinite(p.y))) return [];
+    if (!path.length || !path.every(p => p && Number.isFinite(p.x) && Number.isFinite(p.y) && (p.rise===undefined || Number.isFinite(p.rise)))) return [];
     return [{...( ['height','path','both','hidden'].includes(c.boundary) ? {boundary:c.boundary} : {}),id:c.id,height:Math.max(-1000,Math.min(5000,c.height)),path}];
   });
   return controls.length ? controls : undefined;

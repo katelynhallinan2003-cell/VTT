@@ -72,7 +72,7 @@ export function analyzeHeightMap(img: PixelImage, side = 320) {
     region[b] = a; size[a] += size[b]; internal[a] = d;
   }
   for (let i = 0; i < n; i++) region[i] = root(i);
-  return { width, height, opaque, contrast, region, colors: smooth };
+  return { width, height, opaque, contrast, region };
 }
 export type Analysis = ReturnType<typeof analyzeHeightMap>;
 

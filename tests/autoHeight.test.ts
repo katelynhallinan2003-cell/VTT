@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { analyzeHeightMap, draftHeights, heightPolygons, UNPAINTED } from '../src/core/autoHeight';
 import clip from 'polygon-clipping';
-import { autoHeightSurfaces } from '../src/core/autoSlopes';
+import { regionContacts, regionControls } from '../src/core/autoSlopes';
 import { DEFAULT_GRID, normalizeDrawing } from '../src/core/model';
-import { groundAtTerrain, terrainOf } from '../src/core/terrain';
-import { inRegion, patchStroke } from '../src/core/terrainEdges';
+import { groundAtTerrain, terrainOf, surfaceHeight } from '../src/core/terrain';
+import { inRegion, patchStroke, terrainEdges } from '../src/core/terrainEdges';
 
 const width = 96, height = 72;
 function art(pixel: (x:number,y:number) => number[]) {
@@ -33,29 +33,53 @@ describe('auto height map', () => {
     }
     expect(labels.includes(UNPAINTED)).toBe(false);
   });
-  it('saves editable slope controls and keeps both marked heights exact', () => {
-    const m=art((x,y)=>[108+x/4,96+x/5+(y%2),72,255]);
-    const marks=[mark(10,34,0),mark(80,34,10)], labels=draftHeights(m,marks);
-    const patches=autoHeightSurfaces(m,labels,marks,true);
-    expect(patches.some(p=>p.gradient)).toBe(true);
-    expect(autoHeightSurfaces(m,labels,marks,false).every(p=>!p.gradient)).toBe(true);
+  it('turns the original curved region into a slope only along a chosen contact', () => {
+    const m=art((x,y)=>Math.hypot(x-46,y-34)<21 ? [53,120,42,255] : [130,85,47,255]);
+    const marks=[mark(46,34,10),mark(6,34,0)];
+    const patches=heightPolygons(draftHeights(m,marks),width);
+    const island=patches.findIndex(p=>p.height===10), outside=1-island;
+    const original=JSON.stringify(patches);
+    const bare=terrainOf([],DEFAULT_GRID), contacts=regionContacts(patches,bare);
+    const [smooth,wall]=contacts(island);
+    expect(smooth.path.length).toBeGreaterThan(4);
+    expect(contacts(outside).map(c=>c.key).sort()).toEqual([smooth.key,wall.key].sort());
+    const enabled=new Set([island]), matched=new Set([smooth.key]);
+    const controls=regionControls(patches[island],contacts(island),matched,enabled,marks,bare,1);
     const drawings=patches.map((p,i)=>normalizeDrawing(String(i),{
-      ...patchStroke(p.polygon,String(i),p.height),gradient:p.gradient,gradientEnabled:!!p.gradient,gradientFixed:!!p.gradient
+      ...patchStroke(p.polygon,String(i),p.height),...(i===island && {gradient:controls,gradientEnabled:true,gradientFixed:true})
     })!);
     const terrain=terrainOf(drawings,DEFAULT_GRID);
-    const heights=[10,28,45,62,80].map(x=>groundAtTerrain(terrain,{x:x+.5,y:34.5}));
-    expect(groundAtTerrain(terrain,{x:2,y:35})).toBe(0);
-    expect(groundAtTerrain(terrain,{x:92,y:35})).toBe(10);
-    expect(heights[0]).toBe(0); expect(heights[4]).toBe(10);
-    expect(heights[2]).toBeCloseTo(5,1);
-    expect(heights.every((h,i)=>!i || h>heights[i-1])).toBe(true);
-  });
-  it('keeps a sharp cliff flat on both sides and leaves a single marked level alone', () => {
-    const m=art(x=>x<48 ? [55,80,110,255] : [195,170,120,255]);
-    for (const marks of [[mark(17,30,0),mark(77,30,10)],[mark(77,30,10)]]) {
-      const labels=draftHeights(m,marks);
-      expect(autoHeightSurfaces(m,labels,marks,true)).toEqual(autoHeightSurfaces(m,labels,marks,false));
+    const inner=(c:typeof smooth,f:number)=>{
+      const p=c.path[Math.floor(c.path.length/2)];
+      return {x:p.x+(46-p.x)*f,y:p.y+(34-p.y)*f};
+    };
+    expect(groundAtTerrain(terrain,marks[0])).toBe(10);
+    expect(groundAtTerrain(terrain,inner(smooth,.001))).toBeLessThan(.1);
+    expect(groundAtTerrain(terrain,inner(smooth,.5))).toBeGreaterThan(1);
+    expect(groundAtTerrain(terrain,inner(wall,.001))).toBeGreaterThan(1);
+    expect(groundAtTerrain(terrain,inner(wall,-.01))).toBe(0);
+    enabled.add(outside);
+    for (const i of enabled) {
+      const cs=regionControls(patches[i],contacts(i),matched,enabled,marks,bare,1);
+      expect(cs.find(c=>c.path.length>1)?.height).toBe(5);
     }
+    expect(JSON.stringify(patches)).toBe(original);
+  });
+  it('matches a previously painted sloping bank along a shared edge without creating a wall',()=>{
+    const polygon:clip.Polygon=[[[0,0],[40,0],[40,60],[0,60]]];
+    const bank=normalizeDrawing('bank',{...patchStroke(polygon,'bank',0),gradientFixed:true,gradientEnabled:true,
+      gradient:[{id:'a',height:0,path:[{x:30,y:4}]},{id:'b',height:10,path:[{x:23,y:57}]}]})!;
+    const old=terrainOf([bank],DEFAULT_GRID);
+    const patch={height:7,polygon:[[[40,0],[100,0],[100,60],[40,60]]] as clip.Polygon};
+    const contacts=regionContacts([patch],old)(0);
+    const gradient=regionControls(patch,contacts,new Set(contacts.map(c=>c.key)),new Set([0]),[],old,1);
+    const saved=normalizeDrawing('draft',{...patchStroke(patch.polygon,'draft',7),gradient,gradientEnabled:true,gradientFixed:true})!;
+    const terrain=terrainOf([bank,saved],DEFAULT_GRID);
+    for(let y=.3;y<60;y+=1.7) {
+      const at={x:40,y};
+      expect(Math.abs(surfaceHeight(terrain.areas.find(a=>a.id==='draft')!,at)-surfaceHeight(old.areas[0],at))).toBeLessThan(.001);
+    }
+    expect(terrainEdges(terrain).filter(e=>e.a.x===40 && e.b.x===40)).toHaveLength(0);
   });
   it('covers transparent gaps and preserves marked islands up to the picture edge in saved polygons', () => {
     const m = art((x,y) => x>=30 && x<35 && y>=30 && y<35 ? [0,0,0,0] :

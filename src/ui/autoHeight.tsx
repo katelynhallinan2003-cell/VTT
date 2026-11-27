@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import clip, { type Pair, type Polygon } from 'polygon-clipping';
 import type { Board } from '../board/Board';
-import { analyzeHeightMap, draftHeights, type HeightMark } from '../core/autoHeight';
+import { analyzeHeightMap, draftHeights, heightPolygons, type HeightMark } from '../core/autoHeight';
 import { heightColor, newAreaId, terrainOf, surfaceHeight } from '../core/terrain';
-import { patchStroke, terrainLayers } from '../core/terrainEdges';
-import { autoHeightSurfaces } from '../core/autoSlopes';
-import { clipGradientControls } from '../core/gradientBoundaries';
+import { inRegion, patchStroke, terrainLayers } from '../core/terrainEdges';
+import { regionContacts, regionControls } from '../core/autoSlopes';
 import type { GradientControl } from '../types';
 import type { TableClient } from '../state/client';
 import { Modal, toast, useClient } from './common';
@@ -39,7 +38,15 @@ export function AutoHeightModal({ client, board, onClose }: { client: TableClien
   const [loaded, setLoaded] = useState<{ map: ReturnType<typeof analyzeHeightMap>; image: string } | null>(null);
   const [history, setHistory] = useState<HeightMark[][]>([[]]);
   const marks = history[history.length-1];
-  const [slopes,setSlopes]=useState(true);
+  const [editing,setEditing]=useState(false);
+  const [selected,setSelected]=useState('');
+  const [gradients,setGradients]=useState(new Set<string>());
+  const [smooth,setSmooth]=useState(new Set<string>());
+  const toggle=(current:Set<string>,key:string)=>{
+    const next=new Set(current);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  };
   const [height, setHeight] = useState('10');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -75,40 +82,35 @@ export function AutoHeightModal({ client, board, onClose }: { client: TableClien
     const ratio = view.zoom/zoom;
     setView({zoom,x:limit(x+(view.x-x)*ratio,zoom),y:limit(y+(view.y-y)*ratio,zoom)});
   };
-  const existing = useMemo(() => {
-    if (!scene || !loaded) return [];
-    const shapes = terrainLayers(terrainOf(scene.draws.values(),client.grid)).map(layer => layer.shape);
+  const terrain=useMemo(()=>terrainOf(scene?.draws.values() ?? [],client.grid),[scene,scene?.drawRev,client.grid]);
+  const existing=useMemo(()=>{
+    const shapes=terrainLayers(terrain).map(layer=>layer.shape);
     return shapes.length ? clip.union(shapes[0],...shapes.slice(1)) : [];
-  }, [scene,scene?.drawRev,loaded,client.grid]);
-  const patches = useMemo(() => {
+  },[terrain]);
+  const regions=useMemo(()=>{
     if (!loaded || !marks.length) return [];
-    const m = loaded.map;
-    const labels = draftHeights(m,marks);
-    const toWorld=(x:number,y:number):Pair=>[left+x*width/m.width,top+y*heightPx/m.height];
-    return autoHeightSurfaces(m,labels,marks,slopes).flatMap(p=>{
-      const world=p.polygon.map(r=>r.map(([x,y])=>toWorld(x,y)));
-      const controls=p.gradient?.map(c=>({...c,path:c.path.map(v=>{
-        const [x,y]=toWorld(v.x,v.y); return {x,y};
-      })}));
-      return (existing.length ? clip.difference(world,existing) : [world]).map(poly=>{
-        const gradient=controls && existing.length ? clipGradientControls(controls,poly) : controls;
-        let height=p.height;
-        if (controls && gradient && new Set(gradient.map(c=>c.height)).size<2) {
-          // The original anchors may have been cut away. Sample the surviving
-          // surface along its perimeter so edits never depend on off-area points.
-          const ring=poly[0], step=Math.max(1,Math.ceil((ring.length-1)/12));
-          for (let i=0;i<ring.length-1;i+=step) {
-            const at={x:ring[i][0],y:ring[i][1]}, h=surfaceHeight({h:height,gradient:controls},at);
-            gradient.push({id:'cut-'+i,height:h,path:[at]});
-          }
-          height=Math.round(gradient[0]?.height ?? height);
-        }
-        const smooth=gradient && new Set(gradient.map(c=>Math.round(c.height*10))).size>=2 ? gradient : undefined;
-        return {height,polygon:poly,gradient:smooth,preview:smooth && slopePreview(poly,smooth,width/m.width),
-          path:poly.map(r=>'M'+r.map(v=>v.join(',')).join('L')+'Z').join('')};
-      });
+    const m=loaded.map;
+    return heightPolygons(draftHeights(m,marks),m.width).flatMap(p=>{
+      const world=p.polygon.map(r=>r.map(([x,y]):Pair=>[left+x*width/m.width,top+y*heightPx/m.height]));
+      return (existing.length ? clip.difference(world,existing) : [world]).map(polygon=>({
+        height:p.height,polygon,path:polygon.map(r=>'M'+r.map(v=>v.join(',')).join('L')+'Z').join('')
+      }));
     });
-  }, [loaded,marks,slopes,existing,left,top,width,heightPx]);
+  },[loaded,marks,existing,left,top,width,heightPx]);
+  const contacts=useMemo(()=>regionContacts(regions,terrain),[regions,terrain]);
+  const active=regions.findIndex(p=>p.path===selected);
+  const edges=editing && active>=0 && gradients.has(selected) ? contacts(active) : [];
+  const patches=useMemo(()=>{
+    const m=loaded?.map;
+    const pins=m ? marks.map(p=>({height:p.height,x:left+(p.x+.5)*width/m.width,y:top+(p.y+.5)*heightPx/m.height})) : [];
+    const enabled=new Set(regions.flatMap((p,i)=>gradients.has(p.path) ? [i] : []));
+    return regions.map((p,i)=>{
+      const pixel=width/(m?.width || 1);
+      const gradient=enabled.has(i) ? regionControls(p,contacts(i),smooth,enabled,pins,terrain,pixel) : undefined;
+      const preview=gradient && gradient.some(c=>c.height!==p.height || c.path.some(v=>v.rise)) ? slopePreview(p.polygon,gradient,pixel) : undefined;
+      return {...p,gradient,preview};
+    });
+  },[regions,contacts,gradients,smooth,loaded,marks,terrain,left,top,width,heightPx]);
   const slopeCount=patches.filter(p=>p.gradient).length;
   const value = Number(height);
   const valid = height.trim() !== '' && Number.isInteger(value) && value >= -1000 && value <= 5000;
@@ -116,8 +118,15 @@ export function AutoHeightModal({ client, board, onClose }: { client: TableClien
   const mark = (e: MouseEvent) => {
     if (panned.current) return;
     const transform = svg.current?.getScreenCTM();
-    if (!loaded || !transform || !valid || locked.current) return;
+    if (!loaded || !transform || locked.current) return;
     const p = new DOMPoint(e.clientX,e.clientY).matrixTransform(transform.inverse());
+    if (editing) {
+      const edge=(e.target as Element).closest('[data-contact]')?.getAttribute('data-contact');
+      if (edge) setSmooth(toggle(smooth,edge));
+      else setSelected(regions.find(r=>inRegion(r.polygon,p))?.path ?? '');
+      return;
+    }
+    if (!valid) return;
     const m = loaded.map, x = Math.floor((p.x-left)*m.width/width), y = Math.floor((p.y-top)*m.height/heightPx);
     if (x<0 || x>=m.width || y<0 || y>=m.height || !m.opaque[y*m.width+x]) return;
     const hit = (e.target as Element).closest('[data-mark]')?.getAttribute('data-mark');
@@ -144,12 +153,19 @@ export function AutoHeightModal({ client, board, onClose }: { client: TableClien
       <button class="btn primary" disabled={!patches.length || saving} onClick={apply}>Apply heights</button></>}>
     {error && <p role="alert">{error}</p>}
     {loaded && <>
-      <p class="hint">Choose a height and click a terrace, bank, or patch of ground. Add a mark on the other side of a misplaced boundary to guide it.</p>
+      <div class="row wrap">
+        <button class={'btn small'+(!editing ? ' primary' : '')} aria-pressed={!editing} onClick={()=>setEditing(false)}>Mark heights</button>
+        <button class={'btn small'+(editing ? ' primary' : '')} aria-pressed={editing} disabled={!regions.length} onClick={()=>setEditing(true)}>Edit regions</button>
+      </div>
+      {editing ? <>
+        <p class="hint">{active<0 ? 'Click a region to select it.' : gradients.has(selected) ? 'Click an edge to switch between wall (dashed gold) and smooth (solid teal).' : 'Turn this region into a gradient to choose which edges meet their neighbors.'}</p>
+        {active>=0 && <label><input type="checkbox" checked={gradients.has(selected)} onChange={()=>setGradients(toggle(gradients,selected))}/> Gradient · {regions[active].height} ft</label>}
+      </> : <><p class="hint">Choose a height and click a terrace, bank, or patch of ground. Add a mark on the other side of a misplaced boundary to guide it.</p>
       <div class="row wrap">
         <label class="numf"><span>Height</span><input aria-label="Height in feet" type="number" min="-1000" max="5000" step="1" value={height} onInput={e => setHeight(e.currentTarget.value)} /><span>ft</span></label>
         {[-10,-5,0,5,10,15,20,30,40].map(h => <button key={h} class={'btn small'+(valid && value===h ? ' primary' : '')} onClick={() => setHeight(String(h))}>{h}</button>)}
-      </div>
-      <svg ref={svg} class="auto-height-map" viewBox={[left+view.x*width,top+view.y*heightPx,width/view.zoom,heightPx/view.zoom].join(' ')}
+      </div></>}
+      <svg style={{cursor:editing ? 'pointer' : 'crosshair'}} ref={svg} class="auto-height-map" viewBox={[left+view.x*width,top+view.y*heightPx,width/view.zoom,heightPx/view.zoom].join(' ')}
         aria-label="Map height preview" onClick={mark}
         onPointerDown={e => {
           panned.current=false;
@@ -177,16 +193,24 @@ export function AutoHeightModal({ client, board, onClose }: { client: TableClien
           {p.preview && <><clipPath id={'auto-slope-'+i}><path d={p.path} clip-rule="evenodd"/></clipPath>
             <image {...p.preview} opacity=".52" preserveAspectRatio="none" clip-path={'url(#auto-slope-'+i+')'}/></>}
           <path d={p.path} fill={p.preview ? 'none' : heightColor(p.height)} fill-opacity=".52" fill-rule="evenodd"
-            stroke="#ffe1a2" stroke-width=".75" vector-effect="non-scaling-stroke"/>
+            stroke={editing && i===active ? '#ff69b4' : '#ffe1a2'} stroke-width={editing && i===active ? 3 : .75} vector-effect="non-scaling-stroke"/>
         </g>)}
-        {marks.map((a,i) => <g key={i} data-mark={i} transform={`translate(${left+(a.x+0.5)*width/loaded.map.width} ${top+(a.y+0.5)*heightPx/loaded.map.height})`}>
+        {edges.map(edge=>{
+          const matched=smooth.has(edge.key);
+          const d=edge.path.map((v,i)=>(i?'L':'M')+v.x+','+v.y).join('');
+          return <g key={edge.key} data-contact={edge.key} data-smooth={String(matched)}>
+            <title>{matched ? 'Smooth' : 'Wall'} · {edge.height} ft adjoining terrain</title>
+            <path d={d} fill="none" stroke={matched ? '#00f2cc' : '#ffcb6b'} stroke-width="3" stroke-dasharray={matched ? undefined : '6 4'} vector-effect="non-scaling-stroke"/>
+            <path d={d} fill="none" stroke="transparent" stroke-width="14" vector-effect="non-scaling-stroke" pointer-events="stroke"/>
+          </g>;
+        })}
+        {!editing && marks.map((a,i) => <g key={i} data-mark={i} transform={`translate(${left+(a.x+0.5)*width/loaded.map.width} ${top+(a.y+0.5)*heightPx/loaded.map.height})`}>
           <circle r={unit*.50} fill={heightColor(a.height)} stroke="white" stroke-width={unit*.16}/>
           <text x={unit*.65} y={unit*.45} font-size={unit*1.65} fill="white" stroke="#14171e" stroke-width={unit*.45} paint-order="stroke" font-weight="700">{a.height}</text>
         </g>)}
       </svg>
       <div class="row wrap">
-        <label><input type="checkbox" checked={slopes} onChange={e=>setSlopes(e.currentTarget.checked)}/> Detect slopes</label>
-        <button class="btn small" disabled={!marks.length || saving} onClick={() => setHistory(history.slice(0,-1))}>Undo mark</button>
+        {!editing && <button class="btn small" disabled={!marks.length || saving} onClick={() => setHistory(history.slice(0,-1))}>Undo mark</button>}
         <button class="btn small" disabled={view.zoom>=8} onClick={() => zoomAt(view.zoom*2)}>Zoom in</button>
         {view.zoom>1 && <button class="btn small" onClick={() => zoomAt(1)}>Fit map</button>}</div>
       <p class="hint">One height marks matching patches and fills the rest at 0 ft. Different heights divide the whole map. Existing terrain is preserved. Shift-click a mark to remove it.</p>

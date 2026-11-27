@@ -1,11 +1,9 @@
 import clip, {type MultiPolygon, type Polygon, type Pair} from 'polygon-clipping';
-import { spellVolume } from '../core/spellVolume';
+import { mapSegments, spellVolume, type SpellWorld } from '../core/spellVolume';
 import { rectContains } from '../core/geometry';
-import type { Rect } from '../types';
 import { Container, Graphics, Text } from 'pixi.js';
 import { LINE_H, beamWidthPx, templateWidthPx, footprintPoly, boundsOf, dashSegments, drawingBounds, fontStack, isTemplate, parsePts, templateGeom, textMetrics } from '../core/draw';
 import { cellPoly } from '../core/cells';
-import { type Seg } from '../core/walls';
 import { isHex } from '../core/hex';
 import type { DrawKind, Drawing, GridSettings, Vec } from '../types';
 
@@ -48,8 +46,8 @@ function ellipsePts(cx: number, cy: number, rx: number, ry: number): Vec[] {
   return Array.from({ length: n + 1 }, (_, i) => ({ x: cx + Math.cos((i / n) * Math.PI * 2) * rx, y: cy + Math.sin((i / n) * Math.PI * 2) * ry }));
 }
 
-/** Paint a shape onto a Graphics object. Text is handled separately by DrawLayer. `sight` holds the walls that stop a spell. */
-export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1, cover = false, sight?: Seg[], groundAt?: (p: Vec) => number, maps:Rect[] = [], outlineWidth?:number) {
+/** Paint a shape onto a Graphics object. Text is handled separately by DrawLayer. */
+export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1, cover = false, world:SpellWorld={segs:[]}, outlineWidth?:number) {
   const pts = s.pts;
   if (!pts.length) return;
   const col = hex(s.color);
@@ -60,7 +58,8 @@ export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1,
     if (pts.length < 2) return;
     const hexShape = grid.shape === 'square' ? undefined : grid.shape;
     const widthPx = templateWidthPx(grid, { k: s.k, bw: s.bw, of: s.of });
-    const volume=spellVolume(s,pts[0],pts[1],grid,{segs:sight ?? [],ground:groundAt,maps});
+    const maps=world.maps ?? [];
+    const volume=spellVolume(s,pts[0],pts[1],grid,world);
     const geom=volume.geom, fillA=(s.fill || TEMPLATE_FILL)*alpha;
     // Only clip geometry that straddles the edge of a map.
     let playable:MultiPolygon|undefined;
@@ -89,13 +88,30 @@ export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1,
       if(s.k==='emanation') paint(footprintPoly(pts[0],widthPx,hexShape),null,outlineWidth);
       return;
     }
-    if(cover || volume.hasWalls) {
+    if(cover || volume.hasWalls || volume.groundClips) {
       // Without a visible grid, sample finely enough to show wall shadows without square outlines.
       const sampling=cover ? grid : {...grid,shape:'square' as const,cell:Math.max(grid.cell/10,Math.max(volume.bounds.w,volume.bounds.h)/140)};
       const lit=cover ? Math.max(.5,fillA)*alpha : fillA;
       const cells=volume.cells(sampling);
+      const paintCells=(poly:Vec[])=>{
+        if(s.k==='beam') {
+          // A covered cell can straddle the emitter. Cut just its rear portion.
+          const {ux,uy}=volume.axis;
+          const forward=(p:Vec)=>(p.x-pts[0].x)*ux+(p.y-pts[0].y)*uy;
+          const clipped:Vec[]=[];
+          for(let i=0;i<poly.length;i++) {
+            const p=poly[i],q=poly[(i+1)%poly.length],dp=forward(p),dq=forward(q);
+            if(dp>=0) clipped.push(p);
+            if((dp<0)!==(dq<0)) {
+              const t=dp/(dp-dq); clipped.push({x:p.x+(q.x-p.x)*t,y:p.y+(q.y-p.y)*t});
+            }
+          }
+          poly=clipped;
+        }
+        if(poly.length>=3) paint(poly,lit);
+      };
       if(isHex(sampling)) {
-        for(const c of cells) paint(cellPoly(sampling,c),lit);
+        for(const c of cells) paintCells(cellPoly(sampling,c));
       } else {
         // One rectangle per continuous row also prevents seams between filled pixels.
         cells.sort((a,b)=>a.y-b.y || a.x-b.x);
@@ -105,13 +121,18 @@ export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1,
           let right=first.x+h;
           while(i<cells.length && cells[i].y===first.y && cells[i].x-h<=right+1e-6) right=cells[i++].x+h;
           const left=first.x-h, top=first.y-h, bottom=first.y+h;
-          paint([{x:left,y:top},{x:right,y:top},{x:right,y:bottom},{x:left,y:bottom}],lit);
+          paintCells([{x:left,y:top},{x:right,y:top},{x:right,y:bottom},{x:left,y:bottom}]);
         }
       }
     } else {
       paint(outline,fillA,0,s.k==='emanation' ? footprintPoly(pts[0],widthPx,hexShape) : undefined);
     }
     paint(outline,null,Math.max(2,s.w));
+    if(volume.edges.length) {
+      for(const path of volume.edges) for(let i=1;i<path.length;i++)
+        for(const [from,to] of mapSegments(path[i-1],path[i],maps)) g.moveTo(from.x,from.y).lineTo(to.x,to.y);
+      g.stroke({...stroke,width:Math.max(1,s.w*.55),alpha:alpha*.65});
+    }
     if(s.k==='emanation') paint(footprintPoly(pts[0],widthPx,hexShape),null,Math.max(1.5,s.w*.6));
     else paint(ellipsePts(pts[0].x,pts[0].y,Math.max(3,s.w*1.2),Math.max(3,s.w*1.2)),alpha);
     return;
@@ -181,7 +202,7 @@ export class DrawLayer {
   private items = new Map<string, Item>();
   private grid = '';
 
-  sync(list: Drawing[], grid: GridSettings, textRes: number, cover = false, walls?: { segs: Seg[]; rev: string; ground?: (p: Vec) => number; maps?:Rect[] }) {
+  sync(list: Drawing[], grid: GridSettings, textRes: number, cover = false, walls?: SpellWorld & {rev:string}) {
     const gridSig = `${grid.shape}|${grid.cell}|${grid.ft}|${grid.ox}|${grid.oy}|${cover}|${walls?.rev ?? 0}`;
     const gridChanged = gridSig !== this.grid;
     this.grid = gridSig;
@@ -201,7 +222,7 @@ export class DrawLayer {
         it.sig = sig;
         it.g.clear();
         if (d.k === 'text') this.paintText(it, d, textRes);
-        else { paintShape(it.g, shapeOf(d), grid, 1, cover, walls?.segs, walls?.ground,walls?.maps); this.paintZoneLabel(it, d, grid, textRes); }
+        else { paintShape(it.g, shapeOf(d), grid, 1, cover, walls); this.paintZoneLabel(it, d, grid, textRes); }
       }
       if (it.text && it.text.resolution !== textRes) it.text.resolution = textRes;
     });

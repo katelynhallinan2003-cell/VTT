@@ -59,6 +59,8 @@ export interface UiData {
   rulerColor: string;
   drawDash: boolean;
   /** width of a line template in feet */
+  tplColor: string;
+  tplCustomColor: boolean;
   tplWidth: number;
   /** where a sphere's centre snaps: the middle of a square, a corner, or nowhere */
   tplSphereSnap: SphereSnap;
@@ -175,6 +177,8 @@ export class UiState {
     textUnderline: readFlag('vtt-text-underline', false),
     rulerColor: readHex('vtt-ruler-color'),
     drawDash: readFlag('vtt-draw-dash', false),
+    tplColor: readHex('vtt-template-color') || readHex('vtt-draw-color') || '#e03131',
+    tplCustomColor: readFlag('vtt-template-custom-color',false),
     tplWidth: 5,
     tplSphereSnap: readStr('vtt-tpl-sphere', 'center', ['center', 'corner', 'off'] as const),
     tplSettings: readSpellDefaults(),
@@ -232,6 +236,8 @@ export class UiState {
       if (patch.drawTool !== undefined) localStorage.setItem('vtt-draw-tool', patch.drawTool);
       if (patch.tplKind !== undefined) localStorage.setItem('vtt-tpl-kind', patch.tplKind);
       if (patch.tplSphereSnap !== undefined) localStorage.setItem('vtt-tpl-sphere', patch.tplSphereSnap);
+      if (patch.tplColor!==undefined) localStorage.setItem('vtt-template-color',patch.tplColor);
+      if (patch.tplCustomColor!==undefined) localStorage.setItem('vtt-template-custom-color',patch.tplCustomColor ? '1' : '0');
       if (patch.tplSettings) localStorage.setItem('vtt-spell-defaults',JSON.stringify(patch.tplSettings));
       if (patch.drawColor !== undefined) localStorage.setItem('vtt-draw-color', patch.drawColor);
       if (patch.drawSize !== undefined) localStorage.setItem('vtt-draw-size', patch.drawSize);

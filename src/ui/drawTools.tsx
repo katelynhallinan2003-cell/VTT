@@ -29,7 +29,7 @@ const TEMPLATES: {id:TemplateKind; label:string}[] = [
   {id:'emanation',label:'Emanation'}, {id:'beam',label:'Line'},
 ];
 
-function Colors(props: { value: string; onPick: (c: string) => void; /** shown for a colour that can also be "the same as the outline" (value '') */ sameLabel?: string; fallback?: string; small?: boolean }) {
+function Colors(props: { value: string; onPick: (c: string, custom?:boolean) => void; /** shown for a colour that can also be "the same as the outline" (value '') */ sameLabel?: string; fallback?: string; small?: boolean }) {
   const shown = props.value || props.fallback || '#e03131';
   return (
     <div class={`swatches ${props.small ? 'small' : ''}`}>
@@ -39,7 +39,7 @@ function Colors(props: { value: string; onPick: (c: string) => void; /** shown f
       {DRAW_COLORS.map((c) => (
         <button key={c} class={`swatch ${props.value.toLowerCase() === c ? 'on' : ''}`} style={{ background: c }} aria-label={c} onClick={() => props.onPick(c)} />
       ))}
-      <input type="color" value={shown} title="Any colour" onInput={(e) => props.onPick((e.target as HTMLInputElement).value)} />
+      <input type="color" value={shown} title="Any colour" onInput={(e) => props.onPick((e.target as HTMLInputElement).value,true)} />
     </div>
   );
 }
@@ -439,13 +439,14 @@ function SpellAdvanced({settings,kind,heights,placed=false,onChange}:{settings:S
         input.value=String(Math.round(heights[key]));
         if (next[key]!==settings[key]) onChange(next);
       }} onKeyDown={e=>{if(e.key==='Enter') e.currentTarget.blur();}}/></label>;
-  return <details class="spell-advanced"><summary>Advanced</summary>
+  return <>
+    {settings.elevation!==false && <><div class="spell-heights">{heightField('start','Starting elevation')}{aimedSpell(kind) && heightField('end','Ending elevation')}</div>
+      {aimedSpell(kind) && <p class="hint">Ending elevation sets the center of the far face.</p>}</>}
+  <details class="spell-advanced"><summary>Advanced</summary>
     <Toggle checked={settings.walls!==false} onChange={walls=>onChange({...settings,walls})} label={placed?'This spell considers walls':'Consider walls'} />
     {settings.walls!==false && kind!=='beam' && <Toggle checked={settings.wrap!==false} onChange={wrap=>onChange({...settings,wrap})} label={placed?'This spell wraps around corners':'Wrap around corners'} />}
     <Toggle checked={settings.elevation!==false} onChange={elevation=>onChange({...settings,elevation})} label={placed?'This spell considers elevation':'Consider elevation'} />
-    {settings.elevation!==false && <><div class="spell-heights">{heightField('start','Starting elevation')}{aimedSpell(kind) && heightField('end','Ending elevation')}</div>
-      {aimedSpell(kind) && <p class="hint">Ending elevation sets the center of the far face.</p>}</>}
-  </details>;
+  </details></>;
 }
 
 const lineWidths=[5,10,15,20,30];
@@ -464,24 +465,20 @@ export function TemplateFlyout(props: { ui: UiState; client: TableClient; board:
   const d = useUi(ui);
   useClient(client);
   const hex=isHex(client.grid);
-  const panel=useRef<HTMLDivElement>(null);
   const [aim,setAim]=useState<{start:number;end:number}>();
   useEffect(()=>{
     const canvas=board?.app?.canvas;
-    if(!board || !canvas) return;
+    if(!board || !canvas || d.tplMode!=='place' || d.tplSettings.elevation===false) return;
     const sync=()=>{
-      if(!panel.current?.querySelector('details[open]')) return;
       const h=board.placementElevations();
       setAim(old=>old?.start===h.start && old.end===h.end ? old : h);
     };
     sync();
     canvas.addEventListener('pointermove',sync);
-    const el=panel.current;
-    el?.addEventListener('toggle',sync,true);
-    return ()=>{ canvas.removeEventListener('pointermove',sync); el?.removeEventListener('toggle',sync,true); };
+    return ()=>canvas.removeEventListener('pointermove',sync);
   },[board,d.tplKind,d.tplMode,d.tplSettings]);
   return (
-    <div class="flyout" ref={panel}>
+    <div class="flyout">
       <div class="flyout-title">Spell templates</div>
       {!client.canDo('template') && <p class="hint">Placing templates is turned off for players.</p>}
       <div class="seg" role="group" aria-label="What a click does">
@@ -493,7 +490,7 @@ export function TemplateFlyout(props: { ui: UiState; client: TableClient; board:
       <div class="seg wrap">
         {TEMPLATES.map((x) => <button key={x.id} class={d.tplKind === x.id ? 'on' : ''} onClick={() => ui.set({ tplKind: x.id })}>{x.label}</button>)}
       </div>
-      <Colors value={d.drawColor} onPick={(c) => { ui.set({ drawColor: c }); liveEdit(ui, client).apply((x) => isTemplate(x.k), { color: c }); }} />
+      <Colors value={d.tplColor} onPick={(tplColor,custom=false) => ui.set({tplColor,tplCustomColor:custom})} />
       {d.tplKind === 'beam' && <LineWidth value={d.tplWidth} onChange={tplWidth=>ui.set({tplWidth})}/>}
       {d.tplKind === 'sphere' && (
         <>
@@ -624,6 +621,7 @@ export function DrawInspector(props: { ui: UiState; client: TableClient; board: 
   const strokeKey = (['thin', 'medium', 'thick'] as StrokeSize[]).reduce((best, k) => (Math.abs(STROKE_CELLS[k] * client.grid.cell - first.w) < Math.abs(STROKE_CELLS[best] * client.grid.cell - first.w) ? k : best), 'medium' as StrokeSize);
   const size = one ? sizeFt(one, client.grid) : null;
   const ends=one && allTemplates ? parsePts(one.p) : [];
+  const dimension=one?.k==='sphere' || one?.k==='emanation' ? 'Radius' : one?.k==='cube' ? 'Side length' : 'Length';
   const axis=one && ends.length===2 ? spellAxis(one,ends[0],ends[1],client.grid,p=>board?.groundAtPoint(p) ?? 0) : null;
   const gridded=currentOverlay(client.grid)!=='none';
   if (size && 'len' in size && axis) size.len=axis.feet;
@@ -670,7 +668,7 @@ export function DrawInspector(props: { ui: UiState; client: TableClient; board: 
           <>
             <label class="field"><span class="field-label">Opacity</span>
               <input type="range" min={10} max={100} value={Math.round((first.fill || 0.28) * 100)} onInput={(e) => upd({ fill: Number((e.target as HTMLInputElement).value) / 100 })} /></label>
-            <Toggle checked={list.every((x) => !!x.td)} onChange={(v) => upd({ td: v })} label="Difficult terrain" hint="Moving through it costs extra while it is here." />
+            <Toggle checked={list.every((x) => !!x.td)} onChange={(v) => upd({ td: v })} label="Difficult terrain" />
           </>
         )}
         {!allText && !allTemplates && !allZones && (
@@ -688,7 +686,7 @@ export function DrawInspector(props: { ui: UiState; client: TableClient; board: 
           </div>
         )}
         {one && size && 'len' in size && (
-          <NumField label="Length" value={size.len} min={axis && gridded ? 5 : 1} max={2000} step={axis ? gridded ? 5 : 'any' : ft} unit="ft" title="Length in feet" onCommit={(n) => {
+          <NumField label={dimension} value={size.len} min={axis && gridded ? 5 : 1} max={2000} step={axis ? gridded ? 5 : 'any' : ft} unit="ft" title={dimension+' in feet'} onCommit={(n) => {
             if(axis) changeSpell({...one.spell,range:snapSpellFeet(n,gridded)});
             else { const patch=withSizeFt(one,client.grid,'len',n); if(patch.p) upd(patch); }
           }} />
@@ -705,7 +703,6 @@ export function DrawInspector(props: { ui: UiState; client: TableClient; board: 
           </div>
         )}
       </div>
-      <p class="hint">Drag it to move it · drag the white dots to resize · arrow keys nudge it · Del removes it</p>
     </div>
   );
 }

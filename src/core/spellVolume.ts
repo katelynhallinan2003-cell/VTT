@@ -5,7 +5,7 @@ import { cellCentersIn, MAX_COVERED } from './cells';
 import { rectContains } from './geometry';
 
 export type Spell = Pick<Drawing,'k'|'bw'|'of'|'spell'>;
-export interface SpellWorld { segs:Seg[]; ground?:(p:Vec)=>number; maps?:Rect[] }
+export interface SpellWorld { segs:Seg[]; ground?:(p:Vec)=>number; maps?:Rect[]; steppedGround?:boolean }
 export const aimedSpell=(k:Drawing['k'])=>k==='cone' || k==='beam' || k==='cube';
 const distance=(a:Vec,b:Vec)=>Math.hypot(b.x-a.x,b.y-a.y);
 const clamp=(v:number,l:number,h:number)=>Math.max(l,Math.min(h,v));
@@ -18,6 +18,29 @@ export function mapPoint(p:Vec,maps:Rect[]) {
     if(d<dist) { best=near;dist=d; }
   }
   return best;
+}
+
+/** Portions of a projected edge lying on the playable map rectangles. */
+export function mapSegments(a:Vec,b:Vec,maps:Rect[]):[Vec,Vec][] {
+  if(!maps.length) return [[a,b]];
+  const dx=b.x-a.x,dy=b.y-a.y, spans:[number,number][]=[];
+  for(const r of maps) {
+    let lo=0,hi=1;
+    for(const [p,d,min,max] of [[a.x,dx,r.x,r.x+r.w],[a.y,dy,r.y,r.y+r.h]]) {
+      if(!d) { if(p<min || p>max) hi=-1; continue; }
+      const s=(min-p)/d,t=(max-p)/d;
+      lo=Math.max(lo,Math.min(s,t)); hi=Math.min(hi,Math.max(s,t));
+    }
+    if(lo<=hi) spans.push([lo,hi]);
+  }
+  const merged:[number,number][]=[];
+  for(const span of spans.sort((l,r)=>l[0]-r[0])) {
+    const last=merged[merged.length-1];
+    if(last && last[1]>=span[0]) last[1]=Math.max(last[1],span[1]);
+    else merged.push(span);
+  }
+  const at=(t:number)=>({x:a.x+t*dx,y:a.y+t*dy});
+  return merged.map(([lo,hi])=>[at(lo),at(hi)]);
 }
 
 function hull(points:Vec[]) {
@@ -85,19 +108,38 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
   const own=d.k==='emanation' ? footprintPoly(a,width,hex) : undefined;
   const radius=own ? Math.max(0,run-width/2) : run;
   let geom=templateGeom(d.k,a,b,width,hex);
+  const edges:Vec[][]=[];
   if (aimed && rise) {
     const project=(at:Vec,side:number,up:number)=>({x:at.x-uy*side-ux*sin*up,y:at.y+ux*side-uy*sin*up});
-    const verts=d.k==='cone' ? [a,...Array.from({length:64},(_,i)=>project(b,
-      Math.cos(i*Math.PI/32)*length/2,Math.sin(i*Math.PI/32)*length/2))] :
-      [a,b].flatMap(p=>[-half,half].flatMap(y=>[-half,half].map(z=>project(p,y,z))));
-    geom={type:'poly',pts:hull(verts)};
+    if(d.k==='beam') {
+      const tip={x:b.x+ux*Math.abs(sin)*half,y:b.y+uy*Math.abs(sin)*half};
+      geom={type:'poly',pts:[project(a,half,0),project(tip,half,0),project(tip,-half,0),project(a,-half,0)]};
+    } else if(d.k==='cone') {
+      const rim=Array.from({length:64},(_,i)=>project(b,Math.cos(i*Math.PI/32)*length/2,Math.sin(i*Math.PI/32)*length/2));
+      geom={type:'poly',pts:hull([a,...rim])};
+      edges.push([...rim,rim[0]],[a,rim[16]]);
+    } else {
+      const face=(p:Vec)=>[project(p,-half,half),project(p,half,half),project(p,half,-half),project(p,-half,-half)];
+      const near=face(a), far=face(b);
+      geom={type:'poly',pts:hull([...near,...far])};
+      edges.push([...near,near[0]],[...far,far[0]],...near.map((p,i)=>[p,far[i]]));
+    }
   }
+  let tip=b;
+  if(geom.type==='poly') {
+    const ring=geom.pts;
+    const ts=ring.map((p,i)=>rayHit(a,ux,uy,{a:p,b:ring[(i+1)%ring.length]})).filter(Number.isFinite);
+    if(ts.length) { const t=Math.max(...ts);tip={x:a.x+t*ux,y:a.y+t*uy}; }
+  }
+  const tipSpans=mapSegments(a,tip,world.maps ?? []);
+  const handle=tipSpans[tipSpans.length-1]?.[1] ?? mapPoint(tip,world.maps ?? []);
   const bounds=geom.type==='circle' ? {x:a.x-run,y:a.y-run,w:2*run,h:2*run} : boundsOf(geom.pts);
   const eps=grid.cell*.00001;
   // Intersect the vertical column at p with the oriented solid. Return Z in
   // world pixels relative to the origin. Cones have a circular cross section.
   function slice(p:Vec):[number,number]|null {
     const dx=p.x-a.x,dy=p.y-a.y,x=dx*ux+dy*uy,y=dy*ux-dx*uy;
+    if(d.k==='beam' && x< -eps) return null;
     if(!aimed) {
       if(own && pointInPoly(p,own)) return null;
       const lateral=own ? Math.min(...own.map((q,i)=>distToSegment(p,q,own[(i+1)%own.length]))) : Math.hypot(dx,dy);
@@ -129,38 +171,48 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
     }
     return top>=bottom ? [bottom,top] : null;
   }
-  const walls=settings.walls===false ? [] : world.segs.filter(s=>Math.min(s.a.x,s.b.x)<=bounds.x+bounds.w+eps &&
+  const walls=world.segs.filter(s=>(settings.walls!==false || (elevated && s.terrainPxPerFt!==undefined)) && Math.min(s.a.x,s.b.x)<=bounds.x+bounds.w+eps &&
     Math.max(s.a.x,s.b.x)>=bounds.x-eps && Math.min(s.a.y,s.b.y)<=bounds.y+bounds.h+eps && Math.max(s.a.y,s.b.y)>=bounds.y-eps);
   const blocker=(from:Vec,z0:number,to:Vec,z1:number)=>{
     for(const wall of walls) {
-      if(wall.one && sideOf(wall,from)===-wall.one) continue;
+      if(wall.one && !(elevated && wall.terrainPxPerFt!==undefined) && sideOf(wall,from)===-wall.one) continue;
       const t=rayHit(from,to.x-from.x,to.y-from.y,wall);
       if(t>=1-1e-7) continue;
       if(elevated && wall.top!==undefined && start+(z0+t*(z1-z0))/px>=wall.top-1e-6) continue;
       return wall;
     }
   };
-  const clear=(a:Vec,z0:number,b:Vec,z1:number)=>!blocker(a,z0,b,z1);
+  const floor=(p:Vec)=>(ground(p)-start)*px;
+  // Complete flat terrace boundaries are already tested at exact ray crossings.
+  // Only continuous slopes and terrain with missing contours need interior samples.
+  const sampleCount=(run:number)=>world.ground && !world.steppedGround ? Math.max(1,Math.min(128,Math.ceil(run/(grid.cell/4)))) : 1;
+  function aboveGround(from:Vec,z0:number,to:Vec,z1:number) {
+    if(!elevated) return true;
+    if(z0<floor(from)-eps || z1<floor(to)-eps) return false;
+    const n=sampleCount(distance(from,to));
+    for(let i=1;i<n;i++) {
+      const t=i/n;
+      if(z0+t*(z1-z0)<floor({x:from.x+(to.x-from.x)*t,y:from.y+(to.y-from.y)*t})-eps) return false;
+    }
+    return true;
+  }
+  const clear=(a:Vec,z0:number,b:Vec,z1:number)=>!blocker(a,z0,b,z1) && aboveGround(a,z0,b,z1);
   // A line emits parallel rays from its entire near face. Trace backwards in
   // the cast direction. At each crossing, remove only the vertical interval
   // whose rays start upstream of the wall and pass below its top.
   function beamReaches(p:Vec,lo:number,hi:number) {
-    if(!walls.length || cos<1e-10) return true;
+    if(cos<1e-10) return !elevated || start>=ground(p)-eps/px;
     const x=(p.x-a.x)*ux+(p.y-a.y)*uy;
     let visible:[number,number][]=[[lo,hi]];
-    for(const wall of walls) {
-      if(wall.one && sideOf(wall,p)===wall.one) continue;
-      const back=rayHit(p,-ux,-uy,wall);
-      if(!Number.isFinite(back)) continue;
+    function occlude(back:number,ceiling:number) {
       // The ray starts on the near face when its axial coordinate is zero.
       // At the wall its axial coordinate is x*cos + z*sin - back/cos.
       const threshold=back/cos-x*cos;
-      let lower=-Infinity,upper=Infinity;
-      if(Math.abs(sin)<1e-10) { if(threshold>eps) continue; }
+      let lower=-Infinity,upper=ceiling;
+      if(Math.abs(sin)<1e-10) { if(threshold>eps) return true; }
       else if(sin>0) lower=(threshold-eps)/sin;
-      else upper=(threshold-eps)/sin;
-      if(elevated && wall.top!==undefined) upper=Math.min(upper,(wall.top-start)*px+back*sin/cos-eps);
-      if(lower>upper) continue;
+      else upper=Math.min(upper,(threshold-eps)/sin);
+      if(lower>upper || upper<lo || lower>hi) return true;
       const next:[number,number][]=[];
       for(const [bottom,top] of visible) {
         if(upper<bottom || lower>top) { next.push([bottom,top]); continue; }
@@ -169,6 +221,34 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
       }
       if(!next.length) return false;
       visible=next;
+      return true;
+    }
+    for(const wall of walls) {
+      if(wall.one && !(elevated && wall.terrainPxPerFt!==undefined) && sideOf(wall,p)===wall.one) continue;
+      const back=rayHit(p,-ux,-uy,wall);
+      if(back>x+eps) continue;
+      const ceiling=elevated && wall.top!==undefined ? (wall.top-start)*px+back*sin/cos-eps : Infinity;
+      if(!occlude(back,ceiling)) return false;
+    }
+    if(elevated && (world.ground || sin>0)) {
+      // Even without an intervening wall, a downward ray can enter the
+      // interior of a plateau. Parallel lanes may meet different ground.
+      const n=sampleCount(x);
+      // Flat base ground needs only the highest ray-relative floor: for
+      // uphill rays this can also be the ray's oblique emitting face.
+      for(let i=0;i<=n;i++) {
+        const back=x*i/n, q={x:p.x-ux*back,y:p.y-uy*back};
+        if(!occlude(back,floor(q)+back*sin/cos-eps)) return false;
+      }
+      // On a tilted emitting face some rays can start beneath the surface
+      // between terrain samples. Check their actual emission position.
+      if(sin>0) {
+        const emitsAbove=(z:number)=>{
+          const back=Math.max(0,Math.min(x,(x*cos+z*sin)*cos));
+          return z-back*sin/cos>=floor({x:p.x-back*ux,y:p.y-back*uy})-eps;
+        };
+        if(!visible.some(([low,high])=>emitsAbove(high) || emitsAbove(low))) return false;
+      }
     }
     return true;
   }
@@ -229,16 +309,22 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
     const span=slice(p);
     if(!span) return false;
     let [lo,hi]=span;
+    if(elevated) {
+      lo=Math.max(lo,floor(p));
+      if(lo>hi+eps) return false;
+    }
     if(elevated && lowFt!==undefined) {
       lo=Math.max(lo,(lowFt-start)*px);hi=Math.min(hi,(highFt!-start)*px);
       if(lo>hi+eps) return false;
     }
     if(d.k==='beam') return beamReaches(p,lo,hi);
     // A higher point in this same interval clears every wall a lower ray clears.
-    const z=lowFt===undefined ? clamp(axisZ(p),lo,hi) : hi;
+    const mid=clamp(axisZ(p),lo,hi);
+    const clearAtMid=lowFt===undefined && aboveGround(a,0,p,mid);
+    const z=clearAtMid ? mid : hi;
     const first=blocker(a,0,p,z);
-    if(!first) return true;
-    if(settings.wrap===false) return false;
+    if(!first) return clearAtMid || aboveGround(a,0,p,z);
+    if(settings.walls===false || settings.wrap===false) return false;
     const nearest=clamp(axisZ(p),lo,hi);
     return around(p,nearest,first) || (z!==nearest && around(p,z,first));
   }
@@ -261,5 +347,6 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
     }
     return out;
   }
-  return {geom,bounds,hits,cells,hasWalls:walls.length>0,feet:axis.feet};
+  return {geom,bounds,axis,edges,handle,hits,cells,hasWalls:walls.length>0,
+    groundClips:elevated && (!!world.ground || rise!==0 || start<0),feet:axis.feet};
 }

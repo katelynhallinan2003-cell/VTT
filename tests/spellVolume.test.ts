@@ -31,7 +31,47 @@ describe('spell volumes',()=>{
     expect(spell('beam',20,{},bridge).hits(point(16))).toBe(true);
     expect(spell('beam',20,{start:0,end:20},bridge).hits(point(16))).toBe(false);
     expect(spell('beam',20,{start:20,end:0},bridge).hits(point(16))).toBe(false);
-    expect(spell('beam',20,{walls:false,start:0,end:20},bridge).hits(point(16))).toBe(true);
+    expect(spell('beam',20,{walls:false,start:0,end:20},bridge).hits(point(16))).toBe(false);
+    expect(spell('beam',20,{walls:false,start:0,end:20},{segs:bridge.segs}).hits(point(16))).toBe(true);
+  });
+  it('anchors beams at the emitter and puts the handle on the projected front edge',()=>{
+    for(const [start,end] of [[0,36],[36,0]]) {
+      const beam=spell('beam',48,{start,end,range:60});
+      expect(beam.bounds.x).toBeCloseTo(0);
+      expect(beam.hits(point(-.1))).toBe(false);
+      expect(beam.handle.x).toBeCloseTo(48+2.5*.6);
+      expect(beam.handle.x).toBeCloseTo(beam.bounds.x+beam.bounds.w);
+    }
+    const clipped=spellVolume({k:'beam',bw:5},a,point(40,40),grid,{segs:[],maps:[{x:0,y:0,w:15,h:30}]});
+    expect(clipped.handle).toEqual(point(15,15));
+  });
+  it('draws the projected faces and rim when a change of ground tilts the spell',()=>{
+    const ledge={segs:[],ground:(p:{x:number})=>p.x>=45 ? 36 : 0};
+    const cube=spell('cube',48,{},ledge),cone=spell('cone',48,{},ledge);
+    expect(cube.feet).toBe(60);
+    expect(cube.edges[0]).toHaveLength(5);
+    expect(cube.edges[1]).toHaveLength(5);
+    expect(cone.edges[0]).toHaveLength(65);
+    expect(cube.handle.x).toBeCloseTo(66);
+    expect(cone.handle.x).toBeCloseTo(66);
+    expect(spell('cube',48).edges).toHaveLength(0);
+  });
+  it('stops descending spells in a plateau and cannot reappear beyond an intervening ridge',()=>{
+    const plateau={segs:[],ground:()=>15};
+    const descending=spell('beam',45,{start:15,end:6},plateau);
+    expect(descending.hits(point(5),15)).toBe(true);
+    expect(descending.hits(point(30))).toBe(false);
+    expect(descending.cells().every(p=>p.x<15)).toBe(true);
+    const ridge={segs:[],ground:(p:{x:number})=>p.x>=7 && p.x<=12 ? 25 : 0};
+    for(const kind of ['beam','cone','sphere','cube'] as const) {
+      expect(spell(kind,30,{walls:false},ridge).hits(point(20),0,5)).toBe(false);
+      expect(spell(kind,30,{walls:false,elevation:false},ridge).hits(point(20),0,5)).toBe(true);
+      expect(spell(kind,30,{start:30,end:30},ridge).hits(point(20),30)).toBe(true);
+    }
+    const narrowLip={steppedGround:true,ground:(p:{x:number})=>p.x>=9.1 && p.x<=9.2 ? 25 : 0,
+      segs:[9.1,9.2].map(x=>({a:point(x,-40),b:point(x,40),top:25,terrainPxPerFt:1,one:1 as const}))};
+    expect(spell('beam',20,{walls:false},narrowLip).hits(point(16),0)).toBe(false);
+    expect(spell('sphere',20,{walls:false},narrowLip).hits(point(16),0)).toBe(false);
   });
   it('spends a burst’s radius on the detour and never bends a line',()=>{
     const world={segs:[wall]};

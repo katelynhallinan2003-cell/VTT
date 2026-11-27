@@ -21,6 +21,7 @@ try {
   const clear=menu.getByRole('button',{name:'Clear all templates'});
   assert.equal(await clear.count(),0);
   await menu.getByRole('button',{name:'Sphere',exact:true}).click();
+  assert(await menu.getByLabel('Starting elevation (ft)').isVisible());
   await menu.locator('summary',{hasText:'Advanced'}).click();
   assert(await menu.getByLabel('Consider walls',{exact:true}).isChecked());
   await menu.getByLabel('Consider walls',{exact:true}).uncheck();
@@ -45,6 +46,7 @@ try {
   await start.fill('0');await start.press('Enter');
   await place();
   await dm.waitForFunction(()=>[...window.__vtt.client.scene.draws.values()].filter(d=>d.k==='sphere').length===2);
+  assert.deepEqual(await dm.evaluate(()=>[...window.__vtt.client.scene.draws.values()].filter(d=>d.k==='sphere').map(d=>d.color)),['#e03131','#f08c00']);
   assert(await clear.evaluate(el=>el.classList.contains('danger') && !!(el.compareDocumentPosition(el.closest('.flyout').querySelector('details')) & Node.DOCUMENT_POSITION_FOLLOWING)));
   assert.equal((await colors()).length,1);
   await menu.getByRole('button',{name:'Select',exact:true}).click();
@@ -54,6 +56,8 @@ try {
   await dm.mouse.dblclick((a.x+b.x)/2,a.y);
   assert(await dm.evaluate(()=>window.__vtt.ui.data.tplMode==='select' && window.__vtt.ui.data.drawSel.size===1));
   const selected=dm.locator('.drawtag');
+  assert(await selected.getByRole('spinbutton',{name:/Radius/}).isVisible());
+  assert(await selected.getByLabel('Starting elevation (ft)').isVisible());
   await selected.locator('summary',{hasText:'Advanced'}).click();
   const own=selected.getByLabel('Starting elevation (ft)');
   await own.fill('120');await own.press('Enter');
@@ -67,12 +71,15 @@ try {
   await dm.getByRole('button',{name:'Spell templates',exact:true}).click();
   await menu.getByRole('button',{name:'Place',exact:true}).click();
   await menu.getByRole('button',{name:'Line',exact:true}).click();
+  await menu.locator('input[type=color]').fill('#813ec9');
   const width=menu.getByRole('spinbutton',{name:/Line width/});
   await menu.getByLabel('Line width presets').selectOption('20');
   assert.equal(await width.inputValue(),'20');
   await width.fill('12.5');await width.press('Enter');
   await place();
   await dm.waitForFunction(()=>[...window.__vtt.client.scene.draws.values()].some(d=>d.k==='beam' && d.bw===12.5));
+  assert.equal(await menu.locator('input[type=color]').inputValue(),'#813ec9');
+  assert(await dm.evaluate(()=>[...window.__vtt.client.scene.draws.values()].some(d=>d.k==='beam' && d.color==='#813ec9')));
   const endpoint=await dm.evaluate(()=>{
     const {board,client}=window.__vtt;
     const line=[...client.scene.draws.values()].find(d=>d.k==='beam');
@@ -99,8 +106,14 @@ try {
     const [tip]=board.drawingHandles(line);
     return Math.hypot(tip.x-x,tip.y-y)*client.grid.ft/client.grid.cell;
   });
-  assert(Math.abs(projected-48)<0.01);
+  assert(Math.abs(projected-(48+.6*8.25/2))<0.01);
   assert.equal(await length.inputValue(),'60');
+  const resized=await dm.evaluate(()=>{
+    const {board,client}=window.__vtt, line=[...client.scene.draws.values()].find(d=>d.k==='beam');
+    const [x,y]=line.p.split(',').map(Number), [tip]=board.drawingHandles(line);
+    return board.templateSnap('beam',{x,y},tip,{},undefined,line).range;
+  });
+  assert.equal(resized,60);
   await dm.evaluate(async()=>{
     const {client}=window.__vtt, line=[...client.scene.draws.values()].find(d=>d.k==='beam');
     const [x,y]=line.p.split(',').map(Number);

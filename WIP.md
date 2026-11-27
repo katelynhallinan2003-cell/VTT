@@ -277,3 +277,11 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
 - [x] **#167 Match selected spell outlines to their footprint** (added 2026-11-27, completed 2026-11-27). The selection uses the same projected outline and map clipping as the spell.
 - [x] **#168 Show current spell endpoint elevations side by side** (added 2026-11-27, completed 2026-11-27). Show resolved elevations and restore ground tracking when a field is cleared.
 - [x] **#169 Round displayed board measurements to whole numbers** (added 2026-11-27, completed 2026-11-27). Round spell, ruler, movement and elevation readouts at display time.
+- [x] **#170 Anchor line spells at the origin** (added 2026-11-27, completed 2026-11-27). Clip the line and highlighted cells at its origin.
+- [x] **#171 Put spell resize handles on the projected end** (added 2026-11-27, completed 2026-11-27). Use the visible forward rim for picking and resizing, including map-edge clipping.
+- [x] **#172 Show spell elevations above Advanced** (added 2026-11-27, completed 2026-11-27). Both panels expose the applicable elevation fields while Advanced is collapsed.
+- [x] **#173 Remove spell editing and movement hints** (added 2026-11-27, completed 2026-11-27). Removed the drag instructions and the selected spell’s difficult terrain hint.
+- [x] **#174 Cycle template palette colors after placement** (added 2026-11-27, completed 2026-11-27). Advance through swatches on placement and retain custom colors.
+- [x] **#175 Label template dimensions by shape** (added 2026-11-27, completed 2026-11-27). Use Radius for spheres and emanations, Side length for cubes, and Length for directed lines and cones.
+- [x] **#176 Block spells that enter solid ground** (added 2026-11-27, completed 2026-11-27). Check solid terrain along spell paths for cell coverage, creature hits and difficult terrain.
+- [x] **#177 Draw tilted cube faces and cone rims** (added 2026-11-27, completed 2026-11-27). Show the projected face edges of a tilted cube and the far rim and spine of a tilted cone.

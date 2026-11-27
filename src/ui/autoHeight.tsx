@@ -1,11 +1,35 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import clip, { type Pair } from 'polygon-clipping';
+import clip, { type Pair, type Polygon } from 'polygon-clipping';
 import type { Board } from '../board/Board';
-import { analyzeHeightMap, draftHeights, heightPolygons, type HeightMark } from '../core/autoHeight';
-import { heightColor, newAreaId, terrainOf } from '../core/terrain';
+import { analyzeHeightMap, draftHeights, type HeightMark } from '../core/autoHeight';
+import { heightColor, newAreaId, terrainOf, surfaceHeight } from '../core/terrain';
 import { patchStroke, terrainLayers } from '../core/terrainEdges';
+import { autoHeightSurfaces } from '../core/autoSlopes';
+import { clipGradientControls } from '../core/gradientBoundaries';
+import type { GradientControl } from '../types';
 import type { TableClient } from '../state/client';
 import { Modal, toast, useClient } from './common';
+
+// Sample the same surface used by walking tokens. SVG clips the colour preview
+// to the exact saved polygon, including its holes and any existing paint.
+function slopePreview(polygon:Polygon, gradient:GradientControl[], pixel:number) {
+  const xs=polygon[0].map(p=>p[0]), ys=polygon[0].map(p=>p[1]);
+  const x=Math.min(...xs), y=Math.min(...ys), width=Math.max(...xs)-x, height=Math.max(...ys)-y;
+  const c=document.createElement('canvas');
+  c.width=Math.min(96,Math.max(2,Math.ceil(width/pixel)));
+  c.height=Math.min(96,Math.max(2,Math.ceil(height/pixel)));
+  const ctx=c.getContext('2d')!, img=ctx.createImageData(c.width,c.height);
+  const colors=new Map<number,number>(), area={h:gradient[0].height,gradient};
+  for (let row=0;row<c.height;row++) for (let col=0;col<c.width;col++) {
+    const h=Math.round(surfaceHeight(area,{x:x+(col+.5)*width/c.width,y:y+(row+.5)*height/c.height})*4)/4;
+    const color=colors.get(h) ?? parseInt(heightColor(h).slice(1),16);
+    colors.set(h,color);
+    const i=4*(row*c.width+col);
+    img.data[i]=color>>16; img.data[i+1]=(color>>8)&255; img.data[i+2]=color&255; img.data[i+3]=255;
+  }
+  ctx.putImageData(img,0,0);
+  return {x,y,width,height,href:c.toDataURL()};
+}
 
 export function AutoHeightModal({ client, board, onClose }: { client: TableClient; board: Board | null; onClose: () => void }) {
   useClient(client);
@@ -15,6 +39,7 @@ export function AutoHeightModal({ client, board, onClose }: { client: TableClien
   const [loaded, setLoaded] = useState<{ map: ReturnType<typeof analyzeHeightMap>; image: string } | null>(null);
   const [history, setHistory] = useState<HeightMark[][]>([[]]);
   const marks = history[history.length-1];
+  const [slopes,setSlopes]=useState(true);
   const [height, setHeight] = useState('10');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -59,12 +84,32 @@ export function AutoHeightModal({ client, board, onClose }: { client: TableClien
     if (!loaded || !marks.length) return [];
     const m = loaded.map;
     const labels = draftHeights(m,marks);
-    return heightPolygons(labels,m.width).flatMap(({height,polygon}) => {
-      const world = polygon.map(r => r.map(([x,y]): Pair => [left+x*width/m.width,top+y*heightPx/m.height]));
-      return (existing.length ? clip.difference(world,existing) : [world]).map(poly => ({height,polygon:poly,
-        path:poly.map(r => 'M'+r.map(p => p.join(',')).join('L')+'Z').join('')}));
+    const toWorld=(x:number,y:number):Pair=>[left+x*width/m.width,top+y*heightPx/m.height];
+    return autoHeightSurfaces(m,labels,marks,slopes).flatMap(p=>{
+      const world=p.polygon.map(r=>r.map(([x,y])=>toWorld(x,y)));
+      const controls=p.gradient?.map(c=>({...c,path:c.path.map(v=>{
+        const [x,y]=toWorld(v.x,v.y); return {x,y};
+      })}));
+      return (existing.length ? clip.difference(world,existing) : [world]).map(poly=>{
+        const gradient=controls && existing.length ? clipGradientControls(controls,poly) : controls;
+        let height=p.height;
+        if (controls && gradient && new Set(gradient.map(c=>c.height)).size<2) {
+          // The original anchors may have been cut away. Sample the surviving
+          // surface along its perimeter so edits never depend on off-area points.
+          const ring=poly[0], step=Math.max(1,Math.ceil((ring.length-1)/12));
+          for (let i=0;i<ring.length-1;i+=step) {
+            const at={x:ring[i][0],y:ring[i][1]}, h=surfaceHeight({h:height,gradient:controls},at);
+            gradient.push({id:'cut-'+i,height:h,path:[at]});
+          }
+          height=Math.round(gradient[0]?.height ?? height);
+        }
+        const smooth=gradient && new Set(gradient.map(c=>Math.round(c.height*10))).size>=2 ? gradient : undefined;
+        return {height,polygon:poly,gradient:smooth,preview:smooth && slopePreview(poly,smooth,width/m.width),
+          path:poly.map(r=>'M'+r.map(v=>v.join(',')).join('L')+'Z').join('')};
+      });
     });
-  }, [loaded,marks,existing,left,top,width,heightPx]);
+  }, [loaded,marks,slopes,existing,left,top,width,heightPx]);
+  const slopeCount=patches.filter(p=>p.gradient).length;
   const value = Number(height);
   const valid = height.trim() !== '' && Number.isInteger(value) && value >= -1000 && value <= 5000;
 
@@ -85,7 +130,8 @@ export function AutoHeightModal({ client, board, onClose }: { client: TableClien
     if (locked.current || !patches.length || source !== original) return;
     locked.current = true; setSaving(true);
     try {
-      await client.addDrawings(patches.map(p => patchStroke(p.polygon,newAreaId(),p.height)), 'Auto height map');
+      await client.addDrawings(patches.map(p => ({...patchStroke(p.polygon,newAreaId(),p.height),
+        ...(p.gradient && {gradient:p.gradient,gradientEnabled:true,gradientFixed:true})})), 'Auto height map');
       toast('Height map applied. Ctrl+Z undoes it.', 'ok'); onClose();
     } catch (e) { setError((e as Error).message); }
     finally { locked.current = false; setSaving(false); }
@@ -93,7 +139,7 @@ export function AutoHeightModal({ client, board, onClose }: { client: TableClien
   const unit = Math.max(width,heightPx)/(65*view.zoom);
   return <Modal title="Auto height map" width={900} onClose={() => { if (!locked.current) onClose(); }}
     footer={<><span class="muted grow" role="status">{saving ? 'Applying…' : !loaded ? (error ? '' : 'Reading map…') :
-      patches.length ? patches.length+' editable '+(patches.length===1 ? 'area' : 'areas') : marks.length ? 'No unpainted terrain in this area.' : ''}</span>
+      patches.length ? patches.length+' editable '+(patches.length===1 ? 'area' : 'areas')+(slopeCount ? ' · '+slopeCount+(slopeCount===1 ? ' slope' : ' slopes') : '') : marks.length ? 'No unpainted terrain in this area.' : ''}</span>
       <button class="btn" disabled={saving} onClick={onClose}>Cancel</button>
       <button class="btn primary" disabled={!patches.length || saving} onClick={apply}>Apply heights</button></>}>
     {error && <p role="alert">{error}</p>}
@@ -127,13 +173,19 @@ export function AutoHeightModal({ client, board, onClose }: { client: TableClien
           zoomAt(view.zoom*(e.deltaY<0 ? 1.3 : 1/1.3),(p.x-left)/width,(p.y-top)/heightPx);
         }}>
         <image href={loaded.image} x={left} y={top} width={width} height={heightPx} preserveAspectRatio="none"/>
-        {patches.map(p => <path d={p.path} fill={heightColor(p.height)} fill-opacity=".52" fill-rule="evenodd" stroke="#ffe1a2" stroke-width=".75" vector-effect="non-scaling-stroke"/>)}
+        {patches.map((p,i) => <g key={i}>
+          {p.preview && <><clipPath id={'auto-slope-'+i}><path d={p.path} clip-rule="evenodd"/></clipPath>
+            <image {...p.preview} opacity=".52" preserveAspectRatio="none" clip-path={'url(#auto-slope-'+i+')'}/></>}
+          <path d={p.path} fill={p.preview ? 'none' : heightColor(p.height)} fill-opacity=".52" fill-rule="evenodd"
+            stroke="#ffe1a2" stroke-width=".75" vector-effect="non-scaling-stroke"/>
+        </g>)}
         {marks.map((a,i) => <g key={i} data-mark={i} transform={`translate(${left+(a.x+0.5)*width/loaded.map.width} ${top+(a.y+0.5)*heightPx/loaded.map.height})`}>
           <circle r={unit*.50} fill={heightColor(a.height)} stroke="white" stroke-width={unit*.16}/>
           <text x={unit*.65} y={unit*.45} font-size={unit*1.65} fill="white" stroke="#14171e" stroke-width={unit*.45} paint-order="stroke" font-weight="700">{a.height}</text>
         </g>)}
       </svg>
       <div class="row wrap">
+        <label><input type="checkbox" checked={slopes} onChange={e=>setSlopes(e.currentTarget.checked)}/> Detect slopes</label>
         <button class="btn small" disabled={!marks.length || saving} onClick={() => setHistory(history.slice(0,-1))}>Undo mark</button>
         <button class="btn small" disabled={view.zoom>=8} onClick={() => zoomAt(view.zoom*2)}>Zoom in</button>
         {view.zoom>1 && <button class="btn small" onClick={() => zoomAt(1)}>Fit map</button>}</div>

@@ -90,6 +90,24 @@ check('pools, floor, platform and existing zero-height island have the intended 
 await dm.keyboard.press('Control+z');
 await dm.waitForFunction(()=>window.__vtt.client.scene.draws.size===1);
 check('one undo restores the hand-painted scene',(await areas())[0].hg==='old');
+await open();
+await dm.getByLabel('Height in feet').fill('0');
+await clickMap(550,700);
+await dm.getByLabel('Height in feet').fill('10');
+await clickMap(800,700);
+const slopePreviews=dm.locator('svg.auto-height-map clipPath');
+check('detects a slope across a continuous floor',await slopePreviews.count()>0);
+await dm.getByLabel('Detect slopes').uncheck();
+check('flat preview is available',await slopePreviews.count()===0);
+await dm.getByLabel('Detect slopes').check();
+await dm.getByRole('button',{name:'Apply heights'}).click();
+await dm.getByRole('dialog',{name:'Auto height map'}).waitFor({state:'hidden'});
+await dm.waitForFunction(()=>[...window.__vtt.client.scene.draws.values()].some(d=>d.gradientFixed && d.gradient?.length>=2)
+  && window.__vtt.board.seenZoneRev===window.__vtt.client.scene.drawRev);
+const middle=await dm.evaluate(()=>window.__vtt.board.groundAtPoint({x:675,y:700}));
+check('standing halfway up the saved slope gives an intermediate height',middle>0 && middle<10,String(middle));
+await dm.keyboard.press('Control+z');
+await dm.waitForFunction(()=>window.__vtt.client.scene.draws.size===1);
 console.log(errors.filter((e) => !/GL Driver|404|ReadPixels|GPU stall|willReadFrequently/.test(e)).join('\n') || 'no console problems');
 console.log(`${results.filter(Boolean).length}/${results.length} checks passed`);
 await browser.close();

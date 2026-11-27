@@ -72,9 +72,9 @@ export function analyzeHeightMap(img: PixelImage, side = 320) {
     region[b] = a; size[a] += size[b]; internal[a] = d;
   }
   for (let i = 0; i < n; i++) region[i] = root(i);
-  return { width, height, opaque, contrast, region };
+  return { width, height, opaque, contrast, region, colors: smooth };
 }
-type Analysis = ReturnType<typeof analyzeHeightMap>;
+export type Analysis = ReturnType<typeof analyzeHeightMap>;
 
 function neighbors(i: number, w: number, n: number, visit: (j: number, edge: number) => void) {
   if (i % w) visit(i-1, 2*(i-1));
@@ -143,7 +143,7 @@ export function draftHeights(map: Analysis, marks: HeightMark[]) {
 
 /** Trace each connected component separately. Padding closes shapes at the map
  * edge. Keeping shared corners exact prevents cracks between saved polygons. */
-export function heightPolygons(labels: Int16Array, w: number): HeightPatch[] {
+export function heightPolygons(labels: Int16Array | Int32Array, w: number): HeightPatch[] {
   const n = labels.length, seen = new Uint8Array(n), queue = new Int32Array(n), patches: HeightPatch[] = [];
   for (let i = 0; i < n; i++) {
     const height = labels[i];

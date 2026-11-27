@@ -1,4 +1,4 @@
-import clip, { type MultiPolygon, type Pair } from 'polygon-clipping';
+import clip, { type MultiPolygon, type Polygon, type Pair } from 'polygon-clipping';
 import type { GradientControl, Vec } from '../types';
 import {groundAtTerrain, type Terrain} from './terrain';
 import { inRegion, terrainLayers } from './terrainEdges';
@@ -48,6 +48,15 @@ function trim(path:Vec[],shape:MultiPolygon,outline:ReturnType<typeof edges>):Ve
   }
   const length=(p:Vec[])=>p.reduce((sum,v,i)=>sum+(i?distance(v,p[i-1]):0),0);
   return runs.sort((a,b)=>length(b)-length(a))[0] ?? [];
+}
+
+/** Retain controls on the surviving piece after existing terrain cuts a draft. */
+export function clipGradientControls(controls:GradientControl[], polygon:Polygon) {
+  const shape=[polygon], outline=edges(shape);
+  return controls.flatMap(c=>{
+    const path=trim(c.path,shape,outline);
+    return path.length ? [{...c,path}] : [];
+  });
 }
 
 type BoundaryRun={key:string; height:number; path:Vec[]; bare:boolean; id?:string};

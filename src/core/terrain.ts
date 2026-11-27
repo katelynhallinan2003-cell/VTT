@@ -264,7 +264,7 @@ export function areaHas(a: Area, p: Vec, grid: GridSettings): boolean {
 }
 
 /** How high the ground is at a point, in feet: the areas folded from the bottom up. No area means 0. */
-export function surfaceHeight(a: Area, p: Vec): number {
+export function surfaceHeight(a: Pick<Area, "gradient" | "h">, p: Vec): number {
   if (!a.gradient || a.gradient.length < 2) return a.h;
   let weights = 0, total = 0;
   for (const {path,height} of a.gradient) {

@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { analyzeHeightMap, draftHeights, heightPolygons, UNPAINTED } from '../src/core/autoHeight';
 import clip from 'polygon-clipping';
-import { inRegion } from '../src/core/terrainEdges';
+import { autoHeightSurfaces } from '../src/core/autoSlopes';
+import { DEFAULT_GRID, normalizeDrawing } from '../src/core/model';
+import { groundAtTerrain, terrainOf } from '../src/core/terrain';
+import { inRegion, patchStroke } from '../src/core/terrainEdges';
 
 const width = 96, height = 72;
 function art(pixel: (x:number,y:number) => number[]) {
@@ -29,6 +32,30 @@ describe('auto height map', () => {
       expect(labels[y*width+60]).toBe(30);
     }
     expect(labels.includes(UNPAINTED)).toBe(false);
+  });
+  it('saves editable slope controls and keeps both marked heights exact', () => {
+    const m=art((x,y)=>[108+x/4,96+x/5+(y%2),72,255]);
+    const marks=[mark(10,34,0),mark(80,34,10)], labels=draftHeights(m,marks);
+    const patches=autoHeightSurfaces(m,labels,marks,true);
+    expect(patches.some(p=>p.gradient)).toBe(true);
+    expect(autoHeightSurfaces(m,labels,marks,false).every(p=>!p.gradient)).toBe(true);
+    const drawings=patches.map((p,i)=>normalizeDrawing(String(i),{
+      ...patchStroke(p.polygon,String(i),p.height),gradient:p.gradient,gradientEnabled:!!p.gradient,gradientFixed:!!p.gradient
+    })!);
+    const terrain=terrainOf(drawings,DEFAULT_GRID);
+    const heights=[10,28,45,62,80].map(x=>groundAtTerrain(terrain,{x:x+.5,y:34.5}));
+    expect(groundAtTerrain(terrain,{x:2,y:35})).toBe(0);
+    expect(groundAtTerrain(terrain,{x:92,y:35})).toBe(10);
+    expect(heights[0]).toBe(0); expect(heights[4]).toBe(10);
+    expect(heights[2]).toBeCloseTo(5,1);
+    expect(heights.every((h,i)=>!i || h>heights[i-1])).toBe(true);
+  });
+  it('keeps a sharp cliff flat on both sides and leaves a single marked level alone', () => {
+    const m=art(x=>x<48 ? [55,80,110,255] : [195,170,120,255]);
+    for (const marks of [[mark(17,30,0),mark(77,30,10)],[mark(77,30,10)]]) {
+      const labels=draftHeights(m,marks);
+      expect(autoHeightSurfaces(m,labels,marks,true)).toEqual(autoHeightSurfaces(m,labels,marks,false));
+    }
   });
   it('covers transparent gaps and preserves marked islands up to the picture edge in saved polygons', () => {
     const m = art((x,y) => x>=30 && x<35 && y>=30 && y<35 ? [0,0,0,0] :

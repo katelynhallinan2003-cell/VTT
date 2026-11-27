@@ -43,7 +43,7 @@ type ModalState =
   | { kind: 'claim' }
   | { kind: 'handouts'; openId?: string | null }
   | { kind: 'editToken'; ids: string[] }
-  | { kind: 'grid'; rect: Rect; derived: { cell: number; ox: number; oy: number } };
+  | { kind: 'grid'; sceneId: string; rect: Rect; derived: { cell: number; ox: number; oy: number } };
 
 const Icon = (props: { d: string; size?: number }) => (
   <svg width={props.size ?? 20} height={props.size ?? 20} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d={props.d} /></svg>
@@ -134,6 +134,10 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
     return () => ro.disconnect();
   }, []);
 
+  useEffect(() => {
+    setModal(current => current?.kind==='grid' && current.sceneId!==client.viewSceneId ? null : current);
+  },[client.viewSceneId]);
+
   // the browser tab is named after the table, so a DM with several tables (or a test player in the next tab) can tell them apart
   const tableName = client.meta?.name;
   useEffect(() => {
@@ -154,7 +158,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
     if (!hostRef.current) return;
     const b = new Board(hostRef.current, client, ui, {
       onContextMenu: (info) => setMenu({ x: info.clientX, y: info.clientY, tokenId: info.tokenId, world: info.world }),
-      onGridRect: (rect, derived) => setModal({ kind: 'grid', rect, derived }),
+      onGridRect: (rect, derived) => { if(client.scene) setModal({ kind:'grid', sceneId:client.scene.id, rect, derived }); },
       onMapError: setMapError,
       onTokenImageError: (m) => toast(m, 'error', 9000),
       // a note stays long enough to be read: a couple of words a couple of seconds, a sentence or two longer
@@ -522,7 +526,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {modal?.kind === 'handouts' && <HandoutsModal key={modal.openId ?? 'list'} client={client} openId={modal.openId ?? null} onClose={() => setModal(null)} />}
       {popup && <HandoutsModal key={'popup-' + popup} client={client} openId={popup} onClose={() => setPopup(null)} />}
       {modal?.kind === 'claim' && <ClaimModal client={client} onClose={() => setModal(null)} onNewToken={() => openAddToken()} onBring={(e) => void addSavedToken(e)} />}
-      {modal?.kind === 'grid' && (
+      {modal?.kind === 'grid' && modal.sceneId === scene?.id && (
         <GridDialog shape={client.grid.shape} onCancel={() => { setModal(null); ui.set({ tool: 'select' }); }}
           onApply={(cols, rows) => {
             const { gridFromRect } = geometry;

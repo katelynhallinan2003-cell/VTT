@@ -754,7 +754,8 @@ export class Board {
     const meta = this.client.scene?.meta;
     if (!tex || !meta?.mapUrl) return { error: 'Add a map picture first.' };
     const seq = this.mapLoadSeq;
-    const changed = () => seq !== this.mapLoadSeq || tex !== this.mapTex || this.destroyed;
+    const scene = this.client.scene;
+    const changed = () => scene !== this.client.scene || scene !== this.sceneRef || meta.mapUrl !== scene?.meta?.mapUrl || seq !== this.mapLoadSeq || tex !== this.mapTex || this.destroyed;
     await new Promise<void>((r) => setTimeout(r, 20));
     if (changed()) return { error: 'The map changed during the grid search.' };
     const px = await readGridSample(tex, meta.mapUrl);
@@ -870,8 +871,6 @@ export class Board {
       this.cb.onNotice('No clear printed grid found.', 'info');
       return;
     }
-    await this.client.updateScene({ gridTried: true }, { record: false });
-    if (!here()) return;
     const m = this.client.scene?.meta;
     if (!m || m.mapGrid) return;
     const aligned = impliedGrid(r.cut, m.mapScale, m.mapX, m.mapY);

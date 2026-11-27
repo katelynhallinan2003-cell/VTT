@@ -1611,7 +1611,7 @@ export class TableClient {
       ...normalizeSceneMeta({}),
       name: opts.name || 'New scene',
       mapUrl: opts.mapUrl ?? null,
-      gridTried: opts.gridTried ?? !opts.mapUrl,
+      gridTried: opts.gridTried ?? (!opts.mapUrl || opts.grid?.shape !== undefined || (opts.grid?.visible === false && opts.grid.snap === false)),
       mapW: opts.mapW ?? 0,
       mapH: opts.mapH ?? 0,
       ...(opts.bg ? { bg: opts.bg } : {}),
@@ -1627,8 +1627,8 @@ export class TableClient {
     return sid;
   }
 
-  async updateScene(patch: ScenePatch, opts: { record?: boolean } = {}): Promise<void> {
-    const sid = this.viewSceneId;
+  async updateScene(patch: ScenePatch, opts: { record?: boolean; sceneId?: string } = {}): Promise<void> {
+    const sid = opts.sceneId ?? this.viewSceneId;
     if (!sid || !this.isDM) return;
     const base = P.sceneMeta(this.tableId, sid);
     const updates: Record<string, any> = {};
@@ -1642,7 +1642,11 @@ export class TableClient {
     if (!Object.keys(updates).length) return;
 
     // remember how things were, for Ctrl+Z (only for plain settings, not for swapping the map picture)
-    const meta = this.scene?.meta;
+    const origin = this.scene?.id === sid ? this.scene : null;
+    const meta = origin?.meta;
+    // An explicit shape or calibration settles this map, including a deliberate gridless choice.
+    if (patch.gridTried === undefined && patch.grid && (patch.grid.shape !== undefined || patch.grid.cell !== undefined ||
+        (patch.grid.visible === false && patch.grid.snap === false))) updates[`${base}/gridTried`] = true;
     const undoable = opts.record !== false && !!meta && Object.keys(patch).every((k) => UNDOABLE_SCENE_KEYS.has(k));
     let prev: ScenePatch | null = null;
     if (undoable && meta) {
@@ -1656,14 +1660,14 @@ export class TableClient {
       }
     }
     await this.backend.update(updates);
-    if (prev) {
+    if (prev && this.scene === origin) {
       const before = prev;
       const keys = Object.keys(updates).map((u) => u.split('/').slice(-2).join('.')).sort().join(',');
       this.history.push({
         label: 'Change scene settings',
         key: `scene:${sid}:${keys}`,
-        undo: () => this.updateScene(before, { record: false }),
-        redo: () => this.updateScene(patch, { record: false }),
+        undo: () => this.updateScene(before, { record: false, sceneId:sid }),
+        redo: () => this.updateScene(patch, { record: false, sceneId:sid }),
       });
     }
   }

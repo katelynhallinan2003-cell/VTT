@@ -44,6 +44,23 @@ describe('TableClient over the mock backend', () => {
     expect(dm.sceneIndex.map((s) => s.name)).toEqual(['Cave']);
   });
 
+  it('keeps grid choices and delayed grid edits with their original scene',async()=>{
+    const {dm,sid}=await setup();
+    await dm.updateScene({grid:{shape:'flat',visible:true,snap:true}});
+    expect(dm.scene?.meta?.gridTried).toBe(true);
+    const other=await dm.createScene({name:'Gridless',grid:{visible:false,snap:false}});
+    await waitFor(()=>dm.scene?.id===other && !!dm.scene.meta);
+    await dm.updateScene({grid:{cell:112}},{sceneId:sid});
+    expect(dm.grid.visible).toBe(false);
+    expect(dm.grid.cell).toBe(70);
+    dm.openScene(sid);
+    await waitFor(()=>dm.scene?.id===sid && !!dm.scene.meta);
+    expect(dm.grid).toMatchObject({shape:'flat',cell:112,visible:true});
+    dm.openScene(other);
+    await waitFor(()=>dm.scene?.id===other && !!dm.scene.meta);
+    expect(dm.grid).toMatchObject({visible:false,snap:false});
+  });
+
   it('syncs tokens both ways', async () => {
     const { dm, pl } = await setup();
     const id = await dm.addToken({ x: 35, y: 35, name: 'Goblin', size: 1 });

@@ -322,7 +322,8 @@ function FitGrid(props: { client: TableClient; board: Board | null; meta: SceneM
   const cut = meta.mapGrid;
   const g = meta.grid;
   const hex = isHex(g);
-  const adjT = useThrottled((c: GridCut) => { void client.updateScene({ mapGrid: c }); });
+  const sceneId=client.scene!.id;
+  const adjT = useThrottled((c: GridCut) => { void client.updateScene({ mapGrid: c },{sceneId}); });
   const hasPic = !!meta.mapUrl;
   const k = meta.mapScale;
   const cutPer = cut ? gridPeriod({ cell: cut.p, shape: cut.hex ?? 'square' }) : { x: 1, y: 1 };
@@ -336,6 +337,7 @@ function FitGrid(props: { client: TableClient; board: Board | null; meta: SceneM
     toast('Looking for grid lines in the map…', 'info', 1500);
     try {
       const r = await board.findMapGrid();
+      if (client.scene?.id !== sceneId || client.scene.meta?.mapUrl !== meta.mapUrl) return;
       if ('error' in r) { toast(r.error, 'error', 7000); return; }
       // hide the printed lines and set the app's own grid on them, in one step (one Ctrl+Z puts both back)
       const m = meta;
@@ -396,9 +398,10 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
   useClient(client);
   const d = useUi(ui);
   const meta = client.scene?.meta;
-  const gridT = useThrottled((p: Partial<GridSettings>) => { void client.updateScene({ grid: p }); });
-  const mapT = useThrottled((p: { mapScale?: number }) => { void client.updateScene(p); });
-  const bgT = useThrottled((bg: string) => { void client.updateScene({ bg }); });
+  const sceneId=client.scene?.id;
+  const gridT = useThrottled((p: Partial<GridSettings>) => { void client.updateScene({ grid: p },{sceneId}); });
+  const mapT = useThrottled((p: { mapScale?: number }) => { void client.updateScene(p,{sceneId}); });
+  const bgT = useThrottled((bg: string) => { void client.updateScene({ bg },{sceneId}); });
   if (!client.isDM) return null;
 
   if (!meta) {
@@ -728,7 +731,7 @@ export function Dock(props: { client: TableClient; ui: UiState; board: Board | n
         <h3>{DOCK_TITLES[tab]}{tab === 'scene' && sceneName ? <span class="muted"> · {sceneName}</span> : null}</h3>
         <button class="icon-btn" title="Fold this panel away" aria-label="Hide panel" onClick={() => ui.set({ dockTab: null })}>⟩</button>
       </div>
-      {tab === 'scene' && <ScenePanel client={client} ui={ui} board={props.board} onNewScene={props.onNewScene} onAutoLights={props.onAutoLights} onAddMap={props.onAddMap} />}
+      {tab === 'scene' && <ScenePanel key={client.scene?.id} client={client} ui={ui} board={props.board} onNewScene={props.onNewScene} onAutoLights={props.onAutoLights} onAddMap={props.onAddMap} />}
       {tab === 'tokens' && <TokenList client={client} ui={ui} board={props.board} onEdit={props.onEdit} onPlayer={props.onPlayer} />}
       {tab === 'players' && <PlayersPanel client={client} ui={ui} />}
     </aside>

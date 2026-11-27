@@ -1,6 +1,6 @@
 import { initialBoundaryControls } from '../core/gradientBoundaries';
 import { brushWall, resolveWalls } from '../core/wallBrush';
-import { reuseStrokeGeometry, standingGround } from '../core/terrain';
+import { reuseStrokeGeometry, standingSurface } from '../core/terrain';
 import type { Backend, Unsub } from '../backend/types';
 import { SERVER_TS } from '../backend/types';
 import {
@@ -1658,10 +1658,10 @@ export class TableClient {
     const mode: FogMode = m.fog.dim ? 'x' : 'r';
     const zones = zonesOf(s.draws.values(), g);
     const geometry=this.wallGeometry();
-    const segs = withSightTerrain([...sightSegs([...geometry.walls.values()].filter(w=>!w.face), w => groundAt(zones, wallMid(w)) + w.h), ...geometry.terrain], zones, geometry.openings);
+    const segs = withSightTerrain([...sightSegs([...geometry.walls.values()].filter(w=>!w.face), w => groundAt(zones, wallMid(w)) + w.h), ...geometry.terrain], zones, geometry.openings, m.fog.gradientVision);
     // in the dark a token remembers what its own light, its darkvision and its touch reach as it walks, and what other lights show it where it stands
     const dark = m.light.ambient === 'dark';
-    const altOf = (t: Token, p: Vec = t) => sightHeight(t, standingGround(zones, p));
+    const altOf = (t: Token, p: Vec = t) => sightHeight(t, standingSurface(zones, p));
     const lights: LightSrc[] = dark
       ? [...s.tokens.values()].filter((t) => (!t.hidden || isLightMark(t)) && t.light).map((t) => lightOf(t, g, { x: t.x, y: t.y }, altOf(t))).filter((l): l is LightSrc => !!l)
       : [];

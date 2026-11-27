@@ -12,7 +12,7 @@ import { dragGradient, gradientPath, initialGradientLine } from '../core/gradien
 import type { SightSegments } from '../core/terrainSight';
 import { withSightTerrain, areaShape, brushCuts, clippedBrush, patchStroke, connectedHeight, type TerrainEdge } from '../core/terrainEdges';
 import { movementCost } from '../core/movementCost';
-import { EMPTY_TERRAIN, MAX_STROKE_CELLS, slopeAt, surfaceHeight, standingGround, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
+import { EMPTY_TERRAIN, MAX_STROKE_CELLS, slopeAt, surfaceHeight, standingSurface, standingGround, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
 import { scaleCut, type GridCut, type PixelImage } from '../core/gridcut';
 import { AUTO_GRID_STRENGTH, detectPrintedGrid, impliedGrid } from '../core/mapgrid';
@@ -1185,12 +1185,12 @@ export class Board {
     if (!scene) return { sight: [], move: [], terrain: [], levelJoins: [], openings: [] };
     const c = this.segCache;
     // how tall a wall's top is depends on the ground it stands on, so the pieces are rebuilt when the ground changes too
-    const gsig = this.zones.sig;
+    const gsig = this.zones.sig + "|" + !!scene.meta?.fog.gradientVision;
     if (c.scene !== scene || c.rev !== scene.wallRev || c.ground !== gsig) {
       const {walls,terrain,levelJoins,openings}=this.client.wallGeometry();
       const list = [...walls.values()].filter(w=>!w.face);
       const topOf = (w: Wall) => groundAt(this.zones, wallMid(w)) + w.h;
-      this.segCache = { scene, terrain, levelJoins, openings, rev: scene.wallRev, ground: gsig, sight: withSightTerrain([...sightSegs(list, topOf), ...terrain],this.zones,openings), move: moveSegs(list, topOf) };
+      this.segCache = { scene, terrain, levelJoins, openings, rev: scene.wallRev, ground: gsig, sight: withSightTerrain([...sightSegs(list, topOf), ...terrain],this.zones,openings,!!scene.meta?.fog.gradientVision), move: moveSegs(list, topOf) };
     }
     return this.segCache;
   }
@@ -1288,7 +1288,7 @@ export class Board {
   /** Height of a viewer or light above the map at `pos`. */
   private sightHeightAt(id: string, pos: Vec): number | undefined {
     const t = this.client.scene?.tokens.get(id);
-    return t ? sightHeight(t, standingGround(this.zones, pos)) : undefined;
+    return t ? sightHeight(t, standingSurface(this.zones, pos)) : undefined;
   }
 
   /** Whether a token may go from→to (arrow keys, jumps and the like). */
@@ -1664,7 +1664,7 @@ export class Board {
     }
     const r = (n: number) => Math.round(n * 2) / 2;
     const painted = this.paintedLight();
-    const key = `${scene.id}|${ambient}|${scene.wallRev}:${this.zones.sig}|${painted ? `${painted.day?.sig ?? ''}~${painted.dim?.sig ?? ''}~${Math.round(painted.edge)}` : ''}|${lights.map((l) => `${r(l.x)},${r(l.y)},${r(l.b)},${r(l.r)},${l.c},${l.alt ?? ''}`).join(';')}|${viewers.map((w) => `${r(w.x)},${r(w.y)},${r(w.r)},${r(w.dv)},${r(w.touch)},${w.alt ?? ''}`).join(';')}`;
+    const key = `${scene.id}|${ambient}|${scene.wallRev}:${this.zones.sig}:${meta.fog.gradientVision}|${painted ? `${painted.day?.sig ?? ''}~${painted.dim?.sig ?? ''}~${Math.round(painted.edge)}` : ''}|${lights.map((l) => `${r(l.x)},${r(l.y)},${r(l.b)},${r(l.r)},${l.c},${l.alt ?? ''}`).join(';')}|${viewers.map((w) => `${r(w.x)},${r(w.y)},${r(w.r)},${r(w.dv)},${r(w.touch)},${w.alt ?? ''}`).join(';')}`;
     return { ambient, lights, viewers, painted, key };
   }
 
@@ -1711,6 +1711,7 @@ export class Board {
     const sprite = this.fogSprite;
     if (!sprite?.visible) return null;
     const meta = this.client.scene?.meta;
+    const feather=Math.max(.75,Math.min(3.5,.25*this.client.grid.cell/this.client.grid.ft*this.fogMask.scale));
     // in the dark, a token only sees what is lit (or what its darkvision reaches): the fog is cut open in that shape
     if (L && L.ambient === 'dark' && sprite.visible && meta?.fog.enabled && meta.fog.vision) {
       this.brightVision = null;
@@ -1720,7 +1721,7 @@ export class Board {
         return () => false;
       }
       const m = this.fogMask;
-      this.lightLayer.paintSeen({ origin: m.origin, scale: m.scale, w: m.canvas.width, h: m.canvas.height }, L.lights, L.viewers, this.wallSegs().sight, L.painted, L.key);
+      this.lightLayer.paintSeen({ origin: m.origin, scale: m.scale, w: m.canvas.width, h: m.canvas.height }, L.lights, L.viewers, this.wallSegs().sight, L.painted, L.key, feather);
       if (this.fogMaskKind !== 's') { sprite.setMask({ mask: this.lightLayer.seenSprite, inverse: true }); this.fogMaskKind = 's'; }
       return (p) => this.lightLayer.seenAt(p);
     }
@@ -1734,8 +1735,9 @@ export class Board {
     }
     // a wall cuts the circle back to what the token could really see from where it stands
     const sight = this.wallSegs().sight;
-    const key = circles.map(c => [c.x,c.y,c.r,c.alt].join(',')).join(';');
-    if (this.fogMaskKind === 'g' && this.brightVision?.segs === sight && this.brightVision.key === key) return this.brightVision.contains;
+    const {origin,scale,canvas}=this.fogMask;
+    const key = [origin.x,origin.y,scale,canvas.width,canvas.height,...circles.flatMap(c => [c.x,c.y,c.r,c.alt])].join(',');
+    if (this.fogMaskKind && this.brightVision?.segs === sight && this.brightVision.key === key) return this.brightVision.contains;
     g.clear();
     const shapes: { x: number; y: number; r: number; poly: Vec[] | null }[] = [];
     for (const c of circles) {
@@ -1743,17 +1745,24 @@ export class Board {
         const v = visibilityPolygon({ x: c.x, y: c.y }, c.r, sight, 64, c.alt);
         if (!v.free) {
           for (const poly of [v.poly, ...v.faces]) {
-            g.poly(poly.flatMap(q => [q.x, q.y]));
             shapes.push({ ...c, poly });
           }
           continue;
         }
       }
-      g.circle(c.x, c.y, c.r);
       shapes.push({ ...c, poly: null });
     }
-    g.fill(0xffffff);
-    if (this.fogMaskKind !== 'g') { sprite.setMask({ mask: g, inverse: true }); this.fogMaskKind = 'g'; }
+    const masked=shapes.some(s=>s.poly);
+    if (masked) this.lightLayer.paintBrightSeen({origin,scale,w:canvas.width,h:canvas.height},shapes,feather);
+    else {
+      for (const c of circles) g.circle(c.x,c.y,c.r);
+      g.fill(0xffffff);
+    }
+    const kind=masked ? 's' : 'g';
+    if (this.fogMaskKind!==kind) {
+      sprite.setMask({mask:masked ? this.lightLayer.seenSprite : g,inverse:true});
+      this.fogMaskKind=kind;
+    }
     const contains = (p: Vec) => shapes.some(c => c.poly ? pointInPoly(p,c.poly) : Math.hypot(p.x-c.x,p.y-c.y) <= c.r);
     this.brightVision = {segs:sight,key,contains};
     return contains;

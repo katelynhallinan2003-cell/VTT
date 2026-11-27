@@ -125,6 +125,7 @@ export function normalizeSceneMeta(raw: any): SceneMeta {
     bg: OLD_DEFAULT_BGS.has(str(m.bg, '')) ? DEFAULT_BG : str(m.bg, DEFAULT_BG),
     grid: normalizeGrid(m.grid),
     fog: {
+      gradientVision: bool(m.fog?.gradientVision, false),
       enabled: bool(m.fog?.enabled, false),
       base: m.fog?.base === 'clear' ? 'clear' : 'hidden',
       vision: bool(m.fog?.vision, false),

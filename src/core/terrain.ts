@@ -309,13 +309,17 @@ export function slopeAt(t: Terrain, p: Vec): ((at: Vec) => number) | undefined {
 
 /** A standing creature takes the average of seven samples in its hex on a gradient. */
 export function standingGround(t: Terrain, p: Vec): number {
+  return Math.round(standingSurface(t,p)*10)/10;
+}
+
+export function standingSurface(t: Terrain, p: Vec): number {
   const h = groundAtTerrain(t,p);
-  if ((!t.grid.visible && !t.grid.snap) || !isHex(t.grid)) return Math.round(h*10)/10;
+  if ((!t.grid.visible && !t.grid.snap) || !isHex(t.grid)) return h;
   const c = snapToCellCenter(t.grid,p);
-  if (!slopeAt(t,c)) return Math.round(h*10)/10;
+  if (!slopeAt(t,c)) return h;
   const vertices = cellPoly(t.grid,c);
   const sum = vertices.reduce((total,v) => total + groundAtTerrain(t,{x:c.x+(v.x-c.x)*0.65,y:c.y+(v.y-c.y)*0.65}),groundAtTerrain(t,c));
-  return Math.round(sum/(1+vertices.length)*10)/10;
+  return sum/(1+vertices.length);
 }
 
 /** The top-most painted area at a point (null for open ground). Old-style boxes and circles do not count. */

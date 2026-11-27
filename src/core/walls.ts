@@ -215,7 +215,10 @@ export function closeNarrowShadows(angles: number[], reach: number[]): void {
     if (left === right) continue;
     let span = angles[right] - angles[left];
     if (span < 0) span += 2 * Math.PI;
-    if (span < Math.PI / 18) reach[i] = Math.min(reach[left], reach[right]);
+    // Taper between nine and twelve degrees. Crossing the old ten-degree
+    // threshold could flash an entire wedge for a one-pixel movement.
+    const t=Math.max(0,Math.min(1,(12-span*180/Math.PI)/3));
+    reach[i] += (Math.min(reach[left],reach[right])-reach[i])*t*t*(3-2*t);
   }
 }
 
@@ -247,7 +250,7 @@ export function visibilityPolygon(o: Vec, r: number, segs: SightSegments, steps 
   const near = nearSightEdges(o,r,segs,alt);
   const ring = (n: number): Vec[] => Array.from({ length: n }, (_, i) => ({ x: o.x + Math.cos((i / n) * Math.PI * 2) * r, y: o.y + Math.sin((i / n) * Math.PI * 2) * r }));
   const surface=nearbySurface(segs.surface,o,r);
-  if (surface || near.some(n => n.seg.terrainPxPerFt !== undefined)) {
+  if (surface?.gradientVision || near.some(n => surface || n.seg.terrainPxPerFt !== undefined)) {
     return terrainSight(o,r,near,alt ?? 0,steps,surface);
   }
   if (!near.length) return { poly: ring(steps), faces: [], free: true };

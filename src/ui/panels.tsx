@@ -29,6 +29,13 @@ import { GroupHpPop } from './groupHp';
 import { PlayersPanel } from './modals';
 
 
+export function AdvancedFog({ client }: { client: TableClient }) {
+  return <details><summary>Advanced</summary>
+    <Toggle label="Elevation gradients block vision" checked={!!client.scene?.meta?.fog.gradientVision}
+      onChange={gradientVision => { void client.updateScene({ fog: { gradientVision } }); }} />
+  </details>;
+}
+
 /** Wraps a callback in a throttle that always uses the latest closure. */
 function useThrottled<A extends unknown[]>(fn: (...a: A) => void, ms = 90) {
   const ref = useRef(fn);
@@ -500,6 +507,7 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
           <button class={`btn small ${d.tool === 'fog' ? 'primary' : ''}`} onClick={() => ui.set({ tool: d.tool === 'fog' ? 'select' : 'fog' })}>Fog tool (F)</button>
         </div>
         <Toggle checked={d.dmPreview} onChange={(v) => ui.set({ dmPreview: v })} label="Preview as players" hint="See the fog, the dark and hidden tokens the way your players do." />
+        <AdvancedFog client={client} />
       </Section>
 
       <Section id="light" title="Light and darkness" defaultOpen={false}>

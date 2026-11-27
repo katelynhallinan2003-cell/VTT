@@ -23,7 +23,7 @@ import { AutoHeightModal } from './autoHeight';
 import { AutoLightsModal } from './autoLights';
 import { DetectWallsModal } from './detectWalls';
 import { DrawFlyout, DrawInspector, HeightFlyout, RulerFlyout, TemplateFlyout, TestMoveBar, TextEditor, WallFlyout } from './drawTools';
-import { Dock, Rail, TokenTag } from './panels';
+import { AdvancedFog, Dock, Rail, TokenTag } from './panels';
 import { InitPopup, InitStrip } from './initiative';
 import { EffectsWindow } from './effects';
 import { TokenEditorModal } from './tokenEditor';
@@ -419,6 +419,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
             <button class="btn small" onClick={() => void client.resetFog('clear')}>Reveal everything</button>
           </div>
           <label class="toggle"><input type="checkbox" checked={d.dmPreview} onChange={(e) => ui.set({ dmPreview: (e.target as HTMLInputElement).checked })} /><span class="toggle-text">Preview as players</span></label>
+          <AdvancedFog client={client} />
         </div>
       )}
 

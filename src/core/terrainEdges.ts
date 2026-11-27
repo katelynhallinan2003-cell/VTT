@@ -6,7 +6,7 @@ import { snapToCellCenter } from './geometry';
 import { cellPoly } from './cells';
 import { areaAt, newAreaId, groundAtTerrain, surfaceHeight, type Area, type Terrain, type TStroke } from './terrain';
 import type { SightRegion, SightSegments } from './terrainSight';
-import { type Seg } from './walls';
+import { simplifyPoly, type Seg } from './walls';
 
 export interface TerrainEdge extends Seg { low: number; top: number; one: 1 | -1 }
 export const inRegion = (polygon: Polygon, p: Vec): boolean => {
@@ -162,8 +162,8 @@ function heightRegions(t: Terrain): Plan {
 // holes. Cache heights for each smooth surface separately so interpolation never
 // averages the two sides of a cliff. Only samples visited by a viewer are built.
 const sightRegions = new WeakMap<Terrain, SightRegion[]>();
-export function withSightTerrain(segs: Seg[], t: Terrain, openings: Seg[]): SightSegments {
-  if (!t.areas.some(a => (a.gradient?.length ?? 0) >= 2)) return segs;
+export function withSightTerrain(segs: Seg[], t: Terrain, openings: Seg[], gradientVision: boolean): SightSegments {
+  if (!t.areas.length) return segs;
   let regions = sightRegions.get(t);
   const scale = t.grid.cell/t.grid.ft;
   if (!regions) {
@@ -175,7 +175,7 @@ export function withSightTerrain(segs: Seg[], t: Terrain, openings: Seg[]): Sigh
       if (surface) {
         const {area,offset} = surface;
         // At most 512 steps across a region, even on very large maps.
-        const step = Math.max(2*scale,area.b.w/512,area.b.h/512);
+        const step = Math.max(.5*scale,area.b.w/512,area.b.h/512);
         const stride = Math.ceil(area.b.w/step)+3;
         const samples = new Map<number,number>();
         const sample = (ix:number,iy:number) => {
@@ -196,12 +196,14 @@ export function withSightTerrain(segs: Seg[], t: Terrain, openings: Seg[]): Sigh
       }
       for (const poly of shape) {
         const rings=poly.map(r=>r.map(([x,y])=>({x,y})));
-        regions.push({height,rings,bounds:boundsOf(rings[0])});
+        const corners=rings.flatMap(ring=>simplifyPoly(ring.slice(0,-1),scale*.2));
+        regions.push({height,rings,corners,bounds:boundsOf(rings[0])});
       }
     }
     sightRegions.set(t,regions);
   }
-  return Object.assign(segs,{surface:{regions,scale,openings}});
+  const terraced=regions.every(region=>typeof region.height==='number');
+  return Object.assign(segs,{surface:{regions,scale,openings,gradientVision,terraced}});
 }
 
 // Cache by paint geometry so dragging a height control does not repeat polygon clipping.

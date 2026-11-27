@@ -196,7 +196,7 @@ describe('shadows at creature eye height', () => {
     const slope=normalizeDrawing('hill',{k:'rect',hz:0,p:'0,-50,200,50',gradient:controls,gradientFixed:true})!;
     const terrain=terrainOf([slope],grid);
     // A map-wide gradient can have no wall segments whatsoever.
-    const segs=withSightTerrain([],terrain,[]);
+    const segs=withSightTerrain([],terrain,[],true);
     for (let x=10;x<=60;x+=5) {
       const pos={x,y:0}, eye=groundAtTerrain(terrain,pos)+5;
       const view=visibilityPolygon(pos,220,segs,64,eye);
@@ -207,9 +207,43 @@ describe('shadows at creature eye height', () => {
     const start={x:40,y:0};
     const memory=routeReveal([start],220,segs,5,groundAtTerrain(terrain,start)+5);
     expect(memory.every(s=>s.t==='poly' && !inPoly({x:190,y:0},s.pts))).toBe(true);
-    const barrier=withSightTerrain([wall(65,-60,65,60)],terrain,[]);
+    const barrier=withSightTerrain([wall(65,-60,65,60)],terrain,[],true);
     const view=visibilityPolygon(start,220,barrier,64,groundAtTerrain(terrain,start)+5);
     expect([view.poly,...view.faces].some(p=>inPoly({x:100,y:0},p))).toBe(false);
+  });
+
+  it('looks down an uninterrupted slope with gradients off, even with a separate wall nearby',()=>{
+    const controls=[[0,0],[100,500],[200,0]].map(([x,height])=>({
+      id:String(x),height,path:[{x,y:-80},{x,y:80}]
+    }));
+    const terrain=terrainOf([normalizeDrawing('ridge',{k:'rect',hz:0,p:'0,-80,200,80',gradient:controls,gradientFixed:true})!],
+      {...DEFAULT_GRID,cell:5,ft:5});
+    const barrier=wall(40,20,40,65);
+    for(const gradientVision of [false,true]){
+      const segs=withSightTerrain([barrier],terrain,[],gradientVision);
+      for(let j=0;j<=12;j++){
+        const o={x:10+j*.125,y:0};
+        const view=visibilityPolygon(o,230,segs,64,groundAtTerrain(terrain,o)+5);
+        const sees=(x:number,y:number)=>[view.poly,...view.faces].some(p=>inPoly({x,y},p));
+        expect(sees(190,0)).toBe(!gradientVision);
+        expect(sees(52,54)).toBe(false);
+      }
+    }
+  });
+
+  it('does not treat rounding between below-zero contours as a sea-level ridge',()=>{
+    const region=(lo:number,hi:number)=>{
+      const corners=[{x:lo,y:-50},{x:hi,y:-50},{x:hi,y:50},{x:lo,y:50}];
+      return {height:()=>-10,corners,rings:[[...corners,corners[0]]],bounds:{x:lo,y:-50,w:hi-lo,h:100}};
+    };
+    for(const seam of [1e-9,2]){
+      const segs=Object.assign([],{surface:{regions:[region(0,20),region(20+seam,180)],
+        scale:1,openings:[],gradientVision:true,terraced:false}});
+      for(let j=0;j<=12;j++){
+        const view=visibilityPolygon({x:10,y:j*.1},150,segs,64,-5);
+        expect([view.poly,...view.faces].some(p=>inPoly({x:100,y:0},p))).toBe(seam<1);
+      }
+    }
   });
 
   it('keeps a bridge passage local to its deck on a gradient map',()=>{
@@ -220,7 +254,7 @@ describe('shadows at creature eye height', () => {
     const terrain=terrainOf([ground,deck],grid);
     const entry=wall(50,-30,50,30),exit=wall(80,-30,80,30);
     const clear=(cuts:Seg[])=>{
-      const view=visibilityPolygon({x:10,y:0},200,withSightTerrain([],terrain,cuts),64,5);
+      const view=visibilityPolygon({x:10,y:0},200,withSightTerrain([],terrain,cuts,true),64,5);
       return [view.poly,...view.faces].some(p=>inPoly({x:140,y:0},p));
     };
     expect(clear([])).toBe(false);

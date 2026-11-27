@@ -40,6 +40,7 @@ export interface GridSettings {
 }
 
 export interface FogSettings {
+  gradientVision: boolean;
   enabled: boolean;
   /** state before any fog operations are applied */
   base: 'hidden' | 'clear';

@@ -44,6 +44,18 @@ describe('TableClient over the mock backend', () => {
     expect(dm.sceneIndex.map((s) => s.name)).toEqual(['Cave']);
   });
 
+  it('saves gradient vision only for the viewed scene',async()=>{
+    const {dm,pl,sid}=await setup();
+    await dm.updateScene({fog:{gradientVision:true}});
+    await waitFor(()=>pl.scene?.meta?.fog.gradientVision===true);
+    const other=await dm.createScene({name:'Snow'});
+    await waitFor(()=>dm.scene?.id===other && !!dm.scene.meta);
+    expect(dm.scene!.meta!.fog.gradientVision).toBe(false);
+    dm.openScene(sid);
+    await waitFor(()=>dm.scene?.id===sid && !!dm.scene.meta);
+    expect(dm.scene!.meta!.fog.gradientVision).toBe(true);
+  });
+
   it('keeps grid choices and delayed grid edits with their original scene',async()=>{
     const {dm,sid}=await setup();
     await dm.updateScene({grid:{shape:'flat',visible:true,snap:true}});
@@ -148,7 +160,7 @@ describe('TableClient over the mock backend', () => {
     await dm.addFogOp({ m: 'h', t: 'rect', p: '10,10,20,20' });
     await waitFor(() => pl.scene?.fogOps.size === 2, 'fog ops');
     expect(pl.fogOpsSorted().map(([, o]) => o.m)).toEqual(['r', 'h']);
-    expect(pl.scene!.meta!.fog).toEqual({ enabled: true, base: 'hidden', vision: true, explore: false, dim: true });
+    expect(pl.scene!.meta!.fog).toEqual({ enabled: true, base: 'hidden', vision: true, explore: false, dim: true, gradientVision: false });
     await dm.undoFog();
     await waitFor(() => pl.scene?.fogOps.size === 1, 'undo');
     await dm.resetFog('clear');

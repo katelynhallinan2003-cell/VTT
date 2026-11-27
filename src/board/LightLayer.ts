@@ -131,8 +131,33 @@ export class LightLayer {
     this.tintDim.upload();
   }
 
+  /** Antialias the union in map coordinates. One fill keeps adjoining faces seamless. */
+  paintBrightSeen(f: Frame, shapes: {x:number; y:number; r:number; poly:Vec[] | null}[], feather:number) {
+    this.seenKey = '';
+    this.seenPaper.fit(f.w,f.h,f.origin,f.scale);
+    const ctx=this.seenPaper.ctx;
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,f.w,f.h);
+    ctx.setTransform(f.scale,0,0,f.scale,-f.origin.x*f.scale,-f.origin.y*f.scale);
+    ctx.beginPath();
+    for (const {poly,x,y,r} of shapes) {
+      if (!poly) { ctx.moveTo(x+r,y); ctx.arc(x,y,r,0,2*Math.PI); }
+      else if (poly.length>=3) {
+        ctx.moveTo(poly[0].x,poly[0].y);
+        for(let i=1;i<poly.length;i++) ctx.lineTo(poly[i].x,poly[i].y);
+      }
+      ctx.closePath();
+    }
+    ctx.filter=`blur(${feather}px)`;
+    ctx.fillStyle='#fff';
+    ctx.fill();
+    ctx.restore();
+    this.seenPaper.upload();
+  }
+
   /** Paint the shape of what the viewers can see in the dark, in the same frame as the fog's own canvas. */
-  paintSeen(f: Frame, lights: LightSrc[], viewers: Viewer[], segs: Seg[], painted: PaintedLight | null, key: string) {
+  paintSeen(f: Frame, lights: LightSrc[], viewers: Viewer[], segs: Seg[], painted: PaintedLight | null, key: string, feather:number) {
     const k = `${key}|${f.w}x${f.h}|${f.origin.x},${f.origin.y},${f.scale}`;
     const remade = this.seenPaper.fit(f.w, f.h, f.origin, f.scale);
     this.litPaper.fit(f.w, f.h, f.origin, f.scale);
@@ -142,6 +167,17 @@ export class LightLayer {
     const on = hasPaintedLight(painted) ? painted : null;
     if (on) { this.liftSeen.size(f.w, f.h); paintLift(this.liftSeen.ctx, f, on, 'dark', false, segs, { a: this.workA, c: this.workC }); }
     paintSeen(this.seenPaper.ctx, this.litPaper.ctx, f, lights, viewers, segs, on ? this.liftSeen.canvas : null);
+    // The lit scratch image is no longer needed once darkness and sight agree.
+    const raw=this.litPaper.ctx, seen=this.seenPaper.ctx;
+    raw.setTransform(1,0,0,1,0,0);
+    raw.globalCompositeOperation='copy';
+    raw.drawImage(seen.canvas,0,0);
+    raw.globalCompositeOperation='source-over';
+    seen.save();
+    seen.globalCompositeOperation='copy';
+    seen.filter=`blur(${feather}px)`;
+    seen.drawImage(raw.canvas,0,0);
+    seen.restore();
     this.seenPaper.upload();
   }
 

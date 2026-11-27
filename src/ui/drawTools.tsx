@@ -83,7 +83,7 @@ function FontSelect(props: { value: string; onChange: (k: string) => void }) {
 }
 
 /** A number box that applies when you press Enter or click away. Out-of-range numbers are ignored. */
-function NumField(props: { label: string; value: number; min?: number; max?: number; step?: number; unit?: string; title?: string; onCommit: (n: number) => void }) {
+function NumField(props: { label: string; value: number; min?: number; max?: number; step?: number|'any'; unit?: string; title?: string; onCommit: (n: number) => void }) {
   return (
     <label class="numf" title={props.title}>
       <span>{props.label}</span>
@@ -447,6 +447,17 @@ function SpellAdvanced({settings,kind,placed=false,onChange}:{settings:SpellSett
   </details>;
 }
 
+const lineWidths=[5,10,15,20,30];
+function LineWidth({value,onChange}:{value:number;onChange:(feet:number)=>void}) {
+  return <div class="row wrap">
+    <NumField label="Line width" unit="ft" value={value} min={Number.MIN_VALUE} step="any" onCommit={onChange}/>
+    <select aria-label="Line width presets" value={lineWidths.includes(value) ? value : ''} onChange={e=>onChange(Number(e.currentTarget.value))}>
+      <option value="" disabled>Presets</option>
+      {lineWidths.map(w=><option key={w} value={w}>{w} ft</option>)}
+    </select>
+  </div>;
+}
+
 export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
   const { ui, client } = props;
   const d = useUi(ui);
@@ -466,13 +477,7 @@ export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
         {TEMPLATES.map((x) => <button key={x.id} class={d.tplKind === x.id ? 'on' : ''} onClick={() => ui.set({ tplKind: x.id })}>{x.label}</button>)}
       </div>
       <Colors value={d.drawColor} onPick={(c) => { ui.set({ drawColor: c }); liveEdit(ui, client).apply((x) => isTemplate(x.k), { color: c }); }} />
-      {d.tplKind === 'beam' && (
-        <label class="field"><span class="field-label">Line width</span>
-          <select value={d.tplWidth} onChange={(e) => ui.set({ tplWidth: Number((e.target as HTMLSelectElement).value) })}>
-            {[5, 10, 15, 20, 30].map((w) => <option value={w}>{w} ft</option>)}
-          </select>
-        </label>
-      )}
+      {d.tplKind === 'beam' && <LineWidth value={d.tplWidth} onChange={tplWidth=>ui.set({tplWidth})}/>}
       {d.tplKind === 'sphere' && (
         <>
           <span class="field-label">Snap the centre to</span>
@@ -485,13 +490,13 @@ export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
       )}
       <Toggle checked={d.tplRough} onChange={v=>ui.set({tplRough:v})} label="Counts as difficult terrain" hint="Only affects new templates." />
       <Toggle checked={d.tplShare} onChange={v=>ui.set({tplShare:v})} label="Show others my templates" />
-      <SpellAdvanced settings={d.tplSettings} kind={d.tplKind} onChange={tplSettings=>ui.set({tplSettings})} />
       </>}
-      <div class="row wrap">
-        <button class="btn small" onClick={async () => { const n = await client.clearDrawings((x) => isTemplate(x.k), 'Clear templates'); ui.selectDrawings([]); toast(n ? `Cleared ${n} template${n > 1 ? 's' : ''}` : 'No templates to clear', 'info', 1800); }}>
+      {client.scene && [...client.scene.draws.values()].some(x=>isTemplate(x.k) && client.canEditDrawing(x)) && <div class="row wrap">
+        <button class="btn small danger" onClick={async () => { const n = await client.clearDrawings((x) => isTemplate(x.k), 'Clear templates'); ui.selectDrawings([]); if(n) toast(`Cleared ${n} template${n > 1 ? 's' : ''}`, 'info', 1800); }}>
           {client.isDM ? 'Clear all templates' : 'Clear my templates'}
         </button>
-      </div>
+      </div>}
+      {d.tplMode === 'place' && <SpellAdvanced settings={d.tplSettings} kind={d.tplKind} onChange={tplSettings=>ui.set({tplSettings})} />}
     </div>
   );
 }
@@ -666,7 +671,8 @@ export function DrawInspector(props: { ui: UiState; client: TableClient; board: 
             for(let i=0;i<32;i++) { const mid=(lo+hi)/2; if(measure(at(mid))<=n) lo=mid; else hi=mid; }
             upd({p:joinPts([a,at(lo)])}); }} />
         )}
-            {one && allTemplates && <SpellAdvanced key={one.id} placed settings={one.spell ?? {}} kind={one.k} onChange={spell=>upd({spell})}/>}
+        {one?.k==='beam' && <LineWidth value={one.bw} onChange={bw=>upd({bw})}/>}
+        {one && allTemplates && <SpellAdvanced key={one.id} placed settings={one.spell ?? {}} kind={one.k} onChange={spell=>upd({spell})}/>}
         {allText && (
           <div class="row wrap">
             <FontSelect value={first.font} onChange={(k) => upd({ font: k })} />

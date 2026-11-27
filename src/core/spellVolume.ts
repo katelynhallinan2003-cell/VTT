@@ -107,6 +107,37 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
     }
   };
   const clear=(a:Vec,z0:number,b:Vec,z1:number)=>!blocker(a,z0,b,z1);
+  // A line emits parallel rays from its entire near face. Trace backwards in
+  // the cast direction. At each crossing, remove only the vertical interval
+  // whose rays start upstream of the wall and pass below its top.
+  function beamReaches(p:Vec,lo:number,hi:number) {
+    if(!walls.length || cos<1e-10) return true;
+    const x=(p.x-a.x)*ux+(p.y-a.y)*uy;
+    let visible:[number,number][]=[[lo,hi]];
+    for(const wall of walls) {
+      if(wall.one && sideOf(wall,p)===wall.one) continue;
+      const back=rayHit(p,-ux,-uy,wall);
+      if(!Number.isFinite(back)) continue;
+      // The ray starts on the near face when its axial coordinate is zero.
+      // At the wall its axial coordinate is x*cos + z*sin - back/cos.
+      const threshold=back/cos-x*cos;
+      let lower=-Infinity,upper=Infinity;
+      if(Math.abs(sin)<1e-10) { if(threshold>eps) continue; }
+      else if(sin>0) lower=(threshold-eps)/sin;
+      else upper=(threshold-eps)/sin;
+      if(elevated && wall.top!==undefined) upper=Math.min(upper,(wall.top-start)*px+back*sin/cos-eps);
+      if(lower>upper) continue;
+      const next:[number,number][]=[];
+      for(const [bottom,top] of visible) {
+        if(upper<bottom || lower>top) { next.push([bottom,top]); continue; }
+        if(bottom<lower) next.push([bottom,lower]);
+        if(top>upper) next.push([upper,top]);
+      }
+      if(!next.length) return false;
+      visible=next;
+    }
+    return true;
+  }
   const axisZ=(p:Vec)=>run ? rise*clamp(((p.x-a.x)*ux+(p.y-a.y)*uy)/run,0,1) : 0;
   // Only build routes if a straight ray actually hits a wall. Neighbor links
   // cross the same finite walls as direct rays and consume actual travel distance.
@@ -168,11 +199,12 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
       lo=Math.max(lo,(lowFt-start)*px);hi=Math.min(hi,(highFt!-start)*px);
       if(lo>hi+eps) return false;
     }
+    if(d.k==='beam') return beamReaches(p,lo,hi);
     // A higher point in this same interval clears every wall a lower ray clears.
     const z=lowFt===undefined ? clamp(axisZ(p),lo,hi) : hi;
     const first=blocker(a,0,p,z);
     if(!first) return true;
-    if(settings.wrap===false || d.k==='beam') return false;
+    if(settings.wrap===false) return false;
     const nearest=clamp(axisZ(p),lo,hi);
     return around(p,nearest,first) || (z!==nearest && around(p,z,first));
   }

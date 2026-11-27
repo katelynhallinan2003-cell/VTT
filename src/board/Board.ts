@@ -2391,7 +2391,9 @@ export class Board {
       }
       return;
     }
-    if (tool === 'select' || (tool === 'draw' && this.ui.data.drawTool !== 'erase') || (tool === 'template' && this.ui.data.tplMode === 'select')) {
+    const pickingTemplate=tool==='template' && this.ui.data.tplMode==='select';
+    const hit=tool==='select' || pickingTemplate ? this.hitToken(w) : null;
+    if (!hit && (tool === 'select' || (tool === 'draw' && this.ui.data.drawTool !== 'erase') || pickingTemplate)) {
       const hh = this.handleAt(w);
       if (hh) { this.drag = { kind: 'drawresize', id: hh.d.id, handle: hh.h.id, orig: hh.d, patch: null }; return; }
     }
@@ -2401,11 +2403,10 @@ export class Board {
     if (tool === 'height' && this.client.isDM) { this.startHeight(w, e); return; }
     if (tool === 'light' && this.client.isDM) { this.startLightPaint(w); return; }
     if (tool === 'wall' && this.client.isDM) { this.startWall(w, e); return; }
-    if (tool === 'template') { if (this.ui.data.tplMode === 'select') this.startTemplateSelect(w, e); else this.startTemplate(w, e); return; }
+    if (tool === 'template' && !hit) { if (pickingTemplate) this.startTemplateSelect(w, e); else this.startTemplate(w, e); return; }
     if (tool === 'ruler') { this.startRuler(w, e); return; }
 
     // ---- select tool
-    const hit = this.hitToken(w);
     if (hit) {
       let sel = new Set(this.ui.data.selection);
       if (e.shiftKey) {
@@ -2966,18 +2967,25 @@ export class Board {
    * The Spell templates tool in Select mode: a click picks the template under the pointer (Shift adds more), a drag moves it a whole square at a time
    * (Alt: freely), its handles resize it, Delete takes it away. Tokens and the map are left alone here, and so are other drawings.
    */
-  private startTemplateSelect(w: Vec, e: PointerEvent) {
-    const list = this.client.drawingsSorted().filter((d) => isTemplate(d.k));
+  private templateAt(w:Vec): Drawing|null {
+    if(!onMap(w,this.terrainMaps)) return null;
+    const list = this.drawingsShown();
     const tol = 6 / this.cam.zoom;
-    let hit: Drawing | null = null;
-    for (let i = list.length - 1; i >= 0 && !hit; i--) {
-      const item=list[i], [a,b]=parsePts(item.p);
-      if (!this.client.canEditDrawing(item) || !b) continue;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const item=list[i];
+      if (!isTemplate(item.k) || !this.client.canEditDrawing(item)) continue;
+      const [a,b]=parsePts(item.p);
+      if (!b) continue;
       const volume=spellVolume(item,a,b,this.client.grid,{segs:[],ground:p=>this.groundAtPoint(p),maps:this.terrainMaps});
-      if (volume.hits(w) || Math.hypot(w.x-a.x,w.y-a.y)<=tol) hit=item;
+      if (volume.hits(w) || Math.hypot(w.x-a.x,w.y-a.y)<=tol) return item;
     }
+    return null;
+  }
+
+  private startTemplateSelect(w: Vec, e: PointerEvent) {
+    const hit=this.templateAt(w);
     const only = (ids: Iterable<string>) => new Set([...ids].filter((id) => { const d = this.client.scene?.draws.get(id); return !!d && isTemplate(d.k); }));
-    if (!hit || !onMap(w,this.terrainMaps)) { this.ui.selectDrawings([]); return; }
+    if (!hit) { this.ui.selectDrawings([]); return; }
     let sel = only(this.ui.data.drawSel);
     if (!sel.has(hit.id)) sel = new Set([hit.id]);
     this.ui.selectDrawings(sel);
@@ -3184,8 +3192,19 @@ export class Board {
   }
 
   private onDoubleClick(e: MouseEvent) {
-    if (this.ui.data.tool === 'select') {
-      const hit = this.hitDrawingAt(this.screenToWorld(e.clientX, e.clientY), false);
+    const tool=this.ui.data.tool;
+    if (tool === 'select' || tool === 'template') {
+      const w=this.screenToWorld(e.clientX,e.clientY);
+      const token=this.hitToken(w);
+      if(token) { this.ui.select([token.id]); return; }
+      const spell=this.templateAt(w);
+      if(spell) {
+        this.ui.set({tool:'template',tplMode:'select'});
+        this.ui.selectDrawings([spell.id]);
+        return;
+      }
+      if(tool==='template') return;
+      const hit = this.hitDrawingAt(w, false);
       if (hit?.k === 'text') { this.drag = null; this.startTextEdit(hit); return; }
     }
     if (this.ui.data.tool === 'wall' && this.client.isDM) {

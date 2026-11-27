@@ -269,3 +269,7 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
 - [x] **#159 Measure spell volumes and wall crossings at elevation** (added 2026-11-27, completed 2026-11-27).
 - [x] **#160 Show overlapping spell effects on creatures** (added 2026-11-27, completed 2026-11-27).
 - [x] **#161 Keep spell footprints on maps and omit exterior terrain walls** (added 2026-11-27, completed 2026-11-27).
+- [x] **#162 Double-click spell selection and token priority** (added 2026-11-27, completed 2026-11-27). A double-click picks a spell and opens its controls. A token under the pointer wins over the spell and its handles.
+- [x] **#163 Conditional clear templates button** (added 2026-11-27, completed 2026-11-27). The red button appears above Advanced when there are templates the viewer can clear.
+- [x] **#164 Wall blocking across wide spell lines** (added 2026-11-27, completed 2026-11-27). Parallel paths from the near face cast wall shadows across the beam. Checked partial walls, doorways, angled casts and elevated targets.
+- [x] **#165 Custom spell line widths** (added 2026-11-27, completed 2026-11-27). Enter a positive width in feet or choose a preset when placing or editing a line.

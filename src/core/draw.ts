@@ -215,7 +215,8 @@ export function templateGeom(kind: DrawKind, a: Vec, b: Vec, widthPx: number, he
   };
 }
 
-export const beamWidthPx = (grid: GridSettings, bwFt: number) => (Math.max(1, bwFt) / grid.ft) * grid.cell;
+export const beamWidthFt = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 5;
+export const beamWidthPx = (grid: GridSettings, bwFt: number) => (beamWidthFt(bwFt) / grid.ft) * grid.cell;
 
 /** Text such as "20 ft sphere" for a template while it is being placed. */
 export function templateLabel(kind: DrawKind, grid: GridSettings, a: Vec, b: Vec, bwFt: number, footprint = grid.cell, spatialFt?:number): string {

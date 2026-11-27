@@ -26,6 +26,28 @@ describe('spell volumes',()=>{
     expect(spell('beam',20,{},world).hits(point(15),0)).toBe(false);
     expect(spell('sphere',20,{}, {segs:[{a:point(10,-30),b:point(10,30)}]}).hits(point(15),0)).toBe(false);
   });
+  it('casts parallel lanes across the whole beam face through partial walls and doorways',()=>{
+    const beam={k:'beam' as const,bw:20};
+    const reaches=(segs:SpellWorld['segs'])=>spellVolume(beam,a,point(30),grid,{segs}).hits;
+    const partial=reaches([{a:point(10,3),b:point(10,6)}]);
+    expect(partial(point(28,5))).toBe(false);
+    expect(partial(point(28,9))).toBe(true);
+    expect(partial(point(8,5))).toBe(true);
+    const door=reaches([{a:point(10,-10),b:point(10,-2)},{a:point(10,2),b:point(10,10)}]);
+    expect(door(point(28,1))).toBe(true);
+    expect(door(point(28,3))).toBe(false);
+    const angled=spellVolume(beam,a,point(30,30),grid,{segs:[{a:point(10,14),b:point(10,16)}]});
+    expect(angled.hits(point(22,27))).toBe(false);
+    expect(angled.hits(point(22,30))).toBe(true);
+  });
+  it('clips the vertical thickness of a tilted line at the wall crossing',()=>{
+    const line=spellVolume({k:'beam',bw:12,spell:{start:0,end:20}},a,point(20),grid,{segs:[{...wall,top:12}]});
+    expect(line.hits(point(15),15,16)).toBe(false);
+    expect(line.hits(point(15),16,17)).toBe(true);
+    expect(line.hits(point(15))).toBe(true);
+    expect(normalizeDrawing('line',{k:'beam',p:'0,0,20,0',bw:0.5})?.bw).toBe(0.5);
+    expect(normalizeDrawing('line',{k:'beam',p:'0,0,20,0',bw:225.5})?.bw).toBe(225.5);
+  });
   it('intersects the full creature height with a sphere and respects map bounds',()=>{
     const burst=spell('sphere',20,{start:120},{segs:[],maps:[{x:-10,y:-10,w:20,h:20}]});
     expect(burst.hits(a,0,5)).toBe(false);

@@ -4,7 +4,7 @@ import type {
 } from '../types';
 import { cleanHp, emptyInit, orderOf } from './combat';
 import { imgbbDeleteUrl } from './imgbb';
-import { FONT_KEYS, isTemplate } from './draw';
+import { beamWidthFt, FONT_KEYS, isTemplate } from './draw';
 import { fxToWire, normalizeFx } from './effects';
 import { isLightMark } from './light';
 
@@ -258,7 +258,7 @@ export function normalizeDrawing(id: string, raw: any): Drawing | null {
     i: bool(raw.i, false),
     u: bool(raw.u, false),
     ho: bool(raw.ho, false),
-    bw: Math.min(200, Math.max(1, num(raw.bw, 5))),
+    bw: beamWidthFt(raw.bw),
     of: Math.min(400, Math.max(0, num(raw.of, 0))),
     hz: typeof raw.hz === 'number' && Number.isFinite(raw.hz) && (raw.k === 'rect' || raw.k === 'ellipse' || raw.k === 'terrain') ? Math.min(5000, Math.max(-1000, Math.round(raw.hz))) : null,
     ...(raw.pv === true ? { pv: true } : {}),

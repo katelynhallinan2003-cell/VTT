@@ -168,6 +168,23 @@ describe('shadows at creature eye height', () => {
     expect(memory.some(s => s.t === 'poly' && inPoly({x:230,y:0},s.pts))).toBe(true);
   });
 
+  it('hides the foot of a plateau until the sightline clears its rim', () => {
+    const rim: Seg = {...wall(20,-200,20,200), one:-1, low:0, top:30, terrainPxPerFt:1};
+    const shelf: Seg = {...rim,...wall(55,-200,55,200),one:1,top:28};
+    const sees = (x: number, eye: number, walls: Seg[], target: number) => {
+      const view = visibilityPolygon({x,y:0},240,walls,64,eye);
+      return [view.poly,...view.faces].some(poly => inPoly({x:target,y:0},poly));
+    };
+    expect(sees(0,35,[rim],12)).toBe(true);
+    expect(sees(0,35,[rim],32)).toBe(false);
+    expect(sees(0,35,[rim],85)).toBe(false);
+    expect(sees(0,35,[rim],165)).toBe(true);
+    expect(sees(18,35,[rim],85)).toBe(true);
+    expect(sees(0,45,[rim],85)).toBe(true);
+    expect(sees(0,35,[rim,shelf],68)).toBe(true);
+    expect(sees(0,35,[rim,wall(100,-200,100,200)],165)).toBe(false);
+  });
+
   it('sees across a level wall top at each creature size on a hill or in flight', () => {
     for (const size of [0.5,1,2,3,4]) for (const fly of [false,true]) {
       const altitude = sightHeight({size, fly, elev:30, shape:'circle', img:null, light:null}, 10);

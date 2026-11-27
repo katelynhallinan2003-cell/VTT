@@ -3,7 +3,7 @@
 import type { Vec } from '../types';
 import { closeNarrowShadows, distToSeg, rayHit, simplifyPoly, type Seg, type Visibility } from './walls';
 
-type Edge = {seg: Seg; inset: number};
+type Edge = {seg: Seg; inset: number; groundAfter?: number};
 type Band = [number, number];
 const TAU = 2*Math.PI;
 const wrap = (a: number) => a-TAU*Math.floor(a/TAU);
@@ -28,6 +28,28 @@ function intersect(a: Band[], b: Band[]): Band[] {
   return out;
 }
 
+// Follow the sightline tangent to each descending rim. A lower terrace comes
+// back into view where that line meets its surface, or where the ground rises.
+function downhillView(hits: (Edge & {d: number})[], eye: number, radius: number): Band[] | undefined {
+  let horizon = -Infinity, visibleFrom = 0;
+  const visible: Band[] = [];
+  const terrain = hits.filter(hit => hit.groundAfter !== undefined);
+  for (let i=0; i<terrain.length; i++) {
+    const {seg, groundAfter, d} = terrain[i];
+    const ground = groundAfter!, rim = seg.top!;
+    if (ground === seg.low && rim <= eye) horizon = Math.max(horizon,(rim-eye)/d);
+    if (horizon === -Infinity || ground >= eye) continue;
+    const recovery = horizon === 0 ? radius : (ground-eye)/horizon;
+    const until = Math.min(recovery,terrain[i+1]?.d ?? radius);
+    if (until <= d) continue;
+    if (visibleFrom < d) visible.push([visibleFrom,d]);
+    visibleFrom = until;
+  }
+  if (!visibleFrom) return;
+  if (visibleFrom < radius) visible.push([visibleFrom,radius]);
+  return visible;
+}
+
 function sampleSight(o: Vec, r: number, near: Edge[], eye: number, scale: number, n: number) {
   const angleStep = TAU/n;
   const buckets: Edge[][] = Array.from({length:n},() => []);
@@ -42,9 +64,13 @@ function sampleSight(o: Vec, r: number, near: Edge[], eye: number, scale: number
 
   const angles = buckets.map((_,i) => i*angleStep);
   const caps: number[] = [], reaches: number[] = [];
+  const downhill: (Band[] | undefined)[] = [];
   const bands = buckets.map((edges,i) => {
     const x = Math.cos(angles[i]), y = Math.sin(angles[i]);
-    const hits = edges.map(e => ({...e,d:rayHit(o,x,y,e.seg)})).filter(h => h.d<r).sort((a,b) => a.d-b.d);
+    const crossings = edges.map(e => ({...e,d:rayHit(o,x,y,e.seg)})).filter(h => h.d<r).sort((a,b) => a.d-b.d);
+    const hasLowTerrain = crossings.some(h => h.groundAfter !== undefined && h.seg.top! <= eye);
+    downhill.push(hasLowTerrain ? downhillView(crossings,eye,r) : undefined);
+    const hits = hasLowTerrain ? crossings.filter(h => h.groundAfter === undefined || h.seg.top! > eye) : crossings;
     let reach = r, cap = r;
     for (const {seg,inset,d} of hits) {
       reach = Math.min(reach,d+inset);
@@ -76,7 +102,9 @@ function sampleSight(o: Vec, r: number, near: Edge[], eye: number, scale: number
   const margin = scale;
   const radial = bands.map((row,i) => {
     row[0][1] = reaches[i];
-    return merge(row.map(([lo,hi]) => [lo-margin,hi+margin]));
+    const clear = downhill[i];
+    const visible = clear ? intersect(merge(row),clear) : row;
+    return merge(visible.map(([lo,hi]) => [lo-margin,hi+margin]));
   });
   const half = Math.max(1,Math.floor(n*5/360));
   const dilated = radial.map((_,i) => {

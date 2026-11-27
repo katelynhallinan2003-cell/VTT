@@ -220,19 +220,21 @@ export function closeNarrowShadows(angles: number[], reach: number[]): void {
 }
 
 function nearSightEdges(o: Vec, r: number, segs: Seg[], alt?: number) {
-  const near: { seg: Seg; inset: number }[] = [];
+  const near: { seg: Seg; inset: number; groundAfter?: number }[] = [];
   for (const seg of segs) {
     if (distToSeg(o, seg) >= r) continue;
     const side = seg.one ? sideOf(seg, o) : 0;
     const back = side !== 0 && side !== seg.one;
     let inset = 0;
+    let groundAfter: number | undefined;
     if (seg.terrainPxPerFt !== undefined && seg.top !== undefined) {
       const rise = seg.top - (alt ?? 0);
-      if (rise <= 0) continue;
+      if (seg.one && seg.low !== undefined && seg.low < seg.top) groundAfter = back ? seg.low : seg.top;
+      if (rise <= 0 && groundAfter === undefined) continue;
       // Show a strip of the near face. Its far edge, and any wall in front, still stop the ray.
-      if (!back) inset = seg.terrainPxPerFt * 10 / (1 + rise / 10);
+      if (!back && rise > 0) inset = seg.terrainPxPerFt * 10 / (1 + rise / 10);
     } else if (back || (alt !== undefined && seg.top !== undefined && alt >= seg.top)) continue;
-    near.push({seg, inset});
+    near.push({seg, inset, groundAfter});
   }
   return near;
 }

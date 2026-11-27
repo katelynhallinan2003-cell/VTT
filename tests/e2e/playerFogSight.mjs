@@ -155,6 +155,17 @@ check('a fully revealed map skips current sight and exploration', clear && (awai
 await dm.evaluate(() => window.__vtt.client.resetFog('hidden'));
 await player.waitForFunction(() => window.__vtt.board.fogSprite.visible);
 check('covering the map again restores player sight', (await samples())[1] < before[1]-15);
+const plateau = await dm.evaluate(async id => {
+  const {client} = window.__vtt, t = client.scene.tokens.get(id), c = client.grid.cell;
+  await client.updateScene({fog:{explore:false}});
+  await client.updateTokens([id],{sight:60});
+  return client.addDrawing({k:'rect',p:[t.x-3*c,t.y-3*c,t.x+c,t.y+3*c].join(','),hz:20,w:1,color:'#ffffff',fill:0});
+},tokenId);
+await player.waitForFunction(id => window.__vtt.client.scene.draws.has(id),plateau);
+await sleep(250);
+const downhill = await samples();
+check('a player on the plateau sees beyond the hidden base of its wall',
+  downhill[0] < bright[0]-15 && downhill[1] > before[1]-10, JSON.stringify(downhill));
 await browser.close();
 console.log(errors.length ? errors.join('\n') : 'no console problems');
 console.log(`${results.filter(Boolean).length}/${results.length} checks passed`);

@@ -717,7 +717,7 @@ textarea:not(.text-editor):focus { border-color: var(--accent); }
 .gradient-dot:active { cursor:grabbing; }
 .gradient-box { position:absolute; z-index:2; pointer-events:auto; transform:translate(-50%,calc(-100% - 18px)); border:1px solid var(--gradient-handle); border-radius:6px; padding:4px 20px 3px 5px; background:var(--panel); font-size:11px; }
 .gradient-box:focus-within,.gradient-box:hover { z-index:3; }
-.gradient-selected { --gradient-handle:#ff52ba; }
+.gradient-selected, .gradient-editor > div:hover { --gradient-handle:#ff52ba; }
 .gradient-selected .gradient-box { z-index:3; box-shadow:0 0 0 1px var(--gradient-handle); }
 .gradient-selected .gradient-dot::after { box-shadow:0 0 0 2px #382035; }
 .gradient-selected .gradient-line polyline:first-child { stroke-width:5; }

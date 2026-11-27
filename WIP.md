@@ -257,3 +257,6 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
 - [x] **#147 Difficult terrain wording** (added 2026-11-26, completed 2026-11-26). Use difficult terrain throughout the controls and movement readout.
 - [x] **#148 Stripe difficult terrain** (added 2026-11-26, completed 2026-11-26). Use black diagonal stripes with transparent gaps for difficult terrain.
 - [x] **#149 Keep terrain clear buttons under Advanced** (added 2026-11-26, completed 2026-11-26). Protect both map-wide clear actions from accidental clicks. Verified both tabs in the browser.
+- [x] **#150 Exact elevation in Set Height** (added 2026-11-26, completed 2026-11-26). Set selected terrain to an absolute elevation and hide the painting-mode selector.
+- [x] **#151 Highlight gradient controls on hover** (added 2026-11-26, completed 2026-11-26). Hovering over a gradient height box highlights its control in pink.
+- [x] **#152 Keep the active terrain mode highlighted** (added 2026-11-26, completed 2026-11-26). Show Select as active while editing a gradient.

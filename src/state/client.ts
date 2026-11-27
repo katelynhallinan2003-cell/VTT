@@ -1178,7 +1178,7 @@ export class TableClient {
     if (patches.every(p => p.whole)) {
       if (edit === 'delete') { await this.removeDrawings(ids,'Delete ground'); return []; }
       if ('delta' in edit) await this.moveDrawings(ids,edit.delta.x,edit.delta.y);
-      else await this.updateDrawings(ids.filter(id => !this.scene?.draws.get(id)?.he),{hz:edit.height},'Change ground');
+      else await this.updateDrawings(ids.filter(id => !this.scene?.draws.get(id)?.he),{hz:edit.height,ha:false},'Change ground');
       return ids;
     }
     const strokes = patches.flatMap(p => p.cuts.flatMap(cut => cut.shape.map(poly => patchStroke(poly,cut.group,null))));

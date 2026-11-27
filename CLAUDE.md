@@ -59,7 +59,7 @@ Read `CLAUDE.md` (this file) and `WIP.md` before doing anything else in a sessio
 
 - **Gradient editing.** Connect neighboring automatic boundary runs at the same height along the ring, preserving individual edits. Fill unpainted holes respects painted islands, including 0 ft terrain. Fill all holes can absorb enclosed islands into a gradient. An opening connected to the exterior stays open.
 
-- **Terrain brushes.** In Paint, choosing Added on top starts a fresh stroke above existing ground. Each gesture adds its height once where it passes. Gridless scenes use round brushes sized in calibrated feet for height, difficult ground and erasing.
+- **Terrain brushes.** In Paint, choosing Added on top starts a fresh stroke above existing ground. Each gesture adds its height once where it passes. In Select, Set Height assigns an absolute elevation to the selected ground. Gridless scenes use round brushes sized in calibrated feet for height, difficult ground and erasing.
 
 - **Printed square grids.** Learn the ink's RGB shift from repeated strokes and nearby terrain. On dotted JPEGs, account for the recurring light and dark fringes around the dots. Check the rendered result at native-pixel zoom on both smooth ground and painted edges.
 

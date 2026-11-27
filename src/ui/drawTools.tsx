@@ -5,7 +5,7 @@ import type { TableClient } from '../state/client';
 import { terrainBrushMode, type DrawTool, type StrokeSize, type TemplateKind, type UiState } from '../state/ui';
 import { ZONE_PRESETS, roughOf, zoneColor, zonesOf } from '../core/height';
 import { terrainHoleOptions } from '../core/terrainEdges';
-import { areasSelected } from '../core/terrain';
+import { areasSelected, groundAtTerrain } from '../core/terrain';
 import { isHex } from '../core/hex';
 import { currentOverlay } from '../core/gridOverlay';
 import { WALL_KINDS, WALL_NAME, wallVisDefault, type WallKind } from '../core/walls';
@@ -175,13 +175,15 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
   // the number box shows the selected area (and edits it), or else what the next area will be
   const picks = d.heightPatches;
   const selectionCount = picks?.length ?? mine.length;
-  const shownH = picks?.[0].height ?? (editing ? mine[0].h : d.heightFt);
-  const shownAdd = picks ? false : editing ? paintable.length > 0 && paintable[0].add : d.heightAdds;
+  const selecting = mode === 'move';
+  const brushPoint = selecting && mine[0]?.add ? mine[0].paint.at(-1)?.pts.at(-1) : undefined;
+  const shownH = picks?.[0].height ?? (brushPoint ? groundAtTerrain(terrain,brushPoint) : mine[0]?.h ?? d.heightFt);
+  const shownAdd = !selecting && !picks && (editing ? paintable.length > 0 && paintable[0].add : d.heightAdds);
   const setH = (h: number) => {
     const n = Math.max(-1000, Math.min(5000, Math.round(h)));
     ui.set({ heightFt: n });
     if (picks) void client.editHeightPatches(picks,{height:n}).then(ids => { if (ui.data.heightPatches === picks) ui.selectDrawings(ids); });
-    else for (const a of mine) void client.setArea(a, { hz: n });
+    else for (const a of mine) void client.setArea(a, selecting ? { hz:n, ha:false } : { hz:n });
   };
   const setAdds = (v: boolean) => {
     ui.set({ heightAdds: v });
@@ -229,7 +231,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
           <button key={k} class={d.groundKind===k ? 'on' : ''} onClick={()=>ui.set({groundKind:k})}>{label}</button>)}
       </div>
       <div class="seg">
-        {modes.map(([k,label]) => <button key={k} class={!gradient && mode===k ? 'on' : ''} onClick={()=>{if(k==='paint' && one?.gradientEnabled) ui.selectDrawings([]); ui.set({heightMode:k});}}>{label}</button>)}
+        {modes.map(([k,label]) => <button key={k} class={mode===k ? 'on' : ''} aria-pressed={mode===k} onClick={()=>{if(k==='paint' && one?.gradientEnabled) ui.selectDrawings([]); ui.set({heightMode:k});}}>{label}</button>)}
       </div>
       {mode !== 'move' && !gradient && <>
         {!gridless && <Toggle checked={d.heightSnap} onChange={v=>ui.set({heightSnap:v})} label={`Fill whole ${cellWord}s`} hint="Hold Alt to flip this for one stroke." />}
@@ -249,10 +251,10 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
             <button key={h} class={`chip ${shownH === h ? 'on' : ''}`} style={{ borderColor: zoneColor(h) }} onClick={() => setH(h)}>{h}</button>
           ))}
         </div>
-        <div class="seg">
+        {!selecting && <div class="seg">
           <button class={!shownAdd ? 'on' : ''} disabled={editing && !paintable.length} title="This ground is exactly this high above the map base, whatever is under it" onClick={() => setAdds(false)}>Exact height</button>
-          <button class={shownAdd ? 'on' : ''} disabled={mode !== 'paint' && editing && !paintable.length} title="Each new stroke adds its height to the ground beneath it" onClick={() => setAdds(true)}>Added on top</button>
-        </div>
+          <button class={shownAdd ? 'on' : ''} title="Each new stroke adds its height to the ground beneath it" onClick={() => setAdds(true)}>Added on top</button>
+        </div>}
         </>}
         {editing ? (
           <div class="row wrap">

@@ -1,3 +1,5 @@
+import {brushWall,resolveWalls} from '../src/core/wallBrush';
+import {type Wall,normalizeWall,wallToWire} from '../src/core/walls';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_GRID, normalizeDrawing, normalizeLive, viaToWire, MAX_ROUTE_CORNERS } from '../src/core/model';
 import { terrainOf, groundAtTerrain } from '../src/core/terrain';
@@ -49,5 +51,52 @@ describe('movement over terrain', () => {
     const ghost = { x:61,y:2,w:viaToWire(via,MAX_ROUTE_CORNERS),s:'4,39' };
     expect(normalizeLive('p',{ghosts:{t:ghost}})?.ghosts.t).toEqual({x:61,y:2,via,stops:[4,39]});
     expect(normalizeLive('p',{ghosts:{t:{x:2,y:2,w:'1,1'}}})?.ghosts.t).toEqual({x:2,y:2,via:[point(1)]});
+  });
+});
+
+
+describe('erased bridge sides',()=>{
+  const deck=terrainOf([rect('deck',10,20,10)],grid), edges=terrainEdges(deck);
+  const ctx={ground:(p:Vec)=>groundAtTerrain(deck,p),rough:()=>false};
+  const full=resolveWalls(edges,[]);
+  const stroke=[point(5,0),point(25,0)];
+  const gaps:Wall[]=[];
+  for (const wall of full.walls.values()) for (const piece of brushWall(wall,stroke,2).cut) {
+    const cut=normalizeWall('gap'+gaps.length,wallToWire({...wall,...piece,gap:true,face:undefined}));
+    if (cut) gaps.push(cut);
+  }
+  const measure=(route:Vec[],stops:number[]=[],saved=gaps)=>{
+    const resolved=resolveWalls(edges,saved);
+    return movementCost(grid,route,null,ctx,[...resolved.terrain,...resolved.openings],[],stops);
+  };
+  it('passes underneath via two openings, in either direction, including a turn under the deck',()=>{
+    expect(gaps).toHaveLength(2);
+    expect(measure([point(0),point(15),point(30)]).ft).toBe(30);
+    expect(measure([point(30),point(0)]).ft).toBe(30);
+    expect(measure([point(0),point(15,0),point(30)]).note).toBe('');
+  });
+  it('retains the climb for a stop on the deck, an intact edge or an intentional waypoint',()=>{
+    expect(measure([point(0),point(15)]).ft).toBe(25);
+    expect(measure([point(15),point(0)]).ft).toBe(25);
+    expect(measure([point(0),point(15),point(30)],[1]).ft).toBe(50);
+    expect(measure([point(0,4),point(30,4)]).ft).toBe(50);
+    expect(measure([point(0),point(30)],[],gaps.slice(0,1)).ft).toBe(50);
+  });
+  it('passes beneath a sloping deck while retaining the slope for a landing on it',()=>{
+    const resolved=resolveWalls(edges,gaps), faces=[...resolved.terrain,...resolved.openings];
+    const top=(p:Vec)=>10+(p.x-10)*0.5;
+    const slopeCtx={rough:()=>false,ground:(p:Vec)=>p.x>=10 && p.x<=20 ? top(p) : 0,
+      slope:(p:Vec)=>p.x>=10 && p.x<=20 ? top : undefined};
+    expect(movementCost(grid,[point(0),point(30)],null,slopeCtx,faces,[])).toEqual({ft:30,note:''});
+    expect(movementCost(grid,[point(0),point(15)],null,slopeCtx,faces,[]).ft).toBeGreaterThan(25);
+  });
+  it('preserves solid walls beside the opening and clips an overlapping brush sweep just once',()=>{
+    const resolved=resolveWalls(edges,gaps);
+    expect(resolved.terrain.filter(s=>s.a.x===s.b.x && Math.min(s.a.y,s.b.y)<1 && Math.max(s.a.y,s.b.y)>1)).toHaveLength(0);
+    expect(resolved.terrain.filter(s=>s.a.x===s.b.x && Math.min(s.a.y,s.b.y)<4 && Math.max(s.a.y,s.b.y)>4)).toHaveLength(2);
+    const wall={a:point(0,0),b:point(30,0)};
+    const cut=brushWall(wall,[point(10,0),point(15,0),point(12,0)],2);
+    expect(cut.cut).toEqual([{a:point(8,0),b:point(17,0)}]);
+    expect(cut.kept).toHaveLength(2);
   });
 });

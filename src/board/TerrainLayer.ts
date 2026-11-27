@@ -1,39 +1,8 @@
 import { Container, Sprite, Text, type Texture } from 'pixi.js';
-import { cellPoly } from '../core/cells';
-import { areaLabelAt, surfaceHeight, heightColor, type Terrain } from '../core/terrain';
-import { terrainLabelBoxes } from '../core/terrainLabels';
-import { groundAt } from '../core/height';
+import { areaLabelAt, heightColor, type Terrain } from '../core/terrain';
+import { paintTerrain, type TerrainRaster } from './terrainRaster';
 import type { Rect } from '../types';
 import { canvasTexture } from './textures';
-
-const MAX_SIDE = 2048;
-const SELECT_RGB: [number, number, number] = [0x4d, 0xa3, 0xff];
-
-/** Blur a field with a box of radius `r` (edges repeat), twice, which is close enough to a Gaussian for shading. */
-function blur(src: Float32Array, W: number, H: number, r: number): Float32Array {
-  if (r < 1) return src;
-  const tmp = new Float32Array(src.length);
-  const out = new Float32Array(src.length);
-  const run = (from: Float32Array, to: Float32Array, len: number, lines: number, stride: number, step: number) => {
-    const n = 2 * r + 1;
-    for (let l = 0; l < lines; l++) {
-      const base = l * stride;
-      let sum = 0;
-      for (let k = -r; k <= r; k++) sum += from[base + Math.max(0, Math.min(len - 1, k)) * step];
-      for (let i = 0; i < len; i++) {
-        to[base + i * step] = sum / n;
-        sum += from[base + Math.min(len - 1, i + r + 1) * step] - from[base + Math.max(0, i - r) * step];
-      }
-    }
-  };
-  let a = src, b = tmp;
-  for (let pass = 0; pass < 2; pass++) {
-    run(a, b, W, H, W, 1);
-    run(b, out, H, W, 1, W);
-    a = out; b = tmp;
-  }
-  return out;
-}
 
 /**
  * Paints all the high and low ground as one soft picture: a light tint by height (ground that adds to ground shows its total), a shadow
@@ -45,7 +14,12 @@ export class TerrainLayer {
   private sprite: Sprite | null = null;
   private tex: Texture | null = null;
   private canvas: HTMLCanvasElement | null = null;
-  private mask: HTMLCanvasElement | null = null;
+  private worker:Worker|null=null;
+  private local=false;
+  private running=false;
+  private version=0;
+  private latest:{terrain:Terrain;selected:Set<string>;version:number}|null=null;
+  constructor(private invalidate:()=>void) {}
   private labels = new Map<number, Text>();
   private labelBoxes: (Rect & { elevation: number })[] = [];
   private zoom = 1;
@@ -61,155 +35,51 @@ export class TerrainLayer {
     if (!show && !warm) return;
     const key = `${t.sig}#${[...selected].sort().join(',')}`;
     if (key === this.key) return;
+    if (!t.areas.length) { this.reset(); this.key=key; return; }
     this.key = key;
-    this.build(t, selected);
+    this.latest={terrain:t,selected,version:++this.version};
+    if (!this.running) this.renderLatest();
   }
 
-  private build(t: Terrain, selected: Set<string>) {
-    const areas = t.areas;
-    if (!areas.length) { this.levels = []; this.clear(); return; }
-    const grid = t.grid;
-    const union = areas.reduce((u, a) => ({ x0: Math.min(u.x0, a.b.x), y0: Math.min(u.y0, a.b.y), x1: Math.max(u.x1, a.b.x + a.b.w), y1: Math.max(u.y1, a.b.y + a.b.h) }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
-    // room around the edge for the shadows that fall outside the high ground
-    const pad = Math.max(6, grid.cell * 0.7);
-    const bx = union.x0 - pad, by = union.y0 - pad;
-    const bw = Math.max(2, union.x1 - union.x0 + pad * 2), bh = Math.max(2, union.y1 - union.y0 + pad * 2);
-    const s = Math.min(2, MAX_SIDE / Math.max(bw, bh));
-    const W = Math.max(2, Math.ceil(bw * s)), H = Math.max(2, Math.ceil(bh * s));
+  private renderLatest() {
+    const job=this.latest;
+    if (!job) return;
+    if (!this.local && typeof Worker!=='undefined' && typeof OffscreenCanvas!=='undefined') {
+      try {
+        this.worker ??= new Worker(new URL('./terrainRaster.worker.ts',import.meta.url),{type:'module'});
+        this.running=true;
+        this.worker.onmessage=(e:MessageEvent<TerrainRaster>)=>{
+          this.running=false;
+          if (job.version===this.version) { this.latest=null; this.present(e.data); }
+          else this.renderLatest();
+        };
+        this.worker.onerror=(e)=>{
+          e.preventDefault();
+          this.worker?.terminate(); this.worker=null; this.running=false; this.local=true;
+          this.renderLatest();
+        };
+        this.worker.postMessage({terrain:{...job.terrain,sig:''},selected:job.selected});
+        return;
+      } catch { this.worker?.terminate(); this.worker=null; this.running=false; this.local=true; }
+    }
+    const raster=paintTerrain(job.terrain,job.selected,(w,h)=>{
+      const mask=document.createElement('canvas');
+      mask.width=w; mask.height=h;
+      return mask.getContext('2d',{willReadFrequently:true})!;
+    });
+    this.latest=null;
+    this.present(raster);
+  }
 
+  private present({out,boxes,levels,bx,by,s}:TerrainRaster) {
+    const W=out.width, H=out.height;
+    this.levels=levels;
     if (!this.canvas || this.canvas.width !== W || this.canvas.height !== H) {
       this.canvas = document.createElement('canvas');
       this.canvas.width = W; this.canvas.height = H;
-      this.mask = document.createElement('canvas');
-      this.mask.width = W; this.mask.height = H;
       this.tex?.destroy(true);
       this.tex = canvasTexture(this.canvas);
       if (!this.sprite) { this.sprite = new Sprite(this.tex); this.container.addChildAt(this.sprite, 0); } else this.sprite.texture = this.tex;
-    }
-    const mctx = this.mask!.getContext('2d', { willReadFrequently: true })!;
-    const N = W * H;
-    const hgt = new Float32Array(N);
-    const cov = new Uint8Array(N);
-    const sel = new Uint8Array(N);
-
-    const smooth = new Uint8Array(N);
-    for (const a of areas) {
-      mctx.setTransform(1, 0, 0, 1, 0, 0);
-      mctx.clearRect(0, 0, W, H);
-      mctx.setTransform(s, 0, 0, s, -bx * s, -by * s);
-      mctx.fillStyle = mctx.strokeStyle = '#fff';
-      for (const st of a.strokes) {
-        mctx.globalCompositeOperation = st.erase ? 'destination-out' : 'source-over';
-        if (st.kind === 'polygon') {
-          mctx.beginPath();
-          for (const ring of st.rings!) {
-            mctx.moveTo(ring[0].x, ring[0].y);
-            for (const p of ring.slice(1)) mctx.lineTo(p.x,p.y);
-            mctx.closePath();
-          }
-          mctx.fill('evenodd');
-        } else if (st.kind === 'rect') mctx.fillRect(st.b.x, st.b.y, st.b.w, st.b.h);
-        else if (st.kind === 'ellipse') { mctx.beginPath(); mctx.ellipse(st.b.x + st.b.w / 2, st.b.y + st.b.h / 2, Math.max(0.5, st.b.w / 2), Math.max(0.5, st.b.h / 2), 0, 0, Math.PI * 2); mctx.fill(); }
-        else if (st.kind === 'cells') {
-          mctx.beginPath();
-          for (const c of st.pts) { const poly = cellPoly(grid, c); mctx.moveTo(poly[0].x, poly[0].y); for (let i = 1; i < poly.length; i++) mctx.lineTo(poly[i].x, poly[i].y); mctx.closePath(); }
-          mctx.fill();
-        } else if (st.pts.length === 1) { mctx.beginPath(); mctx.arc(st.pts[0].x, st.pts[0].y, st.r, 0, Math.PI * 2); mctx.fill(); }
-        else {
-          mctx.lineWidth = st.r * 2; mctx.lineCap = 'round'; mctx.lineJoin = 'round';
-          mctx.beginPath(); mctx.moveTo(st.pts[0].x, st.pts[0].y);
-          for (let i = 1; i < st.pts.length; i++) mctx.lineTo(st.pts[i].x, st.pts[i].y);
-          mctx.stroke();
-        }
-      }
-      mctx.globalCompositeOperation = 'source-over';
-      const data = mctx.getImageData(0, 0, W, H).data;
-      const isSel = selected.has(a.id);
-      // Sample the smooth colour field on a small lattice; the coverage mask keeps the exact outline.
-      const stride=8, cols=Math.ceil(W/stride)+1, rows=Math.ceil(H/stride)+1;
-      const field=(a.gradient?.length ?? 0)>=2 ? new Float32Array(cols*rows) : null;
-      if (field) for (let y=0;y<rows;y++) for (let x=0;x<cols;x++) {
-        field[y*cols+x]=surfaceHeight(a,{x:bx+(x*stride+0.5)/s,y:by+(y*stride+0.5)/s});
-      }
-      for (let i = 0, j = 3; i < N; i++, j += 4) {
-        if (data[j] < 128) continue;
-        if (field) {
-          const x=(i%W)/stride,y=Math.floor(i/W)/stride,k=Math.floor(y)*cols+Math.floor(x);
-          const fx=x%1,fy=y%1;
-          hgt[i]=(field[k]*(1-fx)+field[k+1]*fx)*(1-fy)+(field[k+cols]*(1-fx)+field[k+cols+1]*fx)*fy;
-          smooth[i]=1;
-        } else {
-          hgt[i] = a.add && cov[i] ? hgt[i] + a.h : a.h;
-          if (!a.add) smooth[i]=0;
-        }
-        cov[i] = 1;
-        if (isSel) sel[i] = 1;
-      }
-    }
-
-    // soft shading: compare each pixel with the ground around it
-    const R = Math.max(1, Math.min(MAX_SIDE / 2, Math.round(s * grid.cell / 4)));
-    const around = blur(hgt, W, H, R);
-    // a faint contour wherever the height changes, softened by a small blur
-    const rad = Math.max(1, Math.round(s * Math.max(0.5, grid.cell * 0.01)));
-    const edge = new Float32Array(N);
-    for (let y = rad; y < H - rad; y++) {
-      for (let x = rad; x < W - rad; x++) {
-        const i = y * W + x;
-        if (!cov[i]) continue;
-        const l = i - rad, r = i + rad, u = i - rad * W, d = i + rad * W;
-        if (smooth[i] && smooth[l] && smooth[r] && smooth[u] && smooth[d]) continue;
-        if (Math.max(Math.abs(hgt[l] - hgt[i]), Math.abs(hgt[r] - hgt[i]), Math.abs(hgt[u] - hgt[i]), Math.abs(hgt[d] - hgt[i])) > 0) edge[i] = 1;
-      }
-    }
-    const line = blur(edge, W, H, 1);
-    const ring = new Float32Array(N); // the outline of the selected areas
-    const rs = Math.max(2, Math.round(s * 2.2));
-    for (let y = rs; y < H - rs; y++) {
-      for (let x = rs; x < W - rs; x++) {
-        const i = y * W + x;
-        if (sel[i] && (!sel[i - rs] || !sel[i + rs] || !sel[i - rs * W] || !sel[i + rs * W])) ring[i] = 1;
-      }
-    }
-
-    const out = new ImageData(W, H);
-    const px = out.data;
-    const lut = new Map<number, [number, number, number]>();
-    const heights = new Set<number>();
-    for (let i = 0; i < N; i++) if (cov[i]) heights.add(smooth[i] ? Math.round(hgt[i]/5)*5 : hgt[i]);
-    this.levels = [...heights].sort((a,b) => a-b);
-    const colour = (h: number) => {
-      const key = Math.round(h * 10) / 10;
-      let rgb = lut.get(key);
-      if (!rgb) {
-        const c = parseInt(this.colourAt(key).slice(1),16);
-        rgb = [(c >> 16) & 255,(c >> 8) & 255,c & 255];
-        lut.set(key,rgb);
-      }
-      return rgb;
-    };
-    for (let i = 0; i < N; i++) {
-      // tint, only on the ground itself
-      let a = 0, R_ = 0, G_ = 0, B_ = 0;
-      const coverage = cov[i];
-      if (coverage) { const c = colour(hgt[i]); R_ = c[0]; G_ = c[1]; B_ = c[2]; a = 0.36 * coverage; }
-      // shadow on the low side of a drop, light on the high side
-      const d = around[i] - hgt[i];
-      const k = Math.min(1, Math.abs(d) / 6) ** 0.7;
-      const sh = d > 0.05 ? 0.28 * k : 0;
-      const hi = d < -0.05 ? 0.18 * k : 0;
-      const over = (cr: number, cg: number, cb: number, ca: number) => {
-        if (ca <= 0) return;
-        const oa = ca + a * (1 - ca);
-        R_ = (cr * ca + R_ * a * (1 - ca)) / oa; G_ = (cg * ca + G_ * a * (1 - ca)) / oa; B_ = (cb * ca + B_ * a * (1 - ca)) / oa;
-        a = oa;
-      };
-      over(10, 12, 20, sh);
-      over(255, 255, 255, hi);
-      if (cov[i] && line[i] > 0.02) { const c = colour(hgt[i]); over(c[0] * 0.4, c[1] * 0.4, c[2] * 0.4, 0.58 * line[i]); }
-      if (ring[i]) over(SELECT_RGB[0], SELECT_RGB[1], SELECT_RGB[2], 1);
-      const o = i * 4;
-      px[o] = R_; px[o + 1] = G_; px[o + 2] = B_; px[o + 3] = Math.round(Math.min(1, a) * 255);
     }
     this.canvas.getContext('2d')!.putImageData(out, 0, 0);
     this.tex!.source.update();
@@ -217,11 +87,8 @@ export class TerrainLayer {
     this.sprite!.scale.set(1 / s);
     this.sprite!.visible = true;
 
-    // The label finder expects plateaus. Group the gradient into broad elevation bands.
-    for (let i=0;i<N;i++) if (smooth[i]) hgt[i]=Math.round(hgt[i]/5)*5;
-    this.labelBoxes = terrainLabelBoxes(hgt, cov, W, H).map(box => ({
-      elevation: box.elevation, x: bx + box.x / s, y: by + box.y / s, w: box.w / s, h: box.h / s,
-    })).filter(box => Math.abs(groundAt(t, { x: box.x + box.w / 2, y: box.y + box.h / 2 }) - box.elevation)<2.51);
+    this.labelBoxes=boxes;
+    this.invalidate();
     this.layoutLabels();
   }
 
@@ -271,7 +138,11 @@ export class TerrainLayer {
     }
   }
 
-  private clear() {
+  reset() {
+    this.version++;
+    this.latest=null;
+    this.key='';
+    this.levels=[];
     if (this.sprite) this.sprite.visible = false;
     for (const tx of this.labels.values()) tx.destroy();
     this.labels.clear();
@@ -279,6 +150,8 @@ export class TerrainLayer {
   }
 
   destroy() {
+    this.worker?.terminate();
+    this.latest=null;
     this.container.destroy({ children: true });
     this.tex?.destroy(true);
   }

@@ -9,7 +9,7 @@ import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
 import { altitudeOf, dayOf, dimOf, groundAt, heightNote, isRough, roughOf, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
 import { storedControls } from '../core/gradientBoundaries';
 import { dragGradient, gradientPath, initialGradientLine } from '../core/gradientGeometry';
-import { areaShape, brushCuts, clippedBrush, patchStroke, connectedHeight, terrainEdges, type TerrainEdge } from '../core/terrainEdges';
+import { areaShape, brushCuts, clippedBrush, patchStroke, connectedHeight, type TerrainEdge } from '../core/terrainEdges';
 import { movementCost } from '../core/movementCost';
 import { EMPTY_TERRAIN, MAX_STROKE_CELLS, slopeAt, surfaceHeight, standingGround, groundAtTerrain, areaLabelAt, areasSelected, cellKey, cellsAlong, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
@@ -69,6 +69,7 @@ type Drag =
   | { kind: 'wallend'; moves: { id: string; end: 'a' | 'b' }[]; from: Vec; to: Vec; moved: boolean }
   /** dragging the selected walls */
   | { kind: 'wallmove'; ids: string[]; start: Vec; anchor: Vec; dx: number; dy: number; moved: boolean }
+  | { kind: 'wallerase'; pts: Vec[]; radius:number }
   | { kind: 'wallbox'; start: Vec; cur: Vec; base: Set<string> }
   | { kind: 'drawmove'; ids: string[]; start: Vec; dx: number; dy: number; moved: boolean; /** ground being moved: it steps a whole cell at a time */ snap?: boolean }
   | { kind: 'drawresize'; id: string; handle: HandleId; orig: Drawing; patch: DrawingPatch | null };
@@ -102,7 +103,7 @@ export class Board {
   private tokenLayer = new Container();
   private fogLayer = new Container();
   private drawLayer = new DrawLayer();
-  private terrainLayer = new TerrainLayer();
+  private terrainLayer = new TerrainLayer(()=>this.invalidate());
   /** difficult ground: a layer of its own, hatched on the map */
   private rough: Terrain = EMPTY_TERRAIN({ ...DEFAULT_GRID });
   private roughG = new Graphics();
@@ -128,7 +129,7 @@ export class Board {
   private wallRunFirst: Vec | null = null;
   private wallRunCount = 0;
   private seenWallRev = -1;
-  private segCache: { scene: unknown; rev: number; ground: string; sight: Seg[]; move: Seg[]; terrain: TerrainEdge[]; levelJoins: Seg[] } = { scene: null, rev: -1, ground: '', sight: [], move: [], terrain: [], levelJoins: [] };
+  private segCache: { scene: unknown; rev: number; ground: string; sight: Seg[]; move: Seg[]; terrain: TerrainEdge[]; levelJoins: Seg[]; openings: Seg[] } = { scene: null, rev: -1, ground: '', sight: [], move: [], terrain: [], levelJoins: [], openings: [] };
   private auraG = new Graphics();
   private ghostLayer = new Container();
   private overlayG = new Graphics();
@@ -299,6 +300,8 @@ export class Board {
 
   destroy() {
     this.destroyed = true;
+    window.clearTimeout(this.warmTimer);
+    this.terrainLayer.destroy();
     this.cancelPress();
     if (this.liveSent) this.client.setLive({ ruler: null, ghosts: {} });
     setTextureFailHandler(null);
@@ -543,7 +546,7 @@ export class Board {
     }
     if (scene.drawRev !== this.seenDrawRev) {
       this.seenDrawRev = scene.drawRev;
-      this.drawLayer.sync(this.drawingsShown(), c.grid, this.textRes, this.coverOn(), this.wallsForSpells());
+      this.drawLayer.sync(this.drawingsShown(), c.grid, this.textRes, this.coverOn(), this.coverOn() ? this.wallsForSpells() : undefined);
       const stale = [...this.ui.data.drawSel].filter((id) => !scene.draws.has(id));
       if (stale.length) this.ui.selectDrawings([...this.ui.data.drawSel].filter((id) => scene.draws.has(id)));
       this.dirty = true;
@@ -566,6 +569,8 @@ export class Board {
     if (this.ui.data.tool === 'scale') this.ui.set({ tool: 'select' });
     this.glideSeq++;
     this.sceneRef = scene;
+    window.clearTimeout(this.warmTimer);
+    this.terrainLayer.reset();
     for (const v of this.views.values()) v.destroy();
     this.views.clear();
     this.drag = null;
@@ -1012,8 +1017,9 @@ export class Board {
     const scene = this.client.scene;
     if (!scene) return;
     const grid = this.client.grid;
-    const w = this.wallsForSpells();
-    const spell = templateRoughDraws(scene.draws.values(), grid, w.segs, w.ground);
+    const templates=[...scene.draws.values()].filter(d=>d.td && isTemplate(d.k));
+    const w = templates.length ? this.wallsForSpells() : undefined;
+    const spell = w ? templateRoughDraws(templates, grid, w.segs, w.ground) : [];
     const next = roughOf(spell.length ? [...scene.draws.values(), ...spell] : scene.draws.values(), grid);
     if (next.sig !== this.rough.sig) { this.rough = next; this.paintRough(); }
   }
@@ -1078,31 +1084,30 @@ export class Board {
   isRoughAt(p: Vec): boolean { return isRough(this.rough, p); }
 
   /** Movement along the accepted route, including terrain, walls and flight clearance. */
-  private moveCost(path: Vec[], fly: boolean, elevation = 0): { ft: number; note: string } {
+  private moveCost(path: Vec[], fly: boolean, elevation = 0, stops: number[] = []): { ft: number; note: string } {
     const grid = this.client.gridAt(path[0] ?? { x: 0, y: 0 });
-    const { terrain, move, levelJoins } = this.wallSegs();
+    const { terrain, move, levelJoins, openings } = this.wallSegs();
     const slopes = this.zones.areas.some(a => (a.gradient?.length ?? 0) >= 2);
-    if (!slopes && !terrain.length && !move.length && !this.rough.areas.length) return { ft: pathFt(grid,path), note: '' };
+    if (!slopes && !terrain.length && !openings.length && !move.length && !this.rough.areas.length) return { ft: pathFt(grid,path), note: '' };
     return movementCost(grid, path, fly ? elevation : null, {
       slope: slopes ? p => slopeAt(this.zones,p) : undefined,
       ground: p => groundAtTerrain(this.zones,p), rough: p => isRough(this.rough,p),
-    }, levelJoins.length ? [...terrain,...levelJoins] : terrain, this.moveBlockers() ? move : []);
+    }, levelJoins.length || openings.length ? [...terrain,...levelJoins,...openings] : terrain, this.moveBlockers() ? move : [], stops);
   }
 
   // ------------------------------------------------------------------ walls
   /** The wall pieces that stop sight and walking, kept until the walls change. */
-  wallSegs(): { sight: Seg[]; move: Seg[]; terrain: TerrainEdge[]; levelJoins: Seg[] } {
+  wallSegs(): { sight: Seg[]; move: Seg[]; terrain: TerrainEdge[]; levelJoins: Seg[]; openings: Seg[] } {
     const scene = this.client.scene;
-    if (!scene) return { sight: [], move: [], terrain: [], levelJoins: [] };
+    if (!scene) return { sight: [], move: [], terrain: [], levelJoins: [], openings: [] };
     const c = this.segCache;
     // how tall a wall's top is depends on the ground it stands on, so the pieces are rebuilt when the ground changes too
     const gsig = this.zones.sig;
     if (c.scene !== scene || c.rev !== scene.wallRev || c.ground !== gsig) {
-      const list = [...scene.walls.values()];
+      const {walls,terrain,levelJoins,openings}=this.client.wallGeometry();
+      const list = [...walls.values()].filter(w=>!w.face);
       const topOf = (w: Wall) => groundAt(this.zones, wallMid(w)) + w.h;
-      const levelJoins: Seg[] = [];
-      const terrain = terrainEdges(this.zones,levelJoins);
-      this.segCache = { scene, terrain, levelJoins, rev: scene.wallRev, ground: gsig, sight: [...sightSegs(list, topOf), ...terrain], move: moveSegs(list, topOf) };
+      this.segCache = { scene, terrain, levelJoins, openings, rev: scene.wallRev, ground: gsig, sight: [...sightSegs(list, topOf), ...terrain], move: moveSegs(list, topOf) };
     }
     return this.segCache;
   }
@@ -1117,7 +1122,7 @@ export class Board {
     const scene = this.client.scene;
     if (!scene) return;
     const sel = this.ui.data.wallSel;
-    if (sel.size && [...sel].some((id) => !scene.walls.has(id))) this.ui.set({ wallSel: new Set([...sel].filter((id) => scene.walls.has(id))) });
+    if (sel.size && [...sel].some((id) => !this.client.wallGeometry().walls.has(id))) this.ui.set({ wallSel: new Set([...sel].filter((id) => this.client.wallGeometry().walls.has(id))) });
     this.refreshDraws(); // spells stop at walls
     this.dirty = true;
   }
@@ -1134,18 +1139,19 @@ export class Board {
     const u = this.ui.data;
     const dm = this.client.isDM;
     const editing = dm && u.tool === 'wall';
+    if (!editing && !u.showWalls) { this.wallLayer.container.visible=false; return; }
     const edit = editing && u.wallMode === 'edit';
     this.wallLayer.sync(this.wallsShown(), {
       z: this.cam.zoom, cell: this.client.grid.cell, showAll: dm && !u.dmPreview,
       selected: editing ? u.wallSel : NO_IDS, hover: edit ? this.wallHover : null, handles: edit,
-    }, `${scene.wallRev}:${this.wallPrevSeq}:${this.zones.sig}`, editing || u.showWalls, dm && !u.dmPreview && (editing || u.showWalls) ? this.wallSegs().terrain : []);
+    }, `${scene.wallRev}:${this.wallPrevSeq}:${this.zones.sig}`, editing || u.showWalls);
   }
 
   /** The door or window whose handle is under `p` (the DM clicks it to open or close it). */
   private doorAt(p: Vec): Wall | null {
     const max = Math.max(this.client.grid.cell * 0.2, 9 / this.cam.zoom);
     let best: Wall | null = null, bd = max;
-    for (const w of this.client.scene?.walls.values() ?? []) {
+    for (const w of this.client.wallGeometry().walls.values()) {
       if (w.k === 'wall') continue;
       const m = wallMid(w);
       const d = Math.hypot(m.x - p.x, m.y - p.y);
@@ -1241,7 +1247,7 @@ export class Board {
       return { x: from.x + Math.cos(ang) * L, y: from.y + Math.sin(ang) * L };
     }
     const ends: Vec[] = [];
-    for (const x of this.client.scene?.walls.values() ?? []) for (const end of ['a', 'b'] as const) if (!skip?.(x, end)) ends.push(x[end]);
+    for (const x of this.client.wallGeometry().walls.values()) for (const end of ['a', 'b'] as const) if (!skip?.(x, end)) ends.push(x[end]);
     return snapWallPoint(grid, w, ends, u.wallSnap, 10 / this.cam.zoom);
   }
 
@@ -1256,7 +1262,7 @@ export class Board {
     const cell = this.client.grid.cell;
     const tol = cell * { low: 0.35, mid: 0.18, high: 0.08 }[this.ui.data.wallDetail];
     const ends: Vec[] = [];
-    for (const x of this.client.scene?.walls.values() ?? []) ends.push(x.a, x.b);
+    for (const x of this.client.wallGeometry().walls.values()) ends.push(x.a, x.b);
     return freehandCorners(pts, tol, Math.max(cell * 0.4, 12 / this.cam.zoom), ends);
   }
 
@@ -1280,6 +1286,11 @@ export class Board {
 
   private startWall(w: Vec, e: PointerEvent) {
     const u = this.ui.data;
+    if (u.wallMode === 'erase') {
+      this.wallStart=null;
+      this.drag={kind:'wallerase',pts:[w],radius:this.client.grid.cell*u.wallBrush/2};
+      return;
+    }
     if (u.wallMode === 'edit') { this.startWallEdit(w, e); return; }
     const shape = this.wallShapeNow();
     // a hand-drawn wall is free of the grid: only its ends find other walls
@@ -1347,7 +1358,7 @@ export class Board {
       }
       if (!sel.has(hit.wall.id)) sel = new Set([hit.wall.id]);
       this.ui.set({ wallSel: sel });
-      const first = this.client.scene?.walls.get([...sel][0]);
+      const first = this.client.wallGeometry().walls.get([...sel][0]);
       this.drag = { kind: 'wallmove', ids: [...sel], start: w, anchor: first ? { ...first.a } : w, dx: 0, dy: 0, moved: false };
       return;
     }
@@ -1358,7 +1369,7 @@ export class Board {
 
   private moveWallDrag(d: Extract<Drag, { kind: 'wallend' | 'wallmove' | 'wallbox' | 'wall' }>, w: Vec, e: PointerEvent) {
     const z = this.cam.zoom;
-    const walls = this.client.scene?.walls;
+    const walls = this.client.wallGeometry().walls;
     if (d.kind === 'wall') {
       if (d.shape === 'free') {
         const last = d.pts[d.pts.length - 1];
@@ -1399,7 +1410,7 @@ export class Board {
     if (d.kind === 'wallend') { void this.client.moveWallEnds(d.moves.map((m) => ({ ...m, to: d.to })), 'Move wall').catch(fail).finally(done); return; }
     const moves: { id: string; end: 'a' | 'b'; to: Vec }[] = [];
     for (const id of d.ids) {
-      const x = this.client.scene?.walls.get(id);
+      const x = this.client.wallGeometry().walls.get(id);
       if (x) moves.push({ id, end: 'a', to: { x: x.a.x + d.dx, y: x.a.y + d.dy } }, { id, end: 'b', to: { x: x.b.x + d.dx, y: x.b.y + d.dy } });
     }
     void this.client.moveWallEnds(moves, d.ids.length > 1 ? 'Move walls' : 'Move wall').catch(fail).finally(done);
@@ -1451,6 +1462,16 @@ export class Board {
       if (ft > 0) this.plotLabel(li++, `${ft} ft`, (a.x + b.x) / 2, (a.y + b.y) / 2 - 10 / z, col);
     };
     const marker = (p: Vec) => { g.circle(p.x, p.y, 4.5 / z).fill({ color: 0x000000, alpha: 0.35 }).stroke({ width: 1.5 / z, color: 0xffffff }); };
+    if (u.wallMode==='erase' && this.pointerW) {
+      const radius=d?.kind==='wallerase' ? d.radius : grid.cell*u.wallBrush/2;
+      if (d?.kind==='wallerase' && d.pts.length>1) {
+        g.moveTo(d.pts[0].x,d.pts[0].y);
+        for (const p of d.pts.slice(1)) g.lineTo(p.x,p.y);
+        g.stroke({width:2*radius,color:0xff7373,alpha:0.3,cap:'round',join:'round'});
+      }
+      g.circle(this.pointerW.x,this.pointerW.y,radius).fill({color:0xff7373,alpha:0.15}).stroke({width:2/z,color:0xff7373});
+      return li;
+    }
     if (u.wallMode === 'draw') {
       const shape = this.wallShapeNow();
       const one = u.wallKind === 'door' ? 0 : u.wallOne;
@@ -1497,7 +1518,7 @@ export class Board {
       // how tall the selected (or hovered) walls are
       const ids = new Set([...u.wallSel, ...(this.wallHover ? [this.wallHover] : [])]);
       for (const id of ids) {
-        const wl = this.client.scene?.walls.get(id);
+        const wl = this.client.wallGeometry().walls.get(id);
         if (wl && wl.h > 0 && li < 12) { const m = wallMid(wl); this.plotLabel(li++, `${wl.h} ft tall`, m.x, m.y - 10 / z, WALL_COLOR[wl.k]); }
       }
     }
@@ -2021,7 +2042,7 @@ export class Board {
         const move = this.routeTo(d.anchor, origin, a.display, d.trail);
         const path = [move.from, ...move.via, move.to];
         this.dashedLine(g, path, 0xffffff, z, move.stops);
-        const cost = this.moveCost(path, a.token.fly, a.token.elev);
+        const cost = this.moveCost(path, a.token.fly, a.token.elev, move.stops);
         this.plotNext = this.stepLabels(this.plotNext, path, a.token, 0xffffff, z, move.stops);
         this.distText.text = `${cost.ft} ft${move.stops.length ? ' total' : ''}${cost.note ? ` · ${cost.note}` : ''}`;
         this.distText.scale.set(1 / z);
@@ -2181,7 +2202,7 @@ export class Board {
   private testLabel(li: number, path: Vec[], t: Token, color: number, name: string, stops: number[]): number {
     const grid = this.client.grid;
     const to = path[path.length - 1];
-    const cost = this.moveCost(path, t.fly,t.elev);
+    const cost = this.moveCost(path, t.fly,t.elev, stops);
     li = this.stepLabels(li, path, t, color, this.cam.zoom, stops);
     this.plotLabel(li, `${name ? name + ': ' : ''}${cost.ft} ft${stops.length ? ' total' : ''}${cost.note ? ` (${cost.note})` : ''}`, to.x, to.y - (t.size * grid.cell) / 2 - 6 / this.cam.zoom, color);
     return li + 1;
@@ -2195,7 +2216,7 @@ export class Board {
     if (!stops.length) return li;
     let prev = 0;
     for (const i of [...stops, path.length - 1]) {
-      const sofar = this.moveCost(path.slice(0, i + 1), token.fly,token.elev).ft;
+      const sofar = this.moveCost(path.slice(0, i + 1), token.fly,token.elev,stops).ft;
       const leg = Math.round((sofar - prev) * 10) / 10;
       prev = sofar;
       const a = path[i - 1], b = path[i];
@@ -2478,7 +2499,7 @@ export class Board {
   }
 
   private refreshDraws() {
-    this.drawLayer.sync(this.drawingsShown(), this.client.grid, this.textRes, this.coverOn(), this.wallsForSpells());
+    this.drawLayer.sync(this.drawingsShown(), this.client.grid, this.textRes, this.coverOn(), this.coverOn() ? this.wallsForSpells() : undefined);
     this.syncTerrain();
     this.invalidate();
   }
@@ -2714,7 +2735,7 @@ export class Board {
     const d: Extract<Drag, { kind: 'terrain' }> = {
       kind: 'terrain', erase, group, rough,
       h: rough ? 1 : (pick ? pick.height : cur?.h ?? u.heightFt), add,
-      cells: !gridless && u.heightSnap !== e.altKey ? new Map() : null, pts: [], last: w, size: u.heightBrush,
+      cells: u.heightBrush!=='fine' && !gridless && u.heightSnap !== e.altKey ? new Map() : null, pts: [], last: w, size: u.heightBrush==='fine' ? 2/this.client.grid.ft : u.heightBrush,
     };
     this.drag = d;
     this.paintTerrainAt(d, w, true);
@@ -2790,8 +2811,8 @@ export class Board {
     const h = d ? d.h : pick ? pick.height : cur ? cur.h : u.heightFt;
     const add = d ? d.add : pick ? false : cur ? cur.add : u.heightAdds;
     const col = erase ? 0xff6b6b : rough ? 0xc8791b : num(this.terrainLayer.colourAt(h));
-    const snap = d ? !!d.cells : currentOverlay(grid) !== 'none' && u.heightSnap !== !!this.altDown;
-    const n = d ? d.size : u.heightBrush;
+    const snap = d ? !!d.cells : u.heightBrush!=='fine' && currentOverlay(grid) !== 'none' && u.heightSnap !== !!this.altDown;
+    const n = d ? d.size : u.heightBrush==='fine' ? 2/grid.ft : u.heightBrush;
     if (snap) {
       const cells = d?.cells ? [...d.cells.values()] : cellsAlong(grid, at, at, n);
       for (const c of cells) g.poly(cellPoly(grid, c).flatMap((p) => [p.x, p.y]), true);
@@ -3167,6 +3188,9 @@ export class Board {
       }
       case 'terrain': this.paintTerrainAt(d, w); break;
       case 'lightpaint': this.paintLightAt(d, w); break;
+      case 'wallerase':
+        if (Math.hypot(w.x-d.pts.at(-1)!.x,w.y-d.pts.at(-1)!.y)*this.cam.zoom>=2) d.pts.push(w);
+        break;
       case 'wall': case 'wallend': case 'wallmove': case 'wallbox': this.moveWallDrag(d, w, e); break;
       case 'brush': {
         const last = d.pts[d.pts.length - 1];
@@ -3328,6 +3352,10 @@ export class Board {
       case 'lightpaint': this.commitLightPaint(d); break;
       case 'wall': this.commitWall(d); break;
       case 'wallend': case 'wallmove': this.finishWallDrag(d); break;
+      case 'wallerase':
+        if (e.type!=='pointercancel') void this.client.eraseWalls([...d.pts,this.screenToWorld(e.clientX,e.clientY)],d.radius)
+          .catch((err:Error)=>this.cb.onNotice(err.message,'error'));
+        break;
       case 'wallbox': break;
       case 'erase':
         this.drawLayer.setFaded(new Set());

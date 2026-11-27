@@ -116,7 +116,24 @@ const strokeBounds = (kind: StrokeKind, pts: Vec[], r: number): Rect => {
   return { x: b.x - pad, y: b.y - pad, w: b.w + pad * 2, h: b.h + pad * 2 };
 };
 
+// The scene replaces a drawing object when a stroke changes. Keep geometry for surviving strokes.
+const strokeCache = new WeakMap<Drawing,{gridKey:string; stroke:TStroke|null}>();
+export function reuseStrokeGeometry(previous:Drawing|undefined, next:Drawing) {
+  if (!previous) return;
+  const cache=strokeCache.get(previous);
+  if (cache && previous.k===next.k && previous.p===next.p && previous.w===next.w && previous.t===next.t &&
+      previous.hc===next.hc && previous.he===next.he && previous.hr===next.hr && previous.hg===next.hg) strokeCache.set(next,cache);
+}
 function strokeOf(d: Drawing, grid: GridSettings): TStroke | null {
+  const gridKey=[grid.shape,grid.cell,grid.ox,grid.oy].join('|');
+  const cached=strokeCache.get(d);
+  if (cached?.gridKey===gridKey) return cached.stroke;
+  const stroke=parseStroke(d,grid);
+  strokeCache.set(d,{gridKey,stroke});
+  return stroke;
+}
+
+function parseStroke(d: Drawing, grid: GridSettings): TStroke | null {
   const pts = parsePts(d.p);
   if (!pts.length) return null;
   const kind: StrokeKind = d.k === 'rect' ? 'rect' : d.k === 'ellipse' ? 'ellipse' : d.hr ? 'polygon' : d.hc ? 'cells' : 'free';
@@ -194,8 +211,12 @@ export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings, layer: '
   const eras = erasers.map((d) => strokeOf(d, grid)).filter((s): s is TStroke => !!s);
   for (const a of legacy) {
     const cuts = eras.filter(e => e.hg === a.id).sort((x,y) => x.t-y.t || x.id.localeCompare(y.id));
-    a.strokes.push(...cuts);
-    a.ids.push(...cuts.map(s => s.id));
+    // A filled hole belongs to its original box or ellipse, including its gradient controls.
+    const fills=(groups.get(a.id)?.paint ?? []).map(d=>strokeOf(d,grid)).filter((s):s is TStroke=>!!s);
+    a.paint.push(...fills);
+    a.strokes.push(...[...cuts,...fills].sort((x,y)=>x.t-y.t || x.id.localeCompare(y.id)));
+    a.ids.push(...cuts.map(s=>s.id),...fills.map(s=>s.id));
+    groups.delete(a.id);
   }
   const painted: Area[] = [];
   for (const [id, g] of groups) {

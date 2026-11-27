@@ -53,8 +53,11 @@ Read `CLAUDE.md` (this file) and `WIP.md` before doing anything else in a sessio
 - **Hide everything.** Cover the scene and enable token sight together. Current sight still follows walls, lighting and darkvision. Undo restores the previous fog and sight settings. A completely clear fog mask skips token sight and exploration until fog returns. Ambient darkness and lamps still apply.
 
 - **Elevation and movement.** Every elevation overlay uses the same translucent topographical palette, including during movement. Elevation numbers appear wherever the overlay is visible and a label fits. Select picks one connected patch at its finished height. Every painted height change is a terrain wall and charges climbing up or down. Derived boundaries follow the finished painted terrain, including additive strokes and erasers.
+- **Bridge openings.** Walls Edit and Erase operate on authored walls and painted elevation boundaries. Store only the edited spans with the scene walls. Erasing a span opens sight through it and preserves the painted deck height. A route can pass beneath a deck through two openings. Ending or placing a deliberate stop on the deck counts the climb.
 - **Drawn walls and flight.** Height zero blocks movement. A finite wall can be climbed, including both faces on level ground. Closed doors and windows keep their existing movement rules. Flight counts the vertical travel required to clear the terrain and finite walls along the measured route.
 - **Test moves.** Count terrace heights on the ground traversed between crossings. Touching a terrace at a turn adds no climb. On square grids, give the cursor room to cross a corner diagonally. Preserve turns within a drag and send them with shared previews. Only deliberate multi-step stops receive individual distance labels.
+
+- **Gradient editing.** Connect neighboring automatic boundary runs at the same height along the ring, preserving individual edits. Fill unpainted holes respects painted islands, including 0 ft terrain. Fill all holes can absorb enclosed islands into a gradient. An opening connected to the exterior stays open.
 
 - **Terrain brushes.** In Paint, choosing Added on top starts a fresh stroke above existing ground. Each gesture adds its height once where it passes. Gridless scenes use round brushes sized in calibrated feet for height, difficult ground and erasing.
 

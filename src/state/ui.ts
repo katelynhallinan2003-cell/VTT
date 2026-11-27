@@ -98,13 +98,14 @@ export interface UiData {
   /** paint whole squares (or hexes) rather than freehand */
   heightSnap: boolean;
   /** how wide the brush is, in grid squares */
-  heightBrush: number;
+  heightBrush: number | 'fine';
   /** new areas add to the ground below them instead of setting its height */
   heightAdds: boolean;
   /** Show terrain while editing, moving or measuring, or keep it visible all the time. */
   heightView: 'auto' | 'always';
   /** the Walls tool: draw new walls, or select and edit the ones that are there */
-  wallMode: 'draw' | 'edit';
+  wallMode: 'draw' | 'edit' | 'erase';
+  wallBrush: number;
   /** what the next wall drawn is: a wall, a door or a window */
   wallKind: WallKind;
   /** whether a new wall is drawn for the players (null = the default for its kind) */
@@ -188,10 +189,10 @@ export class UiState {
     lightPaint: readStr('vtt-light-paint', 'day', ['day', 'dim', 'erase'] as const),
     lightBrush: (() => { try { const n = Number(localStorage.getItem('vtt-light-brush')); return Number.isFinite(n) && n >= 5 && n <= 200 ? n : 20; } catch { return 20; } })(),
     heightSnap: readFlag('vtt-height-snap', true),
-    heightBrush: (() => { try { const n = Number(localStorage.getItem('vtt-height-brush')); return Number.isFinite(n) && n >= 1 && n <= 8 ? n : 1; } catch { return 1; } })(),
+    heightBrush: (() => { try { const value=localStorage.getItem('vtt-height-brush'); if (value==='fine') return 'fine'; const n=Number(value); return [1,2,3,4,8].includes(n) ? n : 1; } catch { return 1; } })(),
     heightAdds: readFlag('vtt-height-adds', false),
     heightView: readStr('vtt-height-view', 'auto', ['auto','always'] as const),
-    wallMode: readStr('vtt-wall-mode', 'draw', ['draw', 'edit'] as const),
+    wallMode: readStr('vtt-wall-mode', 'draw', ['draw', 'edit', 'erase'] as const),
     wallKind: readStr('vtt-wall-kind', 'wall', ['wall', 'door', 'window'] as const),
     wallVis: (() => { try { const v = localStorage.getItem('vtt-wall-vis'); return v === '1' ? true : v === '0' ? false : null; } catch { return null; } })(),
     wallShape: readStr('vtt-wall-shape', 'line', ['line', 'box', 'free', 'circle'] as const),
@@ -199,6 +200,7 @@ export class UiState {
     wallOne: (() => { try { const v = localStorage.getItem('vtt-wall-one'); return v === '1' ? 1 : v === '-1' ? -1 : 0; } catch { return 0; } })() as Side,
     wallH: (() => { try { const n = Number(localStorage.getItem('vtt-wall-h')); return Number.isFinite(n) && n > 0 ? Math.min(1000, Math.round(n)) : 0; } catch { return 0; } })(),
     wallSnap: readStr('vtt-wall-snap', 'half', ['corner', 'half', 'off'] as const),
+    wallBrush: 1,
     wallSel: new Set(),
     showWalls: readFlag('vtt-show-walls', true),
     wallIgnore: false,

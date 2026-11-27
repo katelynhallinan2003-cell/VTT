@@ -58,6 +58,11 @@ await dm.waitForFunction(() => {
   return Math.abs(board.groundAtPoint(board.screenToWorld(850,465))-25)<0.1;
 });
 await dot.click();
+assert.equal(await dot.evaluate(el=>el.parentElement.classList.contains('gradient-selected')),true);
+await fields.first().click();
+assert.equal(await fields.first().evaluate(el=>el.closest('.gradient-selected')!==null),true);
+assert.equal(await dot.evaluate(el=>el.parentElement.classList.contains('gradient-selected')),false);
+await dot.click();
 assert.ok(await fields.nth(1).evaluate(el=>el===document.activeElement));
 await dm.keyboard.type('30'); await dm.keyboard.press('Enter');
 await dm.waitForFunction(()=>Math.abs(window.__vtt.board.groundAtPoint(window.__vtt.board.screenToWorld(850,465))-30)<0.1);
@@ -77,6 +82,23 @@ await dm.waitForFunction(()=>window.__vtt.board.groundAtPoint(window.__vtt.board
 await dm.getByRole('button',{name:'Done',exact:true}).click();
 await dm.getByRole('button',{name:'Edit Gradient',exact:true}).click();
 assert.equal(await fields.count(),2);
+// A painted island in the old rectangle gradient leaves the controls and the deck intact.
+await dm.evaluate(async()=>{
+  const {board,client}=window.__vtt;
+  const a=board.screenToWorld(715,380), b=board.screenToWorld(755,420);
+  await client.addDrawing({k:'terrain',hg:'island',hz:45,hr:'5',p:[a.x,a.y,b.x,a.y,b.x,b.y,a.x,b.y,a.x,a.y].join(','),
+    color:'#fff',w:1,fill:0,dash:false,txt:'',fs:28,bw:5});
+});
+const islandHeight=()=>dm.evaluate(()=>window.__vtt.board.groundAtPoint(window.__vtt.board.screenToWorld(735,400)));
+await dm.waitForFunction(()=>window.__vtt.board.groundAtPoint(window.__vtt.board.screenToWorld(735,400))===45);
+await dm.getByRole('button',{name:'Fill unpainted holes',exact:true}).click();
+assert.equal(await islandHeight(),45);
+await dm.getByRole('button',{name:'Fill all holes',exact:true}).click();
+await dm.waitForFunction(()=>{const {board}=window.__vtt;const h=board.groundAtPoint(board.screenToWorld(735,400));return h>5 && h<30;});
+await dm.evaluate(()=>window.__vtt.client.history.undo());
+await dm.waitForFunction(()=>window.__vtt.board.groundAtPoint(window.__vtt.board.screenToWorld(735,400))===45);
+await dm.evaluate(()=>window.__vtt.client.history.redo());
+await dm.waitForFunction(()=>document.querySelectorAll('.gradient-box').length===2);
 await dm.getByRole('button',{name:'Delete height point'}).nth(1).click();
 await dm.waitForFunction(() => document.querySelectorAll('.gradient-box').length===1);
 await dm.getByRole('button',{name:'Diff Terrain',exact:true}).click();

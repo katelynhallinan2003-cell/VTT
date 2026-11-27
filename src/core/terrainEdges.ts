@@ -2,7 +2,7 @@ import clip, { type MultiPolygon, type Pair, type Polygon } from 'polygon-clippi
 import type { GridSettings, Rect, Vec } from '../types';
 import { snapToCellCenter } from './geometry';
 import { cellPoly } from './cells';
-import { areaAt, groundAtTerrain, surfaceHeight, type Area, type Terrain, type TStroke } from './terrain';
+import { areaAt, newAreaId, groundAtTerrain, surfaceHeight, type Area, type Terrain, type TStroke } from './terrain';
 import { type Seg } from './walls';
 
 export interface TerrainEdge extends Seg { low: number; top: number; one: 1 | -1 }
@@ -72,18 +72,27 @@ function footprint(s: Pick<TStroke,'kind'|'pts'|'r'|'b'|'rings'>, grid: GridSett
 /** Fold the paint in drawing order, retaining the boundaries of each finished elevation. */
 interface Plan { surfaces: Map<number, { area: Area; offset: number }>; regions: Map<number, MultiPolygon>; layers: { area: Area; shape: MultiPolygon }[] }
 const layerCache = new WeakMap<Terrain, Plan['layers']>();
+const footprints = new WeakMap<TStroke, MultiPolygon>();
+const areaMasks = new WeakMap<TStroke,{strokes:TStroke[]; mask:MultiPolygon}>();
 export function terrainLayers(t: Terrain) {
   const cached = layerCache.get(t);
   if (cached) return cached;
   const layers: Plan['layers'] = [];
-  const footprints = new Map<TStroke, MultiPolygon>();
   for (const area of t.areas) {
     let mask: MultiPolygon = [];
-    for (const s of area.strokes) {
+    const prior=areaMasks.get(area.paint[0]);
+    let start=0;
+    if (prior && prior.strokes.length<=area.strokes.length && prior.strokes.every((s,i)=>s===area.strokes[i])) {
+      mask=prior.mask;
+      start=prior.strokes.length;
+    }
+    for (let i=start;i<area.strokes.length;i++) {
+      const s=area.strokes[i];
       let shape = footprints.get(s);
       if (!shape) { shape = footprint(s, t.grid); footprints.set(s, shape); }
       mask = s.erase ? clip.difference(mask, shape) : clip.union(mask, shape);
     }
+    areaMasks.set(area.paint[0],{strokes:area.strokes,mask});
     if (!mask.length) continue;
     layers.push({area, shape: mask});
   }
@@ -91,6 +100,8 @@ export function terrainLayers(t: Terrain) {
   return layers;
 }
 const plans = new WeakMap<Terrain, Plan>();
+// Reuse the finished flat layers below the first edit. Only retain the latest stack.
+let flatPrefix: {mask:MultiPolygon; h:number; add:boolean; regions:Plan['regions']}[]=[];
 function heightRegions(t: Terrain): Plan {
   const cached = plans.get(t);
   if (cached) return cached;
@@ -109,7 +120,14 @@ function heightRegions(t: Terrain): Plan {
     return key;
   };
   let regions = new Map<number, MultiPolygon>();
+  const saved=flatPrefix;
+  const nextPrefix:typeof flatPrefix=[];
+  let same=true, flat=true;
   for (const {area,shape:mask} of layers) {
+    flat=flat && (area.gradient?.length ?? 0)<2;
+    const prior=saved[nextPrefix.length];
+    same=same && flat && !!prior && prior.mask===mask && prior.h===area.h && prior.add===area.add;
+    if (same) { regions=prior.regions; nextPrefix.push(prior); continue; }
     const next = new Map<number, MultiPolygon>();
     const add = (z: number, shape: MultiPolygon) => {
       if (!shape.length) return;
@@ -128,7 +146,9 @@ function heightRegions(t: Terrain): Plan {
     }
     add(gradient ? surfaceKey(area,0) : area.h, bare);
     regions = next;
+    if (flat) nextPrefix.push({mask,h:area.h,add:area.add,regions});
   }
+  flatPrefix=nextPrefix;
   const plan = { regions, layers, surfaces };
   plans.set(t,plan);
   return plan;
@@ -182,6 +202,38 @@ export function connectedHeight(t: Terrain, point: Vec): HeightPatch | null {
     if (!exposed.length && !duplicates.length) break;
   }
   return {polygon,height,cuts,ids:[...ids],whole,sig:t.sig};
+}
+
+/** Only inner rings are candidates. A notch open to the exterior is never filled. */
+export function fillTerrainHoles(t:Terrain, ids:string[], patch:HeightPatch|undefined, all:boolean) {
+  const layers=terrainLayers(t);
+  const picked=layers.filter(l=>ids.includes(l.area.id));
+  if (!picked.length || (all && (picked.length!==1 || !picked[0].area.gradientEnabled))) return [];
+  const one=picked.length===1 ? picked[0] : undefined;
+  if (!one && !patch) return [];
+  let shape:MultiPolygon=patch ? [patch.polygon] : one!.shape;
+  // An occupied island may cover an older gradient with no stored erasure.
+  if (one?.area.gradientEnabled) {
+    const over=layers.filter(l=>l.area.order>one.area.order);
+    if (over.length) shape=clip.difference(shape,...over.map(l=>l.shape));
+  }
+  const rings=shape.flatMap(p=>p.slice(1).map(r=>[r] as Polygon));
+  if (!rings.length) return [];
+  let holes=clip.difference(clip.union(rings),shape);
+  const others=layers.filter(l=>!picked.includes(l));
+  if (!all && others.length) holes=clip.difference(holes,...others.map(l=>l.shape));
+  if (!holes.length) return [];
+  const edits:ReturnType<typeof patchStroke>[]=[];
+  if (all && one) for (const other of others) {
+    const overlap=clip.intersection(holes,other.shape);
+    if (!overlap.length) continue;
+    // Keep underlying supporting terrain. Enclosed islands and overlying paint are absorbed.
+    if (other.area.order<one.area.order && clip.difference(other.shape,holes).length) continue;
+    for (const poly of overlap) edits.push(patchStroke(poly,other.area.id,null));
+  }
+  const group=one?.area.id ?? newAreaId(), h=one?.area.h ?? patch!.height;
+  for (const poly of holes) edits.push(patchStroke(poly,group,h));
+  return edits;
 }
 
 /** Limit a brush erasure to the selected surface, even if another island shares its stroke. */

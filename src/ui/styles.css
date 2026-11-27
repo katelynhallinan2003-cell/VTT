@@ -708,15 +708,19 @@ textarea:not(.text-editor):focus { border-color: var(--accent); }
 .terrain-menu details { margin-top:8px; }
 .terrain-menu summary { cursor:pointer; }
 .terrain-menu details button { margin-top:6px; }
-.gradient-editor { position:fixed; inset:0; pointer-events:none; z-index:4; color:var(--text); }
+.gradient-editor { position:fixed; inset:0; pointer-events:none; z-index:4; color:var(--text); --gradient-handle:#4da3ff; }
 .gradient-line { position:absolute; inset:0; width:100%; height:100%; }
-.gradient-line polyline { stroke:#4da3ff; stroke-width:3; fill:none; }
+.gradient-line polyline { stroke:var(--gradient-handle); stroke-width:3; fill:none; }
 .gradient-line .gradient-hit { stroke:transparent; stroke-width:22; pointer-events:stroke; touch-action:none; cursor:grab; }
 .gradient-dot { position:absolute; pointer-events:auto; touch-action:none; cursor:grab; transform:translate(-50%,-50%); background:transparent; border:0; border-radius:50%; width:30px; height:30px; padding:0; z-index:4; }
-.gradient-dot::after { content:''; display:block; margin:auto; width:13px; height:13px; border:2px solid white; border-radius:50%; background:#4da3ff; }
+.gradient-dot::after { content:''; display:block; margin:auto; width:13px; height:13px; border:2px solid white; border-radius:50%; background:var(--gradient-handle); }
 .gradient-dot:active { cursor:grabbing; }
-.gradient-box { position:absolute; z-index:2; pointer-events:auto; transform:translate(-50%,calc(-100% - 18px)); border:1px solid #4da3ff; border-radius:6px; padding:4px 20px 3px 5px; background:var(--panel); font-size:11px; }
+.gradient-box { position:absolute; z-index:2; pointer-events:auto; transform:translate(-50%,calc(-100% - 18px)); border:1px solid var(--gradient-handle); border-radius:6px; padding:4px 20px 3px 5px; background:var(--panel); font-size:11px; }
 .gradient-box:focus-within,.gradient-box:hover { z-index:3; }
+.gradient-selected { --gradient-handle:#ff52ba; }
+.gradient-selected .gradient-box { z-index:3; box-shadow:0 0 0 1px var(--gradient-handle); }
+.gradient-selected .gradient-dot::after { box-shadow:0 0 0 2px #382035; }
+.gradient-selected .gradient-line polyline:first-child { stroke-width:5; }
 .gradient-box input { width:52px; padding:2px; }
 .gradient-delete,.gradient-convert { cursor:pointer; color:inherit; background:transparent; border:0; }
 .gradient-delete { position:absolute; top:0; right:0; font-size:16px; }

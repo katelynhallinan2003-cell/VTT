@@ -3,7 +3,7 @@ import { DEFAULT_GRID, drawingToWire, normalizeDrawing } from '../src/core/model
 import { gradientCutsForPaint, storedControls } from '../src/core/gradientBoundaries';
 import { dragGradient, gradientPath, initialGradientLine } from '../src/core/gradientGeometry';
 import { groundAtTerrain, slopeAt, standingGround, terrainOf } from '../src/core/terrain';
-import { areaShape, terrainEdges } from '../src/core/terrainEdges';
+import { areaShape, terrainEdges, fillTerrainHoles, patchStroke } from '../src/core/terrainEdges';
 import { movementCost } from '../src/core/movementCost';
 import type { Seg } from '../src/core/walls';
 import type { GradientControl, Vec } from '../src/types';
@@ -93,4 +93,47 @@ describe('editable gradients',()=>{
     const keyed=Object.fromEntries(d.gradient!.map((c,i)=>[i,{...c,path:{...c.path}}]));
     expect(normalizeDrawing('hill',{...wire,gradient:keyed})?.gradient).toEqual(d.gradient);
   });
+});
+
+
+describe('filling selected terrain holes',()=>{
+  const box=(x:number,y:number,w:number,h:number):[number,number][]=>[[x,y],[x+w,y],[x+w,y+h],[x,y+h],[x,y]];
+  for(const gradient of [false,true]) it('fills only bare enclosed ground on '+(gradient?'a gradient':'flat terrain'),()=>{
+    const base=normalizeDrawing('base',{...patchStroke([box(0,0,60,40),box(5,5,15,15),box(30,5,10,10)],'base',15),
+      gradientEnabled:gradient,gradient:gradient ? [{id:'a',path:[at(0,22)],height:10},{id:'b',path:[at(60,30)],height:30}] : undefined,t:1})!;
+    const island=normalizeDrawing('i',{...patchStroke([box(9,9,5,5)],'island',0),t:2})!;
+    const notch=normalizeDrawing('n',{...patchStroke([box(45,20,20,5)],'base',null),t:3})!;
+    const initial=[base,island,notch], t=terrainOf(initial,grid);
+    const apply=(all:boolean)=>{
+      const edits=fillTerrainHoles(t,['base'],undefined,all).map((d,i)=>normalizeDrawing('e'+i,{...d,t:4})!);
+      return terrainOf([...initial,...edits],grid);
+    };
+    const normal=apply(false);
+    expect(groundAtTerrain(normal,at(6,6))).toBeGreaterThan(0);
+    expect(groundAtTerrain(normal,at(32,7))).toBeGreaterThan(0);
+    expect(groundAtTerrain(normal,at(11,11))).toBe(0);
+    expect(groundAtTerrain(normal,at(58,22))).toBe(0);
+    if (gradient) {
+      const all=apply(true);
+      expect(slopeAt(all,at(11,11))).toBeDefined();
+      expect(groundAtTerrain(all,at(58,22))).toBe(0);
+      expect(fillTerrainHoles(all,['base'],undefined,true)).toHaveLength(0);
+    }
+  });
+});
+
+it('joins equal-height border fragments along the outline and preserves explicit edits to old fragments',()=>{
+  const hill=normalizeDrawing('hill',{k:'rect',hz:12,p:'0,0,60,30',gradientEnabled:true,t:1})!;
+  const neighbor=(id:string,left:number,right:number,h=25)=>normalizeDrawing(id,{k:'rect',hz:h,p:[left,-5,right,0].join(','),t:2})!;
+  const ground=[neighbor('one',0,16),neighbor('two',18,36),neighbor('three',36,50),neighbor('four',50,60,10)];
+  const controls=(d=hill)=>terrainOf([d,...ground],grid).areas.find(a=>a.id==='hill')!.gradient!;
+  const lines=controls();
+  expect(lines.map(c=>c.height).sort()).toEqual([10,25]);
+  const joined=lines.find(c=>c.height===25)!;
+  expect(joined.path.every(p=>p.y===0)).toBe(true);
+  expect(Math.abs(joined.path[0].x-joined.path.at(-1)!.x)).toBe(50);
+  const changed=controls({...hill,gradient:[{...joined,height:18,boundary:'height'}]});
+  expect(changed.find(c=>c.height===18)?.path).toEqual(joined.path);
+  const older=controls({...hill,gradient:[{id:'join:two:0',height:13,path:[at(18),at(36)],boundary:'height'}]});
+  expect(older.find(c=>c.height===13)?.path).toEqual([at(18),at(36)]);
 });

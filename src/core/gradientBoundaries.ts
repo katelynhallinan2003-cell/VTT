@@ -50,6 +50,93 @@ function trim(path:Vec[],shape:MultiPolygon,outline:ReturnType<typeof edges>):Ve
   return runs.sort((a,b)=>length(b)-length(a))[0] ?? [];
 }
 
+type BoundaryRun={key:string; height:number; path:Vec[]; bare:boolean; id?:string};
+
+/** Join along the ring itself, including short breaks left by a round brush.
+ * Existing individually edited lines and actual changes of height divide the run. */
+function joinedBoundary(runs:BoundaryRun[],cell:number,protectedIds:Set<string>):GradientControl[] {
+  const size=(r:BoundaryRun)=>r.path.reduce((sum,p,i)=>sum+(i ? distance(p,r.path[i-1]) : 0),0);
+  const lengths=runs.map(size), perimeter=lengths.reduce((a,b)=>a+b,0);
+  const same=(a:BoundaryRun,b:BoundaryRun)=>!!a.id && !!b.id && a.height===b.height &&
+    !protectedIds.has(a.id) && !protectedIds.has(b.id);
+  const contact=lengths.reduce((sum,len,i)=>sum+(runs[i].id ? len : 0),0);
+  const gap=Math.max(cell,contact>perimeter*.75 ? perimeter*.1 : 0);
+  const effective=runs.map((run,i)=>{
+    if (!run.bare || lengths[i]>gap) return run;
+    const prev=runs[(i+runs.length-1)%runs.length], next=runs[(i+1)%runs.length];
+    return prev!==next && same(prev,next) ? {...run,id:prev.id,height:prev.height} : run;
+  });
+  const start=effective.findIndex((r,i)=>!same(r,effective[(i+effective.length-1)%effective.length]));
+  const result:GradientControl[]=[];
+  let group:BoundaryRun[]=[];
+  const flush=()=>{
+    if (!group.length) return;
+    const ids=[...new Set(group.map(r=>r.id!))].sort();
+    const path=group.flatMap((r,i)=>i ? r.path.slice(1) : r.path);
+    result.push({id:ids.length===1 ? ids[0] : 'join:merged:'+ids[0],height:group[0].height,path});
+    group=[];
+  };
+  for(let i=0;i<effective.length;i++) {
+    const run=effective[(Math.max(0,start)+i)%effective.length];
+    if (group.length && !same(group[group.length-1],run)) flush();
+    if (run.id) group.push(run);
+  }
+  flush();
+  return result;
+}
+
+type Layer=ReturnType<typeof terrainLayers>[number];
+const boundaryCache=new WeakMap<MultiPolygon,{ neighbors:MultiPolygon[]; key:string; shape:MultiPolygon; defaults:GradientControl[]; outline:ReturnType<typeof edges> }>();
+
+function boundaryShape(layer:Layer, neighbors:Layer[], cell:number, protectedIds:Set<string>) {
+  const area=layer.area;
+  const key=JSON.stringify([cell,area.order,[...protectedIds].sort(),...neighbors.map(l=>[l.area.id,l.area.order,l.area.h,l.area.add,l.area.gradientEnabled])]);
+  const cached=boundaryCache.get(layer.shape);
+  if (cached?.key===key && neighbors.every((l,i)=>l.shape===cached.neighbors[i])) return cached;
+  // Older scenes can already contain flat paint covering a gradient.
+  const covers=neighbors.filter(l=>l.area.order>area.order && !l.area.add && !l.area.gradientEnabled);
+  const shape=covers.length ? clip.difference(layer.shape,...covers.map(l=>l.shape)) : layer.shape;
+  const neighborEdges=neighbors.flatMap(l=>edges(l.shape));
+  const defaults:GradientControl[]=[], count=new Map<string,number>();
+  for(const poly of shape) for(const ring of poly) {
+    const runs:BoundaryRun[]=[];
+    for(let i=1;i<ring.length;i++) {
+      const a=vec(ring[i-1]),b=vec(ring[i]),len=distance(a,b);
+      if(len<eps) continue;
+      const cuts=splits(a,b,neighborEdges);
+      for(let j=1;j<cuts.length;j++) {
+        const p=along(a,b,(cuts[j-1]+cuts[j])/2);
+        // Clipping rings keep the filled ground to their left, including holes.
+        const n=Math.min(cell*1e-5,len*(cuts[j]-cuts[j-1])*1e-4)/len;
+        p.x+=n*(b.y-a.y); p.y-=n*(b.x-a.x);
+        let key='',height=0,flat=true,bare=true;
+        for(const l of neighbors) if(l.shape.some(poly=>inRegion(poly,p))) {
+          bare=false;
+          if(!l.area.add || l.area.gradientEnabled) { height=0; flat=!l.area.gradientEnabled; }
+          height+=l.area.h;
+          key=flat ? l.area.id : '';
+        }
+        const last=runs.at(-1);
+        if(last && last.key===key && last.height===height && last.bare===bare) last.path.push(along(a,b,cuts[j]));
+        else runs.push({key,height,bare,path:[along(a,b,cuts[j-1]),along(a,b,cuts[j])]});
+      }
+    }
+    const first=runs[0], last=runs.at(-1);
+    if(first && last && first!==last && first.key===last.key && first.height===last.height && first.bare===last.bare) {
+      first.path=[...last.path,...first.path.slice(1)]; runs.pop();
+    }
+    for(const run of runs) if(run.key) {
+      const index=count.get(run.key) ?? 0;
+      run.id='join:'+run.key+':'+index;
+      count.set(run.key,index+1);
+    }
+    defaults.push(...joinedBoundary(runs,cell,protectedIds));
+  }
+  const result={key,neighbors:neighbors.map(l=>l.shape),shape,defaults,outline:edges(shape)};
+  boundaryCache.set(layer.shape,result);
+  return result;
+}
+
 export function resolveGradientBoundaries(t:Terrain) {
   const layers=terrainLayers(t);
   for(const layer of layers) {
@@ -58,45 +145,9 @@ export function resolveGradientBoundaries(t:Terrain) {
     const stored=area.gradient ?? [];
     const neighbors=layers.filter(l=>l!==layer && l.area.b.x<=area.b.x+area.b.w && l.area.b.x+l.area.b.w>=area.b.x &&
       l.area.b.y<=area.b.y+area.b.h && l.area.b.y+l.area.b.h>=area.b.y);
-    // Older scenes can already contain flat paint covering a gradient.
-    const covers=neighbors.filter(l=>l.area.order>area.order && !l.area.add && !l.area.gradientEnabled);
-    if(covers.length) layer.shape=clip.difference(layer.shape,...covers.map(l=>l.shape));
-    const shape=layer.shape, neighborEdges=neighbors.flatMap(l=>edges(l.shape));
-    const defaults:GradientControl[]=[], count=new Map<string,number>();
-    for(const poly of shape) for(const ring of poly) {
-      const runs:{key:string;height:number;path:Vec[]}[]=[];
-      for(let i=1;i<ring.length;i++) {
-        const a=vec(ring[i-1]),b=vec(ring[i]),len=distance(a,b);
-        if(len<eps) continue;
-        const cuts=splits(a,b,neighborEdges);
-        for(let j=1;j<cuts.length;j++) {
-          const p=along(a,b,(cuts[j-1]+cuts[j])/2);
-          // Clipping rings keep the filled ground to their left, including holes.
-          const n=Math.min(t.grid.cell*1e-5,len*(cuts[j]-cuts[j-1])*1e-4)/len;
-          p.x+=n*(b.y-a.y); p.y-=n*(b.x-a.x);
-          let key='',height=0,flat=true;
-          for(const l of neighbors) if(l.shape.some(poly=>inRegion(poly,p))) {
-            if(!l.area.add || l.area.gradientEnabled) { height=0; flat=!l.area.gradientEnabled; }
-            height+=l.area.h;
-            key=flat ? l.area.id : '';
-          }
-          const last=runs.at(-1);
-          if(last && last.key===key && last.height===height) last.path.push(along(a,b,cuts[j]));
-          else runs.push({key,height,path:[along(a,b,cuts[j-1]),along(a,b,cuts[j])]});
-        }
-      }
-      const first=runs[0], last=runs.at(-1);
-      if(first && last && first!==last && first.key===last.key && first.height===last.height) {
-        first.path=[...last.path,...first.path.slice(1)]; runs.pop();
-      }
-      for(const run of runs) if(run.key) {
-        const index=count.get(run.key) ?? 0;
-        defaults.push({id:'join:'+run.key+':'+index,height:run.height,path:run.path});
-        count.set(run.key,index+1);
-      }
-    }
+    const {shape,defaults,outline}=boundaryShape(layer,neighbors,t.grid.cell,new Set(stored.filter(c=>shared(c.id) && !c.id.startsWith('join:merged:')).map(c=>c.id)));
+    layer.shape=shape;
     area.boundaryDefaults=defaults;
-    const outline=edges(shape);
     const visible=(c:GradientControl) => {
       const path=trim(c.path,shape,outline);
       return path.length ? [{...c,path}] : [];

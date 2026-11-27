@@ -16,6 +16,10 @@ export type WallKind = 'wall' | 'door' | 'window';
 export type Side = 0 | 1 | -1;
 
 export interface Wall {
+  /** Stored cut along a terrain contour; shared by rendering, movement and exploration. */
+  gap?: true;
+  /** Effective terrain face, generated from the painted ground. */
+  face?: import('./terrainEdges').TerrainEdge;
   id: string;
   a: Vec;
   b: Vec;
@@ -31,6 +35,7 @@ export interface Wall {
 }
 
 export interface Seg {
+  passage?: boolean;
   /** Painted terrain carries the scale used to measure how far its near face can be seen. */
   terrainPxPerFt?: number;
   low?: number;
@@ -64,14 +69,16 @@ const CODE_KIND: Record<string, WallKind> = { w: 'wall', d: 'door', n: 'window' 
 
 const r1 = (n: number) => Math.round(n * 10) / 10;
 
-export function wallToWire(w: Pick<Wall, 'a' | 'b' | 'k' | 'open' | 'vis'> & Partial<Pick<Wall, 'one' | 'h'>>): Record<string, unknown> {
+export function wallToWire(w: Pick<Wall, 'a' | 'b' | 'k' | 'open' | 'vis'> & Partial<Pick<Wall, 'one' | 'h' | 'gap' | 'face'>>): Record<string, unknown> {
   return {
-    p: `${r1(w.a.x)},${r1(w.a.y)},${r1(w.b.x)},${r1(w.b.y)}`,
+    p: [w.a.x,w.a.y,w.b.x,w.b.y].map(n=>w.gap || w.face ? n : r1(n)).join(','),
+    ...(w.gap ? {gap:1} : {}),
+    ...(w.face ? {face:[w.face.low,w.face.one,w.face.terrainPxPerFt]} : {}),
     k: KIND_CODE[w.k],
     ...(w.k !== 'wall' && w.open ? { o: 1 } : {}),
     ...(w.vis ? { v: 1 } : {}),
     ...(w.one ? { s: w.one } : {}),
-    ...(w.h && w.h > 0 ? { h: Math.round(w.h) } : {}),
+    ...(w.h && w.h > 0 ? { h: w.face ? w.h : Math.round(w.h) } : {}),
   };
 }
 
@@ -82,7 +89,11 @@ export function normalizeWall(id: string, raw: any): Wall | null {
   const k = CODE_KIND[raw.k as string] ?? 'wall';
   const one: Side = raw.s === 1 ? 1 : raw.s === -1 ? -1 : 0;
   const h = Number(raw.h);
-  return { id, a: { x: n[0], y: n[1] }, b: { x: n[2], y: n[3] }, k, open: k !== 'wall' && !!raw.o, vis: !!raw.v, one, h: Number.isFinite(h) && h > 0 ? Math.min(1000, Math.round(h)) : 0 };
+  const a={x:n[0],y:n[1]}, b={x:n[2],y:n[3]};
+  const f=raw.face;
+  const face = k==='wall' && h>0 && Array.isArray(f) && Number.isFinite(f[0]) && (f[1]===1 || f[1]===-1) && Number.isFinite(f[2]) && f[2]>0
+    ? {a,b,low:f[0],top:f[0]+h,one:f[1] as 1|-1,terrainPxPerFt:f[2]} : undefined;
+  return { id, ...(face ? {face} : {}), ...(raw.gap === 1 ? {gap:true as const} : {}), a, b, k, open: k !== 'wall' && !!raw.o, vis: !!raw.v, one, h: Number.isFinite(h) && h > 0 ? (face ? h : Math.min(1000, Math.round(h))) : 0 };
 }
 
 /** The pieces of wall that block something, with what it takes to get past each. `topOf` says how high a wall's top is (feet above the map's base). */
@@ -388,8 +399,8 @@ export function carveWalls(walls: Iterable<Wall>, cut: Seg, tol: number): { remo
     if (c1 - c0 < tol) continue;
     remove.push(w.id);
     const at = (s: number): Vec => ({ x: w.a.x + ux * s, y: w.a.y + uy * s });
-    if (c0 > tol) add.push({ a: { ...w.a }, b: at(c0), k: w.k, open: false, vis: w.vis, one: w.one, h: w.h });
-    if (len - c1 > tol) add.push({ a: at(c1), b: { ...w.b }, k: w.k, open: false, vis: w.vis, one: w.one, h: w.h });
+    if (c0 > tol) add.push(wallPiece(w,w.a,at(c0)));
+    if (len - c1 > tol) add.push(wallPiece(w,at(c1),w.b));
   }
   return { remove, add };
 }
@@ -481,10 +492,13 @@ export function hatchTicks(a: Vec, b: Vec, side: Side, spacing: number, len: num
 export const onBlockedSide = (w: Pick<Wall, 'a' | 'b' | 'one'>, p: Vec): boolean => !w.one || sideOf(w, p) === w.one || sideOf(w, p) === 0;
 
 // ------------------------------------------------------------------ splitting and joining
+function wallPiece(w: Wall, a:Vec, b:Vec): Omit<Wall,'id'> {
+  return {a,b,k:w.k,open:w.open,vis:w.vis,one:w.one,h:w.h,...(w.face ? {face:{...w.face,a,b}} : {})};
+}
+
 /** The two walls a wall becomes when it gets a corner at `at` (a point on it). */
 export function splitPieces(w: Wall, at: Vec): [Omit<Wall, 'id'>, Omit<Wall, 'id'>] {
-  const base = { k: w.k, open: w.open, vis: w.vis, one: w.one, h: w.h };
-  return [{ ...base, a: { ...w.a }, b: { ...at } }, { ...base, a: { ...at }, b: { ...w.b } }];
+  return [wallPiece(w,w.a,at),wallPiece(w,at,w.b)];
 }
 
 /**

@@ -13,13 +13,25 @@ export function GradientEditor({board,ui,client}: {board: Board; ui: UiState; cl
   const state=useUi(ui);
   useClient(client);
   const id=state.gradientArea!;
+  const [selected,setSelected]=useState<string|null>(null);
   const controls=board.gradientControls(id);
   const fields=useRef(new Map<string,HTMLInputElement>());
   const drag=useRef<{control:GradientControl; part:Part; from:Vec; screen:Vec; path?:Vec[]} | null>(null);
   const [preview,setPreview]=useState<{id:string;path:Vec[]} | null>(null);
+  const frame=useRef(0);
+  const pending=useRef<Vec|null>(null);
+  const previewAt=(pointer:Vec)=>{
+    const d=drag.current;
+    if(!d || Math.hypot(pointer.x-d.screen.x,pointer.y-d.screen.y)<2) return;
+    const current=d.part==='line' ? d.control.path : d.path ?? d.control.path;
+    const path=board.dragGradientHandle(id,current,d.part,d.from,board.screenToWorld(pointer.x,pointer.y));
+    if (path) { d.path=path; setPreview({id:d.control.id,path}); }
+  };
+  const cancelFrame=()=>{ cancelAnimationFrame(frame.current); frame.current=0; pending.current=null; };
+  useLayoutEffect(()=>cancelFrame,[]);
   const focus=(key:string)=>{
     const input=fields.current.get(key);
-    if(input) { input.focus({preventScroll:true}); input.select(); }
+    if(input) { setSelected(key); input.focus({preventScroll:true}); input.select(); }
     return !!input;
   };
   useLayoutEffect(()=>{
@@ -38,28 +50,33 @@ export function GradientEditor({board,ui,client}: {board: Board; ui: UiState; cl
         focus(c.id);
       },
       onPointerMove(e:TargetedPointerEvent<Element>) {
-        const d=drag.current;
-        if(!d || !e.currentTarget.hasPointerCapture(e.pointerId) || Math.hypot(e.clientX-d.screen.x,e.clientY-d.screen.y)<2) return;
-        const current=d.part==='line' ? d.control.path : d.path ?? d.control.path;
-        const path=board.dragGradientHandle(id,current,d.part,d.from,board.screenToWorld(e.clientX,e.clientY));
-        if(path) { d.path=path; setPreview({id:c.id,path}); }
+        if(!drag.current || !e.currentTarget.hasPointerCapture(e.pointerId)) return;
+        pending.current={x:e.clientX,y:e.clientY};
+        if(!frame.current) frame.current=requestAnimationFrame(()=>{
+          frame.current=0;
+          if(pending.current) previewAt(pending.current);
+          pending.current=null;
+        });
       },
       onPointerUp(e:TargetedPointerEvent<Element>) {
         if(!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+        cancelFrame();
+        previewAt({x:e.clientX,y:e.clientY});
         const path=drag.current?.path;
         if(path) update(c.id,control=>({...control,path}));
         drag.current=null; setPreview(null);
       },
-      onPointerCancel() { drag.current=null; setPreview(null); }
+      onPointerCancel() { cancelFrame(); drag.current=null; setPreview(null); }
     };
   }
+  const origin=board.worldToScreen({x:0,y:0}), zoom=board.zoomNow;
   return <div class="gradient-editor">
     {controls.map(c=>{
       const path=preview?.id===c.id ? preview.path : c.path;
-      const screen=path.map(p=>board.worldToScreen(p));
+      const screen=path.map(p=>({x:origin.x+p.x*zoom,y:origin.y+p.y*zoom}));
       const pos=(p:Vec)=>({left:p.x+'px',top:p.y+'px'});
       const points=screen.map(p=>p.x+','+p.y).join(' ');
-      return <div key={c.id}>
+      return <div key={c.id} class={selected===c.id ? 'gradient-selected' : undefined} onPointerDownCapture={()=>setSelected(c.id)} onFocusIn={()=>setSelected(c.id)}>
         {screen.length>1 && <svg class="gradient-line"><polyline points={points}/>
           <polyline class="gradient-hit" aria-label="Move height line" points={points} {...handlers(c,'line')}/></svg>}
         <button class="gradient-dot" aria-label="Move height point" style={pos(screen[0])}

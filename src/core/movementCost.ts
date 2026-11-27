@@ -42,24 +42,29 @@ function crossing(a: Vec, b: Vec, edge: Seg): number | null {
 }
 
 export function movementCost(grid: GridSettings, path: Vec[], flyer: number | null, ctx: WalkCtx,
-  edges: Seg[], walls: Seg[]) {
+  edges: Seg[], walls: Seg[], stops: number[] = []) {
   const flightRuns: number[] | undefined = flyer === null && !ctx.slope ? undefined : [];
   const flat = pathFt(grid, path, [], flightRuns);
   if (path.length < 2) return {ft:0, note:''};
   let slopeExtra = 0;
   let rough = 0, run = 0, wallAtJoin = 0;
   // Each interval describes the surface actually traversed after its entry point.
-  const profile: {run: number; ground: number; endGround?: number; endRun?: number; wall: number}[] = [];
+  const profile: {run: number; ground: number; endGround?: number; endRun?: number; wall: number; passage?: boolean; landing?:boolean; solid?:boolean; slopeExtra?:number}[] = [];
+  let passageAtJoin = false, solidAtJoin = false;
   for (let i = 1; i < path.length; i++) {
     const a = path[i-1], b = path[i], dx = b.x-a.x, dy = b.y-a.y;
     const length = Math.hypot(dx,dy);
     if (!length) continue;
     const ft = flightRuns ? flightRuns[i-1] - run : length * grid.ft / grid.cell;
     const cuts = new Map<number, number>([[0,wallAtJoin],[1,0]]);
+    const passages: Set<number> = new Set(passageAtJoin ? [0] : []);
+    const solid: Set<number> = new Set<number>(solidAtJoin ? [0] : []);
+    if (stops.includes(i-1)) profile.push({run,ground:ctx.ground(a),wall:0,landing:true});
     const cut = (edge: Seg, wall: number) => {
       const t = crossing(a,b,edge);
       if (t === null || t < -EPS || t > 1+EPS) return;
       const key = Math.max(0, Math.min(1, Math.round(t*1e9)/1e9));
+      (edge.passage ? passages : solid).add(key);
       cuts.set(key, Math.max(cuts.get(key) ?? 0, wall));
     };
     for (const edge of edges) cut(edge,0);
@@ -73,7 +78,7 @@ export function movementCost(grid: GridSettings, path: Vec[], flyer: number | nu
       const at = (t: number) => ({x:a.x+dx*t,y:a.y+dy*t});
       const slope = ctx.slope?.(at(mid));
       if (!slope) {
-        profile.push({run:run+ft*from,ground:ctx.ground(at(mid)),wall:cuts.get(from)!});
+        profile.push({run:run+ft*from,ground:ctx.ground(at(mid)),passage:passages.has(from) && !solid.has(from),solid:solid.has(from),wall:cuts.get(from)!});
         continue;
       }
       const span = stations[j]-from;
@@ -82,12 +87,14 @@ export function movementCost(grid: GridSettings, path: Vec[], flyer: number | nu
       for (let k=0; k<steps; k++) {
         const t=from+span*(k+1)/steps, endGround=slope(at(t)), across=ft*span/steps;
         const extra=Math.hypot(across,endGround-ground)-across;
-        slopeExtra += extra * (flyer===null && ctx.rough(at(t-span/(2*steps))) ? 2 : 1);
-        profile.push({run:run+ft*(t-span/steps),ground,endGround,endRun:run+ft*t,wall:k===0 ? cuts.get(from)! : 0});
+        const cost=extra * (flyer===null && ctx.rough(at(t-span/(2*steps))) ? 2 : 1);
+        slopeExtra+=cost;
+        profile.push({run:run+ft*(t-span/steps),ground,endGround,endRun:run+ft*t,slopeExtra:cost,passage:k===0 && passages.has(from) && !solid.has(from),solid:k===0 && solid.has(from),wall:k===0 ? cuts.get(from)! : 0});
         ground=endGround;
       }
     }
     wallAtJoin = cuts.get(1)!;
+    passageAtJoin=passages.has(1); solidAtJoin=solid.has(1);
     if (flyer === null) rough += roughDistance(grid,a,b,ctx.rough);
     run += ft;
   }
@@ -95,7 +102,43 @@ export function movementCost(grid: GridSettings, path: Vec[], flyer: number | nu
   let height = ctx.ground(path[0]), ascent = 0, descent = 0;
   const air: AirPoint[] = [];
   if (flyer !== null) air.push({run:0,z:Math.max(flyer,height)});
-  profile.push({run, ground:ctx.ground(path[path.length-1]), wall:wallAtJoin});
+  profile.push({run, ground:ctx.ground(path[path.length-1]), wall:wallAtJoin,passage:passageAtJoin && !solidAtJoin});
+  // Within a run of open faces, a raised deck can be passed underneath. Pin the
+  // ground at both ends, at deliberate stops, and on both sides of an intact face.
+  if (profile.some(s=>s.passage)) {
+    // A sloping deck also has an underside. Between two open faces at the same
+    // floor level its surface samples do not add ramp distance to the walk below.
+    let entered=-1, floor=height;
+    for (let i=0;i<profile.length;i++) {
+      const step=profile[i], before=i ? profile[i-1].endGround ?? profile[i-1].ground : height;
+      if (step.landing || step.solid) entered=-1;
+      if (!step.passage) continue;
+      if (entered>=0 && Math.abs(step.ground-floor)<EPS && before>floor+EPS) {
+        const deck=profile.slice(entered,i);
+        if (deck.some(s=>s.endGround!==undefined) && deck.every(s=>Math.min(s.ground,s.endGround ?? s.ground)>=floor-EPS)) {
+          for (const s of deck) { slopeExtra-=s.slopeExtra ?? 0; s.ground=floor; s.endGround=undefined; s.endRun=undefined; }
+        }
+      }
+      entered=step.ground>before+EPS ? i : -1;
+      floor=before;
+    }
+    const levels=[{run:0,ground:height,wall:0},...profile];
+    let first=0;
+    for (let i=1;i<=levels.length;i++) {
+      const s=levels[i], prev=levels[i-1];
+      if (s && !s.landing && !prev.landing && s.endGround===undefined && prev.endGround===undefined &&
+          (s.passage || Math.abs(prev.ground-s.ground)<EPS)) continue;
+      let floor=levels[first].ground;
+      const fromLeft:number[]=[];
+      for (let j=first;j<i;j++) { floor=Math.min(floor,levels[j].ground); fromLeft.push(floor); }
+      floor=levels[i-1].ground;
+      for (let j=i-1;j>=first;j--) {
+        floor=Math.min(floor,levels[j].ground);
+        levels[j].ground=Math.max(floor,fromLeft[j-first]);
+      }
+      first=i;
+    }
+  }
   for (const [i, station] of profile.entries()) {
     const low = Math.min(height,station.ground), high = Math.max(height,station.ground);
     const summit = Math.max(high,low+station.wall);

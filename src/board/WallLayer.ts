@@ -1,7 +1,6 @@
 import { Container, Graphics } from 'pixi.js';
 import { hatchTicks, wallLength, wallMid, type Wall, type WallKind } from '../core/walls';
 import type { Vec } from '../types';
-import type { TerrainEdge } from '../core/terrainEdges';
 
 const COLOR: Record<WallKind, number> = { wall: 0xffd27a, door: 0xe8873a, window: 0x7fd8ff };
 const SELECT = 0x4da3ff;
@@ -46,23 +45,24 @@ export class WallLayer {
 
   clear() { this.g.clear(); this.key = ''; }
 
-  sync(walls: Wall[], o: WallDrawOpts, rev: number | string, show: boolean, terrain: TerrainEdge[] = []) {
+  sync(walls: Wall[], o: WallDrawOpts, rev: number | string, show: boolean) {
     this.container.visible = show;
     if (!show) return;
     const key = `${rev}|${o.z.toFixed(3)}|${o.cell}|${o.showAll ? 1 : 0}|${o.handles ? 1 : 0}|${[...o.selected].sort().join(',')}|${o.hover ?? ''}`;
     if (key === this.key) return;
     this.key = key;
-    this.build(walls, o, terrain);
+    this.build(walls, o);
   }
 
-  private build(walls: Wall[], o: WallDrawOpts, terrain: TerrainEdge[]) {
+  private build(walls: Wall[], o: WallDrawOpts) {
     const g = this.g;
     g.clear();
     const px = 1 / o.z;
     const w = Math.max(2.5 * px, o.cell * 0.05);
-    for (const edge of terrain) g.moveTo(edge.a.x,edge.a.y).lineTo(edge.b.x,edge.b.y);
+    const all = o.showAll ? walls : walls.filter(w=>w.vis);
+    for (const w of all) if (w.face) g.moveTo(w.a.x,w.a.y).lineTo(w.b.x,w.b.y);
     g.stroke({ width: w, color: COLOR.wall, alpha: 0.92 });
-    const list = o.showAll ? walls : walls.filter((x) => x.vis);
+    const list=all.filter(w=>!w.face);
     // under-strokes first so crossing walls do not cut each other
     for (const s of list) {
       g.moveTo(s.a.x, s.a.y).lineTo(s.b.x, s.b.y);
@@ -106,7 +106,7 @@ export class WallLayer {
     }
 
     // selection and hover
-    for (const s of list) {
+    for (const s of all) {
       const sel = o.selected.has(s.id);
       const hov = o.hover === s.id;
       if (!sel && !hov) continue;
@@ -114,7 +114,8 @@ export class WallLayer {
       g.stroke({ width: w + 5 * px, color: sel ? SELECT : HOVER, alpha: sel ? 0.55 : 0.3, cap: 'round' });
     }
     if (o.handles) {
-      for (const s of list) {
+      for (const s of all) {
+        if (s.face && !o.selected.has(s.id)) continue;
         const sel = o.selected.has(s.id);
         for (const p of [s.a, s.b]) {
           g.circle(p.x, p.y, (sel ? 5 : 3.5) * px);

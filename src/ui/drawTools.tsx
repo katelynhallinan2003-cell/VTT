@@ -154,7 +154,7 @@ export function DrawFlyout(props: { ui: UiState; client: TableClient }) {
   );
 }
 
-const BRUSH_SIZES = [1, 2, 3, 4, 6, 8];
+const BRUSH_SIZES = ['fine', 1, 2, 3, 4, 8] as const;
 
 export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromColor?: () => void }) {
   const { ui, client } = props;
@@ -195,6 +195,13 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
   const roughN = roughOf(client.drawingsSorted(), grid).areas.length;
   const modes = rough ? ([['paint', 'Paint'], ['erase', 'Erase']] as const) : ([['paint', 'Paint'], ['erase', 'Erase'], ['move', 'Select']] as const);
   const gradient = !!d.gradientArea;
+  async function fillHoles(all:boolean) {
+    const scene=client.scene;
+    const ids=await client.fillGroundHoles(mine.map(a=>a.id),picks?.[0],all);
+    if (client.scene!==scene) return;
+    if (!ids.length) { toast(all ? 'No enclosed holes to fill.' : 'No enclosed unpainted holes.'); return; }
+    if (!gradient) ui.selectDrawings([...(one?.ids ?? []),...ids]);
+  }
   async function editGradient() {
     let area = one;
     if (!one?.gradientEnabled && picks?.length === 1 && (!picks[0].whole || !one)) {
@@ -222,7 +229,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
       {mode !== 'move' && !gradient && <>
         {!gridless && <Toggle checked={d.heightSnap} onChange={v=>ui.set({heightSnap:v})} label={`Fill whole ${cellWord}s`} hint="Hold Alt to flip this for one stroke." />}
         <span class="field-label">Brush diameter ({gridless ? 'ft' : cellWord+'s'})</span>
-        <div class="chips terrain-presets">{BRUSH_SIZES.map(x => <button key={x} class={`chip ${d.heightBrush===x ? 'on' : ''}`} onClick={()=>ui.set({heightBrush:x})}>{gridless ? x*grid.ft : x}</button>)}</div>
+        <div class="chips terrain-presets">{BRUSH_SIZES.map(x => <button key={x} class={`chip ${d.heightBrush===x ? 'on' : ''}`} onClick={()=>ui.set({heightBrush:x})}>{x==='fine' ? (gridless ? '2' : '2 ft') : gridless ? x*grid.ft : x}</button>)}</div>
       </>}
       {rough && roughN > 0 && <button class="btn small danger" onClick={()=>void client.clearDrawings(x=>!!x.dt,'Clear difficult ground')}>Clear difficult ground</button>}
       {!rough && <div class="ht-card">
@@ -247,6 +254,8 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
           <div class="row wrap">
             {(!picks || picks.every(p => p.whole)) && paintable.length > 1 && <button class="btn small" title="Make these one area" onClick={() => { ui.selectDrawings(paintable.flatMap(a => a.ids)); void client.mergeAreas(paintable); }}>Merge</button>}
             {(one || picks?.length === 1) && <button class="btn small" onClick={() => gradient ? ui.set({gradientArea:undefined,gradientFocus:undefined}) : void editGradient().catch(e=>toast(e.message,'error'))}>{gradient ? 'Done' : one?.gradientEnabled ? 'Edit Gradient' : 'Make Gradient'}</button>}
+            {(one || picks?.length===1) && <button class="btn small" onClick={()=>void fillHoles(false).catch(e=>toast(e.message,'error'))}>Fill unpainted holes</button>}
+            {one?.gradientEnabled && <button class="btn small" onClick={()=>void fillHoles(true).catch(e=>toast(e.message,'error'))}>Fill all holes</button>}
             <button class="btn small danger" onClick={() => { if (picks) void client.editHeightPatches(picks,'delete'); else void client.removeDrawings(mine.flatMap((a) => a.ids), 'Delete ground'); ui.selectDrawings([]); }}>Delete {one || picks?.length === 1 ? 'area' : 'areas'}</button>
           </div>
         ) : null}
@@ -280,7 +289,7 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
   useClient(client);
   const meta = client.scene?.meta;
   const walls = client.wallsList();
-  const sel = [...d.wallSel].map((id) => client.scene?.walls.get(id)).filter((w): w is NonNullable<typeof w> => !!w);
+  const sel = [...d.wallSel].map((id) => client.wallGeometry().walls.get(id)).filter((w): w is NonNullable<typeof w> => !!w);
   const ids = sel.map((w) => w.id);
   const doors = sel.filter((w) => w.k !== 'wall');
   const openWord = doors.length && doors.every((w) => w.k === 'window') ? 'window' : doors.every((w) => w.k === 'door') ? 'door' : 'door or window';
@@ -293,7 +302,7 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
     <div class="flyout">
       <div class="flyout-title">Walls</div>
       <div class="seg">
-        {([['draw', 'Draw'], ['edit', 'Edit']] as const).map(([k, label]) => <button key={k} class={d.wallMode === k ? 'on' : ''} onClick={() => ui.set({ wallMode: k, wallSel: new Set() })}>{label}</button>)}
+        {([['draw', 'Draw'], ['edit', 'Edit'], ['erase','Erase']] as const).map(([k, label]) => <button key={k} class={d.wallMode === k ? 'on' : ''} onClick={() => ui.set({ wallMode: k, wallSel: new Set() })}>{label}</button>)}
       </div>
       {d.wallMode === 'draw' ? (
         <>
@@ -339,6 +348,11 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
           <span class="hint">{d.wallKind === 'door' || d.wallShape === 'line' ? 'Click to join segments. Enter to finish.' : d.wallShape === 'free' ? 'Drag to trace a wall.' : d.wallShape === 'circle' ? 'Drag from the centre to the edge.' : 'Drag between opposite corners.'}</span>
           {props.onDetect && <button class="btn small" title="Look for the walls printed on the map picture and add them for you to check" onClick={props.onDetect}>Detect walls from the map…</button>}
 
+        </>
+      ) : d.wallMode === 'erase' ? (
+        <>
+          <span class="field-label">Brush diameter</span>
+          <div class="seg">{[0.5,1,2,4].map(n=><button key={n} class={d.wallBrush===n ? 'on' : ''} onClick={()=>ui.set({wallBrush:n})}>{n*client.grid.ft} ft</button>)}</div>
         </>
       ) : (
         <div class="ht-card">
@@ -396,7 +410,7 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
         )}
       </div>
       <div class="row wrap">
-        <span class="hint">{walls.length ? `${walls.length} drawn wall${walls.length > 1 ? 's' : ''}` : 'No drawn walls yet'}</span>
+        <span class="hint">{walls.length ? `${walls.length} wall${walls.length > 1 ? 's' : ''}` : 'No walls yet'}</span>
         <span class="grow" />
         {walls.length > 0 && <button class="btn small danger" onClick={async () => { await client.removeWalls(walls.map((w) => w.id)); ui.set({ wallSel: new Set() }); toast('Cleared all the walls (Ctrl+Z brings them back)', 'info', 2200); }}>Clear all walls</button>}
       </div>

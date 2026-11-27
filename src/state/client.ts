@@ -1,5 +1,6 @@
+import { brushWall, resolveWalls } from '../core/wallBrush';
 import { gradientCutsForPaint } from '../core/gradientBoundaries';
-import { standingGround } from '../core/terrain';
+import { reuseStrokeGeometry, standingGround } from '../core/terrain';
 import type { Backend, Unsub } from '../backend/types';
 import { SERVER_TS } from '../backend/types';
 import {
@@ -25,10 +26,10 @@ import type {
   Handout, Rect, SceneMeta, TableMeta, TableSettings, Token, Vec, ViewCall,
 } from '../types';
 import { newAreaId } from '../core/terrain';
-import { terrainEdges, patchStroke, type HeightPatch } from '../core/terrainEdges';
+import { terrainEdges, fillTerrainHoles, patchStroke, type HeightPatch, type TerrainEdge } from '../core/terrainEdges';
 import { groundAt, zonesOf } from '../core/height';
 import { sightHeight, isLightMark, litSeen, lightOf, viewerOf, type LightSrc } from '../core/light';
-import { carveWalls, joinAt, normalizeWall, routeReveal, sightSegs, splitPieces, wallMid, wallToWire, type Wall } from '../core/walls';
+import { carveWalls, joinAt, normalizeWall, routeReveal, sightSegs, splitPieces, wallMid, wallToWire, type Seg, type Wall } from '../core/walls';
 import { buildCampaign, newLibraryItems, planImport, type CampaignFile, type CampaignLibraryItem } from '../core/campaign';
 import { addLibraryItem, removeTokenFromLib, saveTokenToLib, watchTokenLib } from './account';
 import { History } from './history';
@@ -536,7 +537,7 @@ export class TableClient {
     const drawSet = (k: string, v: any) => {
       if (!live()) return;
       const d = normalizeDrawing(k, v);
-      if (d) s.draws.set(k, d); else s.draws.delete(k);
+      if (d) { reuseStrokeGeometry(s.draws.get(k),d); s.draws.set(k,d); } else s.draws.delete(k);
       s.drawRev++; this.bump();
     };
     this.sceneUnsubs.push(b.listenChildren(P.sceneDraw(tid, sid), {
@@ -607,7 +608,24 @@ export class TableClient {
   }
 
   /** Every wall, door and window in the open scene. */
-  wallsList(): Wall[] { return [...(this.scene?.walls.values() ?? [])]; }
+  private contourCache?: {scene: SceneState | null; rev:number; grid:string; edges:TerrainEdge[]; joins:Seg[]};
+  private wallCache?: {edges:TerrainEdge[]; rev:number; plan:ReturnType<typeof resolveWalls>};
+  wallGeometry() {
+    const scene=this.scene, grid=this.grid;
+    const key=[grid.cell,grid.ft,grid.ox,grid.oy,grid.shape].join('|');
+    let c=this.contourCache;
+    if (!c || c.scene!==scene || c.rev!==(scene?.drawRev ?? -1) || c.grid!==key) {
+      const joins:Seg[]=[];
+      const edges=scene ? terrainEdges(zonesOf(scene.draws.values(),grid),joins) : [];
+      this.contourCache=c={scene,rev:scene?.drawRev ?? -1,grid:key,edges,joins};
+    }
+    const rev=scene?.wallRev ?? -1;
+    if (this.wallCache?.edges!==c.edges || this.wallCache.rev!==rev) {
+      this.wallCache={edges:c.edges,rev,plan:resolveWalls(c.edges,scene?.walls.values() ?? [])};
+    }
+    return {...this.wallCache.plan,levelJoins:c.joins};
+  }
+  wallsList(): Wall[] { return [...this.wallGeometry().walls.values()]; }
 
   private coverCache: {meta: SceneState['meta']; ops: Map<string,FogOp>; rev: number; cover: boolean} | null = null;
 
@@ -951,16 +969,46 @@ export class TableClient {
   }
 
   // ---------------------------------------------------------------- walls (DM only)
-  private wallPath(id: string) { return P.sceneWall(this.tableId, this.viewSceneId!, id); }
-  private async putWalls(list: Wall[]) {
-    const updates: Record<string, any> = {};
-    for (const w of list) updates[this.wallPath(w.id)] = wallToWire(w);
-    if (Object.keys(updates).length) await this.backend.update(updates);
+  /** Apply the gesture in one write. A cut record keeps an edited contour from
+   * regenerating; the elevation drawing itself always stays intact. */
+  private async replaceWalls(before:Wall[],after:Wall[],label:string) {
+    const scene=this.scene;
+    if (!this.isDM || !scene || (!before.length && !after.length)) return;
+    const path=(id:string)=>P.sceneWall(this.tableId,scene.id,id);
+    const apply:Record<string,any>={}, undo:Record<string,any>={};
+    for (const w of before) {
+      if (scene.walls.has(w.id)) {
+        apply[path(w.id)]=null;
+        undo[path(w.id)]=wallToWire(w);
+      } else if (w.face) {
+        const gap=path(this.backend.newKey());
+        apply[gap]=wallToWire({...w,gap:true,face:undefined});
+        undo[gap]=null;
+      }
+    }
+    for (const w of after) {
+      const id=path(w.id);
+      apply[id]=wallToWire(w);
+      if (!(id in undo)) undo[id]=null;
+    }
+    await this.backend.update(apply);
+    this.history.push({label,undo:()=>this.backend.update(undo),redo:()=>this.backend.update(apply)});
   }
-  private async dropWalls(ids: string[]) {
-    const updates: Record<string, any> = {};
-    for (const id of ids) updates[this.wallPath(id)] = null;
-    if (Object.keys(updates).length) await this.backend.update(updates);
+
+  async eraseWalls(path:Vec[],radius:number) {
+    if (!this.isDM || !this.scene || !path.length || !(radius>0)) return;
+    const before:Wall[]=[], after:Wall[]=[];
+    for (const wall of this.wallsList()) {
+      const {cut,kept}=brushWall(wall,path,radius);
+      if (!cut.length) continue;
+      if (wall.face && !this.scene.walls.has(wall.id)) {
+        for (const s of cut) after.push({...wall,...s,id:this.backend.newKey(),gap:true,face:undefined});
+      } else {
+        before.push(wall);
+        for (const s of kept) after.push({...wall,...s,id:this.backend.newKey(),face:wall.face && {...wall.face,...s}});
+      }
+    }
+    await this.replaceWalls(before,after,'Erase walls');
   }
 
   /**
@@ -975,34 +1023,29 @@ export class TableClient {
     const pieces: Wall[] = [];
     for (const w of made) {
       if (w.k === 'wall') continue;
-      const live = [...(this.scene?.walls.values() ?? [])].filter((x) => !cut.has(x.id));
+      const live = [...(this.wallGeometry().walls.values())].filter((x) => !cut.has(x.id));
       const r = carveWalls(live, w, tol);
-      for (const id of r.remove) { const old = this.scene?.walls.get(id); if (old) cut.set(id, { ...old }); }
+      for (const id of r.remove) { const old = this.wallGeometry().walls.get(id); if (old) cut.set(id, { ...old }); }
       for (const p of r.add) pieces.push({ ...p, id: this.backend.newKey() });
     }
     const gone = [...cut.values()];
     const adds = [...made, ...pieces].map((w) => ({ ...w }));
-    await this.putWalls(adds);
-    if (gone.length) await this.dropWalls(gone.map((w) => w.id));
-    this.history.push({
-      label,
-      undo: async () => { await this.dropWalls(adds.map((w) => w.id)); await this.putWalls(gone); },
-      redo: async () => { await this.putWalls(adds); await this.dropWalls(gone.map((w) => w.id)); },
-    });
+    await this.replaceWalls(gone,adds,label);
     return made.map((w) => w.id);
   }
 
   async updateWalls(ids: string[], patch: Partial<Pick<Wall, 'a' | 'b' | 'k' | 'open' | 'vis' | 'one' | 'h'>>, label = 'Change wall'): Promise<void> {
     if (!this.isDM || !this.viewSceneId) return;
-    const before = ids.map((id) => this.scene?.walls.get(id)).filter((w): w is Wall => !!w).map((w) => ({ ...w }));
+    const before = ids.map((id) => this.wallGeometry().walls.get(id)).filter((w): w is Wall => !!w).map((w) => ({ ...w }));
     if (!before.length) return;
     const after = before.map((w) => {
       const n = { ...w, ...patch };
+      if (n.face && (n.k !== 'wall' || patch.one !== undefined || !n.h || patch.a || patch.b)) delete n.face;
+      if (n.face) n.face={...n.face,top:n.face.low+n.h};
       if (n.k === 'wall') n.open = false; // only doors and windows open
       return n;
     });
-    await this.putWalls(after);
-    this.history.push({ label, key: `wall:${patch.vis !== undefined ? 'vis' : patch.k !== undefined ? 'k' : patch.one !== undefined ? 'one' : patch.h !== undefined ? 'h' : 'move'}:${before.map((w) => w.id).join(',')}`, undo: () => this.putWalls(before), redo: () => this.putWalls(after) });
+    await this.replaceWalls(before,after,label);
   }
 
   /** Move wall ends: each entry says which end of which wall goes where (used to drag a corner that several walls share). */
@@ -1011,73 +1054,59 @@ export class TableClient {
     const before: Wall[] = [];
     const after: Wall[] = [];
     for (const id of new Set(moves.map((m) => m.id))) {
-      const w = this.scene?.walls.get(id);
+      const w = this.wallGeometry().walls.get(id);
       if (!w) continue;
       before.push({ ...w });
       const n = { ...w };
       for (const m of moves) if (m.id === id) n[m.end] = { ...m.to };
+      delete n.face;
       after.push(n);
     }
     if (!after.length) return;
-    await this.putWalls(after);
-    this.history.push({ label, undo: () => this.putWalls(before), redo: () => this.putWalls(after) });
+    await this.replaceWalls(before,after,label);
   }
 
   async removeWalls(ids: string[]): Promise<void> {
     if (!this.isDM || !this.viewSceneId) return;
-    const snaps = ids.map((id) => this.scene?.walls.get(id)).filter((w): w is Wall => !!w).map((w) => ({ ...w }));
+    const snaps = ids.map((id) => this.wallGeometry().walls.get(id)).filter((w): w is Wall => !!w).map((w) => ({ ...w }));
     if (!snaps.length) return;
-    await this.dropWalls(snaps.map((w) => w.id));
-    this.history.push({ label: snaps.length > 1 ? 'Delete walls' : 'Delete wall', undo: () => this.putWalls(snaps), redo: () => this.dropWalls(snaps.map((w) => w.id)) });
+    await this.replaceWalls(snaps,[],snaps.length>1 ? 'Delete walls' : 'Delete wall');
   }
 
   /** Swap the blocked side of the one-way walls among these (two-way walls are left alone). */
   async flipWalls(ids: string[]): Promise<void> {
     if (!this.isDM || !this.viewSceneId) return;
-    const before = ids.map((id) => this.scene?.walls.get(id)).filter((w): w is Wall => !!w && w.one !== 0).map((w) => ({ ...w }));
+    const before = ids.map((id) => this.wallGeometry().walls.get(id)).filter((w): w is Wall => !!w && w.one !== 0).map((w) => ({ ...w }));
     if (!before.length) return;
     const after = before.map((w) => ({ ...w, one: (w.one === 1 ? -1 : 1) as Wall['one'] }));
-    await this.putWalls(after);
-    this.history.push({ label: 'Flip the blocked side', undo: () => this.putWalls(before), redo: () => this.putWalls(after) });
+    await this.replaceWalls(before,after,'Flip the blocked side');
   }
 
   /** Give a wall a corner at `at` (a point on it): it becomes two walls that can be bent apart. Returns the new walls' ids. */
   async splitWall(id: string, at: Vec): Promise<string[]> {
     if (!this.isDM || !this.viewSceneId) return [];
-    const w = this.scene?.walls.get(id);
+    const w = this.wallGeometry().walls.get(id);
     if (!w) return [];
     const pieces = splitPieces(w, at).map((p) => ({ ...p, id: this.backend.newKey() }));
     const old = { ...w };
-    await this.putWalls(pieces);
-    await this.dropWalls([id]);
-    this.history.push({
-      label: 'Add a corner',
-      undo: async () => { await this.dropWalls(pieces.map((p) => p.id)); await this.putWalls([old]); },
-      redo: async () => { await this.putWalls(pieces); await this.dropWalls([id]); },
-    });
+    await this.replaceWalls([old],pieces,'Add a corner');
     return pieces.map((p) => p.id);
   }
 
   /** Take out the corner at `at` where exactly two walls meet (they become one wall). False when that is not what is there. */
   async joinWallsAt(at: Vec, tol: number): Promise<boolean> {
     if (!this.isDM || !this.viewSceneId) return false;
-    const j = joinAt(this.scene?.walls.values() ?? [], at, tol);
+    const j = joinAt(this.wallGeometry().walls.values(), at, tol);
     if (!j) return false;
-    const gone = j.remove.map((id) => ({ ...this.scene!.walls.get(id)! }));
+    const gone = j.remove.map((id) => ({ ...this.wallGeometry().walls.get(id)! }));
     const made: Wall = { ...j.add, id: this.backend.newKey() };
-    await this.putWalls([made]);
-    await this.dropWalls(j.remove);
-    this.history.push({
-      label: 'Remove a corner',
-      undo: async () => { await this.dropWalls([made.id]); await this.putWalls(gone); },
-      redo: async () => { await this.putWalls([made]); await this.dropWalls(j.remove); },
-    });
+    await this.replaceWalls(gone,[made],'Remove a corner');
     return true;
   }
 
   /** Open or close a door or a window. */
   async toggleDoor(id: string): Promise<void> {
-    const w = this.scene?.walls.get(id);
+    const w = this.wallGeometry().walls.get(id);
     if (!w || w.k === 'wall') return;
     await this.updateWalls([id], { open: !w.open }, `${w.open ? 'Close' : 'Open'} ${w.k}`);
   }
@@ -1110,6 +1139,15 @@ export class TableClient {
     }
     const written = await this.addDrawings(strokes,edit === 'delete' ? 'Delete ground' : 'height' in edit ? 'Change ground' : 'Move ground');
     return written.slice(cutCount);
+  }
+
+  async fillGroundHoles(ids:string[], patch:HeightPatch|undefined, all:boolean) {
+    if (!this.isDM || !this.scene) return [];
+    const t=zonesOf(this.scene.draws.values(),this.grid);
+    if (patch && patch.sig!==t.sig) return [];
+    const strokes=fillTerrainHoles(t,ids,patch,all);
+    const written=await this.addDrawings(strokes,all ? 'Fill all holes' : 'Fill unpainted holes');
+    return written.filter((_,i)=>!strokes[i].he);
   }
 
   /** Change the height (and whether it adds to the ground below) of a painted area: all of its strokes together. */
@@ -1548,7 +1586,8 @@ export class TableClient {
     // ground they have seen is kept grey (shown dimmed when nobody can see it now) unless the DM wants it plainly clear
     const mode: FogMode = m.fog.dim ? 'x' : 'r';
     const zones = zonesOf(s.draws.values(), g);
-    const segs = [...sightSegs(s.walls.values(), w => groundAt(zones, wallMid(w)) + w.h), ...terrainEdges(zones)];
+    const geometry=this.wallGeometry();
+    const segs = [...sightSegs([...geometry.walls.values()].filter(w=>!w.face), w => groundAt(zones, wallMid(w)) + w.h), ...geometry.terrain];
     // in the dark a token remembers what its own light, its darkvision and its touch reach as it walks, and what other lights show it where it stands
     const dark = m.light.ambient === 'dark';
     const altOf = (t: Token, p: Vec = t) => sightHeight(t, standingGround(zones, p));

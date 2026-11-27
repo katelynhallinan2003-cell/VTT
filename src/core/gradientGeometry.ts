@@ -21,24 +21,43 @@ export function locate(shape: MultiPolygon, p: Vec, tolerance: number) {
 
 type Edge = NonNullable<NonNullable<ReturnType<typeof locate>>['edge']>;
 
-function contour(ring: Pair[]) {
+const contours=new WeakMap<Pair[],ReturnType<typeof measureContour>>();
+function contour(ring:Pair[]) {
+  let measured=contours.get(ring);
+  if (!measured) { measured=measureContour(ring); contours.set(ring,measured); }
+  return measured;
+}
+
+function measureContour(ring: Pair[]) {
   const offsets = [0];
   for (let i=1;i<ring.length;i++) offsets.push(offsets[i-1]+distance(point(ring[i-1]),point(ring[i])));
   const length = offsets[offsets.length-1];
   const wrap = (s:number) => ((s%length)+length)%length;
   const station = (edge:Edge) => offsets[edge.index]+distance(point(ring[edge.index]),edge.at);
+  const segment=(t:number)=>{
+    let lo=0, hi=ring.length-1;
+    while (hi-lo>1) {
+      const mid=Math.floor((lo+hi)/2);
+      if (offsets[mid]<=t) lo=mid; else hi=mid;
+    }
+    return lo;
+  };
   const at = (s:number) => {
-    const t = wrap(s);
-    let i=0;
-    while (i+2<ring.length && offsets[i+1]<=t) i++;
+    const t=wrap(s), i=segment(t);
     const f=(t-offsets[i])/(offsets[i+1]-offsets[i] || 1);
     return {x:ring[i][0]+f*(ring[i+1][0]-ring[i][0]),y:ring[i][1]+f*(ring[i+1][1]-ring[i][1])};
   };
   const arc = (start:number,span:number): Vec[] => {
     if (span<0) return arc(start+span,-span).reverse();
-    const vertices = offsets.slice(0,-1).map((s,i)=>({d:wrap(s-start),p:point(ring[i])}))
-      .filter(v=>v.d>1e-6 && v.d<span-1e-6).sort((a,b)=>a.d-b.d);
-    return [at(start),...vertices.map(v=>v.p),at(start+span)];
+    const result=[at(start)], count=ring.length-1;
+    const first=segment(wrap(start));
+    for (let j=1;j<=count;j++) {
+      const index=(first+j)%count, d=wrap(offsets[index]-start);
+      if (d>=span-1e-6) break;
+      if (d>1e-6) result.push(point(ring[index]));
+    }
+    result.push(at(start+span));
+    return result;
   };
   return {length,station,wrap,arc};
 }

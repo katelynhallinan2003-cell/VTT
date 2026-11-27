@@ -260,3 +260,4 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
 - [x] **#150 Exact elevation in Set Height** (added 2026-11-26, completed 2026-11-26). Set selected terrain to an absolute elevation and hide the painting-mode selector.
 - [x] **#151 Highlight gradient controls on hover** (added 2026-11-26, completed 2026-11-26). Hovering over a gradient height box highlights its control in pink.
 - [x] **#152 Keep the active terrain mode highlighted** (added 2026-11-26, completed 2026-11-26). Show Select as active while editing a gradient.
+- [x] **#153 Auto height map** (added 2026-11-26, completed 2026-11-26). Replaced colour matching with edge-guided height marks, connected editable polygons, a zoomable preview and protection for existing terrain. Checked the coast against Elevation test 2 and tested the snow bridge and canyon.

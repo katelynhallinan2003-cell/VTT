@@ -725,3 +725,4 @@ textarea:not(.text-editor):focus { border-color: var(--accent); }
 .gradient-delete,.gradient-convert { cursor:pointer; color:inherit; background:transparent; border:0; }
 .gradient-delete { position:absolute; top:0; right:0; font-size:16px; }
 .gradient-convert { display:block; padding:2px; color:#85bdff; font-size:11px; }
+.auto-height-map { display: block; width: 100%; height: min(53vh, 570px); margin: .65rem auto; background: var(--bg); cursor: crosshair; touch-action: none; }

@@ -18,7 +18,7 @@ import { SceneBar } from './sceneBar';
 import { saveTokensToLibrary } from './tokenLib';
 import { droppedImage } from './uploads';
 import { GradientEditor } from './GradientEditor';
-import { ColorHeightsModal } from './colorHeights';
+import { AutoHeightModal } from './autoHeight';
 import { AutoLightsModal } from './autoLights';
 import { DetectWallsModal } from './detectWalls';
 import { DrawFlyout, DrawInspector, HeightFlyout, RulerFlyout, TemplateFlyout, TestMoveBar, TextEditor, WallFlyout } from './drawTools';
@@ -518,7 +518,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {modal?.kind === 'player' && <PlayerCardModal client={client} uid={modal.uid} onClose={() => setModal(null)} />}
       {modal?.kind === 'addMap' && <AddMapModal client={client} ui={ui} board={board} onClose={() => setModal(null)} />}
       {modal?.kind === 'detectWalls' && <DetectWallsModal client={client} board={board} onClose={() => setModal(null)} />}
-      {modal?.kind === 'colorHeights' && <ColorHeightsModal client={client} board={board} onClose={() => setModal(null)} />}
+      {modal?.kind === 'colorHeights' && <AutoHeightModal client={client} board={board} onClose={() => setModal(null)} />}
       {modal?.kind === 'scenes' && <ScenesModal client={client} onClose={() => setModal(null)} onNew={() => setModal({ kind: 'newScene' })} onNewFolder={() => setModal({ kind: 'newFolder' })} />}
       {modal?.kind === 'library' && <LibraryModal client={client} onClose={() => setModal(null)} onUseMap={useLibraryMap} onAddToken={addLibraryToken} onAddSaved={(e) => { void addSavedToken(e); setModal(null); }} />}
       {modal?.kind === 'settings' && <SettingsModal key={modal.tab ?? 'first'} client={client} ui={ui} tab={modal.tab} onClose={() => setModal(null)} onSignOut={client.isDM ? props.onSignOut : undefined} />}

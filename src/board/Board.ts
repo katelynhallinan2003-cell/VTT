@@ -779,7 +779,7 @@ export class Board {
     const tex = meta?.mapUrl ? await this.originalMap(meta.mapUrl) : null;
     if (!tex || !meta?.mapUrl) return { error: 'Add a map picture to this scene first.' };
     const px = await readGridSample(tex, meta.mapUrl, maxSide);
-    if (!px) return { error: "This browser would not let me read the map picture, so I can't look for walls in it." };
+    if (!px) return { error: "This browser could not read the map picture." };
     const k = px.sampleScale * meta.mapScale;
     return {
       img: px.img,

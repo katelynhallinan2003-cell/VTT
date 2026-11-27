@@ -16,7 +16,6 @@ export function AutoHeightModal({ client, board, onClose }: { client: TableClien
   const [history, setHistory] = useState<HeightMark[][]>([[]]);
   const marks = history[history.length-1];
   const [height, setHeight] = useState('10');
-  const [extend, setExtend] = useState(true);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const locked = useRef(false);
@@ -59,13 +58,13 @@ export function AutoHeightModal({ client, board, onClose }: { client: TableClien
   const patches = useMemo(() => {
     if (!loaded || !marks.length) return [];
     const m = loaded.map;
-    const labels = draftHeights(m,marks,extend && marks.some(a => a.height !== marks[0].height));
+    const labels = draftHeights(m,marks);
     return heightPolygons(labels,m.width).flatMap(({height,polygon}) => {
       const world = polygon.map(r => r.map(([x,y]): Pair => [left+x*width/m.width,top+y*heightPx/m.height]));
       return (existing.length ? clip.difference(world,existing) : [world]).map(poly => ({height,polygon:poly,
         path:poly.map(r => 'M'+r.map(p => p.join(',')).join('L')+'Z').join('')}));
     });
-  }, [loaded,marks,extend,existing,left,top,width,heightPx]);
+  }, [loaded,marks,existing,left,top,width,heightPx]);
   const value = Number(height);
   const valid = height.trim() !== '' && Number.isInteger(value) && value >= -1000 && value <= 5000;
 
@@ -134,11 +133,11 @@ export function AutoHeightModal({ client, board, onClose }: { client: TableClien
           <text x={unit*.65} y={unit*.45} font-size={unit*1.65} fill="white" stroke="#14171e" stroke-width={unit*.45} paint-order="stroke" font-weight="700">{a.height}</text>
         </g>)}
       </svg>
-      <div class="row wrap"><label><input type="checkbox" checked={extend} onChange={e => setExtend(e.currentTarget.checked)}/> Fill between marks</label>
+      <div class="row wrap">
         <button class="btn small" disabled={!marks.length || saving} onClick={() => setHistory(history.slice(0,-1))}>Undo mark</button>
         <button class="btn small" disabled={view.zoom>=8} onClick={() => zoomAt(view.zoom*2)}>Zoom in</button>
         {view.zoom>1 && <button class="btn small" onClick={() => zoomAt(1)}>Fit map</button>}</div>
-      <p class="hint">One mark picks a connected patch. Mark two different heights to fill between them. Shift-click a mark to remove it. Existing terrain is preserved.</p>
+      <p class="hint">One height marks matching patches and fills the rest at 0 ft. Different heights divide the whole map. Existing terrain is preserved. Shift-click a mark to remove it.</p>
     </>}
   </Modal>;
 }

@@ -74,12 +74,13 @@ check('undoing a mark removes just that mark',await dm.locator('[data-mark]').co
 await clickMap(1000,650);
 await dm.getByLabel('Height in feet').fill('5');
 await clickMap(1250,150);
-await dm.getByLabel('Fill between marks').uncheck();
+await dm.getByLabel('Height in feet').fill('0');
+await clickMap(700,700);
 await dm.getByRole('button',{name:'Apply heights'}).click();
 await dm.getByRole('dialog',{name:'Auto height map'}).waitFor({state:'hidden'});
-await dm.waitForFunction(()=>window.__vtt.client.scene.draws.size>=4);
+await dm.waitForFunction(()=>window.__vtt.client.scene.draws.size>=5);
 const t=await areas();
-check('three editable polygons were added', t.length===4 && t.every(d=>d.hr));
+check('the full map includes an editable 0 ft floor', t.length===5 && t.some(d=>d.hg!=='old' && d.hz===0) && t.every(d=>d.hr));
 await dm.waitForFunction(()=>window.__vtt.board.seenZoneRev===window.__vtt.client.scene.drawRev);
 const g=await dm.evaluate(() => {
   const b=window.__vtt.board,t={fly:false,size:1,x:0,y:0};

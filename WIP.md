@@ -261,3 +261,4 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
 - [x] **#151 Highlight gradient controls on hover** (added 2026-11-26, completed 2026-11-26). Hovering over a gradient height box highlights its control in pink.
 - [x] **#152 Keep the active terrain mode highlighted** (added 2026-11-26, completed 2026-11-26). Show Select as active while editing a gradient.
 - [x] **#153 Auto height map** (added 2026-11-26, completed 2026-11-26). Replaced colour matching with edge-guided height marks, connected editable polygons, a zoomable preview and protection for existing terrain. Checked the coast against Elevation test 2 and tested the snow bridge and canyon.
+- [x] **#154 Cover the entire auto height map** (added 2026-11-26, completed 2026-11-26). Each applied draft covers the map edge to edge. Verified zero uncovered polygons on all three supplied maps with single and multiple marks.

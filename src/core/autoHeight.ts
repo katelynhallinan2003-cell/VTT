@@ -86,8 +86,9 @@ function neighbors(i: number, w: number, n: number, visit: (j: number, edge: num
 /** Simultaneous edge-weighted floods. Every assigned pixel has a connected
  * route back to its mark. Tracks, grid lines and isolated flecks cannot become
  * separate heights without a mark. Integer distances use a circular bucket queue. */
-export function draftHeights(map: Analysis, marks: HeightMark[], extend: boolean) {
+export function draftHeights(map: Analysis, marks: HeightMark[]) {
   const {width:w, opaque, region, contrast} = map, n = opaque.length;
+  const extend = marks.some(a => a.height !== marks[0].height);
   const labels = new Int16Array(n).fill(UNPAINTED), dist = new Uint32Array(n).fill(0xffffffff);
   const maxStep = 4096, queues: number[][] = Array.from({length:maxStep+1}, () => []);
   let pending = 0;
@@ -115,26 +116,26 @@ export function draftHeights(map: Analysis, marks: HeightMark[], extend: boolean
     }
   }
 
-  // Close only unmarked, enclosed pockets surrounded by a single height.
-  // Outside bays, transparent cutouts and explicitly marked islands survive.
-  if (!extend && marks.length) {
+  // Close enclosed pockets with the surrounding height. Every other unclaimed
+  // location, including map margins, becomes explicit, editable base terrain.
+  if (marks.length) {
     const seen = new Uint8Array(n), queue = new Int32Array(n);
     for (let i = 0; i < n; i++) {
-      if (seen[i] || !opaque[i] || labels[i] !== UNPAINTED) continue;
+      if (seen[i] || labels[i] !== UNPAINTED) continue;
       let end = 1, rim = UNPAINTED, open = false;
       queue[0] = i; seen[i] = 1;
       for (let k = 0; k < end; k++) {
         const p = queue[k];
         if (p < w || p >= n-w || p%w === 0 || p%w === w-1) open = true;
         neighbors(p,w,n,j => {
-          if (!opaque[j]) open = true;
-          else if (labels[j] !== UNPAINTED) {
+          if (labels[j] !== UNPAINTED) {
             if (rim !== UNPAINTED && rim !== labels[j]) open = true;
             rim = labels[j];
           } else if (!seen[j]) { seen[j] = 1; queue[end++] = j; }
         });
       }
-      if (!open) for (let k = 0; k < end; k++) labels[queue[k]] = rim;
+      const height = !open && rim !== UNPAINTED ? rim : 0;
+      for (let k = 0; k < end; k++) labels[queue[k]] = height;
     }
   }
   return labels;

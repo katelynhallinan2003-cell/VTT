@@ -102,7 +102,7 @@ export function paintTerrain(t:Terrain,selected:Set<string>,context:(w:number,h:
         if (!a.add) smooth[i]=0;
       }
       cov[i] = 1;
-      if (isSel) sel[i] = 1;
+      sel[i] = isSel ? 1 : 0;
     }
   }
 

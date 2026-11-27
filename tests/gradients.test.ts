@@ -76,11 +76,29 @@ describe('editable gradients',()=>{
     for (const cover of [flat,{...flat,gradientEnabled:true,gradientFixed:true,gradient:[line(6,20),line(12,40)]}]) {
       const t=terrainOf([hill,cover],grid);
       expect(t.areas[0].gradient).toEqual(hill.gradient);
-      expect(areaShape(t,'hill')).toEqual(areaShape(original,'hill'));
+      const exposed=areaShape(t,'hill');
+      expect(gradientPath(exposed,at(6.2),undefined,0.3)).toEqual([at(6)]);
+      expect(gradientPath(exposed,at(7),undefined,0.3)).toBeNull();
+      const newLine=gradientPath(exposed,at(6,-10),at(6,10),0.3)!;
+      const height=cover.gradient?.[0].height ?? cover.hz!;
+      const connected=terrainOf([{...hill,gradient:[...hill.gradient!,{id:'seam',height,path:newLine}]},cover],grid);
+      expect(terrainEdges(connected).some(e=>Math.abs(e.a.x-6)<1e-6 && Math.abs(e.b.x-6)<1e-6)).toBe(false);
+      expect(connected.areas[0].gradient!.slice(0,-1)).toEqual(hill.gradient);
       expect(groundAtTerrain(t,at(4))).toBe(groundAtTerrain(original,at(4)));
       expect(groundAtTerrain(t,at(7))).toBeGreaterThanOrEqual(20);
       expect(terrainEdges(t).some(e=>Math.abs(e.a.x-6)<1e-6 && Math.abs(e.b.x-6)<1e-6 && e.top>e.low)).toBe(true);
     }
+  });
+  it('snaps around an overpainted island and respects a matching line already assigned to its side',()=>{
+    const controls=[line(0,0),line(8,6),{id:'side',height:4,path:[at(3,-3),at(3,3)]}];
+    const hill={...area(controls),gradientFixed:true};
+    const island=normalizeDrawing('island',{k:'terrain',hg:'island',hz:4,hr:'5',p:'3,-3,6,-3,6,3,3,3,3,-3',t:2})!;
+    const t=terrainOf([hill,island],grid), shape=areaShape(t,'hill');
+    expect(shape[0]).toHaveLength(2);
+    expect(gradientPath(shape,at(3.2),undefined,0.3)).toEqual([at(3)]);
+    expect(terrainEdges(t).some(e=>Math.abs(e.a.x-3)<1e-6 && Math.abs(e.b.x-3)<1e-6)).toBe(false);
+    expect(t.areas[0].gradient).toEqual(controls);
+    expect(areaShape(terrainOf([hill],grid),'hill')[0]).toHaveLength(1);
   });
   it('seeds a touching face at a 14 ft difference and skips a 15 ft rise or drop',()=>{
     const hill=normalizeDrawing('hill',{k:'rect',hz:10,p:'0,0,60,30'})!;

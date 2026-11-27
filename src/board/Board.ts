@@ -2700,21 +2700,23 @@ export class Board {
     const gridless = currentOverlay(this.client.grid) === 'none';
     const mode = terrainBrushMode(u);
     const clicked = !rough && mode === 'move' ? areaAt(this.zones,w) : null;
+    if (u.gradientArea && !rough && !e.shiftKey) {
+      // A click just across the seam must still snap to the edited perimeter.
+      const area = this.zones.areas.find(a => a.id === u.gradientArea);
+      const path = area && this.gradientPlacement(area.id,w);
+      if (area && path) {
+        e.preventDefault();
+        const controls = this.gradientControls(area.id);
+        const h = clicked && clicked.id !== area.id || controls.length < 2 ? groundAt(this.zones,w) : surfaceHeight(area,path[0]);
+        const id = newAreaId();
+        this.saveGradient(area.id,[...controls,{id,height:Math.round(h*10)/10,path}]);
+        this.ui.set({gradientFocus:id});
+        return;
+      }
+      if (!clicked) return;
+    }
     if (clicked?.gradientEnabled && clicked.id !== u.gradientArea && !e.shiftKey) {
       this.ui.set({drawSel:new Set(clicked.ids),gradientArea:clicked.id,selection:new Set(),mapSelected:false,extraSel:null});
-      return;
-    }
-    if (u.gradientArea && !rough && (!clicked || clicked.id === u.gradientArea)) {
-      e.preventDefault();
-      const area = this.zones.areas.find(a => a.id === u.gradientArea);
-      if (!area) return;
-      const controls = this.gradientControls(area.id);
-      const path = this.gradientPlacement(area.id,w);
-      if (!path) return;
-      const height = Math.round((controls.length >= 2 ? surfaceHeight(area,w) : groundAt(this.zones,w))*10)/10;
-      const id = newAreaId();
-      this.saveGradient(area.id,[...controls,{id,height,path}]);
-      this.ui.set({gradientFocus:id});
       return;
     }
     if (!rough && mode === 'move') {

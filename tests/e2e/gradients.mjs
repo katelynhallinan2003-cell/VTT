@@ -79,6 +79,19 @@ const shelf=await dm.evaluate(async()=>{
 });
 await dm.waitForFunction(()=>window.__vtt.board.groundAtPoint(window.__vtt.board.screenToWorld(995,450))===18);
 assert.deepEqual(await dm.evaluate(()=>{const {ui,board}=window.__vtt;return board.gradientControls(ui.data.gradientArea);}),original.controls);
+// Click just on the painted side. The point and its converted line belong to the gradient
+// and follow the exposed seam, while its two original controls remain exactly as saved.
+await dm.mouse.click(965,465);
+await fields.nth(2).waitFor();
+assert.equal(await fields.nth(2).inputValue(),'18');
+await dm.locator('.gradient-box').nth(2).getByRole('button',{name:'To line'}).click();
+await dm.waitForFunction(()=>{
+  const {board,ui}=window.__vtt, control=board.gradientControls(ui.data.gradientArea)[2];
+  return control?.path.length>=2 && control.path.every(p=>Math.abs(board.worldToScreen(p).x-960)<0.5);
+});
+assert.deepEqual(await dm.evaluate(()=>{const {ui,board}=window.__vtt;return board.gradientControls(ui.data.gradientArea).slice(0,2);}),original.controls);
+await dm.getByRole('button',{name:'Delete height point'}).nth(2).click();
+await dm.waitForFunction(()=>document.querySelectorAll('.gradient-box').length===2);
 await dm.evaluate(shelf=>window.__vtt.client.removeDrawings([shelf]),shelf);
 await dm.waitForFunction(h=>window.__vtt.board.groundAtPoint(window.__vtt.board.screenToWorld(995,450))===h,original.height);
 await dm.getByRole('button',{name:'Done',exact:true}).click();

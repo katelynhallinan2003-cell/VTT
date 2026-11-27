@@ -155,8 +155,24 @@ function heightRegions(t: Terrain): Plan {
   return plan;
 }
 
+// Cache by paint geometry so dragging a height control does not repeat polygon clipping.
+const exposedMasks = new WeakMap<MultiPolygon,{covers:MultiPolygon[]; shape:MultiPolygon}>();
+
 export function areaShape(t: Terrain, id: string): MultiPolygon {
-  return terrainLayers(t).find(layer => layer.area.id === id)?.shape ?? [];
+  const layers=terrainLayers(t);
+  const layer=layers.find(l=>l.area.id===id);
+  if (!layer) return [];
+  if (!layer.area.gradientEnabled) return layer.shape;
+  const b=layer.area.b;
+  const covers=layers.filter(({area})=>area.order>layer.area.order &&
+    area.b.x < b.x+b.w && b.x < area.b.x+area.b.w &&
+    area.b.y < b.y+b.h && b.y < area.b.y+area.b.h).map(l=>l.shape);
+  if (!covers.length) return layer.shape;
+  const cached=exposedMasks.get(layer.shape);
+  if (cached && covers.length===cached.covers.length && covers.every((c,i)=>c===cached.covers[i])) return cached.shape;
+  const shape=clip.difference(layer.shape,...covers);
+  exposedMasks.set(layer.shape,{covers,shape});
+  return shape;
 }
 
 export interface HeightPatch {
@@ -212,12 +228,7 @@ function enclosedHoles(t:Terrain, ids:string[], patch?:HeightPatch) {
   if (!picked.length) return;
   const one=picked.length===1 ? picked[0] : undefined;
   if (!one && !patch) return;
-  let shape:MultiPolygon=patch ? [patch.polygon] : one!.shape;
-  // An occupied island may cover an older gradient with no stored erasure.
-  if (one?.area.gradientEnabled) {
-    const over=layers.filter(l=>l.area.order>one.area.order);
-    if (over.length) shape=clip.difference(shape,...over.map(l=>l.shape));
-  }
+  const shape:MultiPolygon=patch ? [patch.polygon] : areaShape(t,one!.area.id);
   const rings=shape.flatMap(p=>p.slice(1).map(r=>[r] as Polygon));
   if (!rings.length) return;
   const holes=clip.difference(clip.union(rings),shape);

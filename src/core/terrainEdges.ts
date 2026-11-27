@@ -36,28 +36,35 @@ function footprint(s: Pick<TStroke,'kind'|'pts'|'r'|'b'|'rings'>, grid: GridSett
   if (s.kind === 'polygon') return [s.rings!.map(r => r.map(pair))];
   if (s.kind === 'rect') return [[[[x,y], [x+w,y], [x+w,y+h], [x,y+h]]]];
   const shapes: Polygon[] = [];
-  const oval = (p: Vec, rx: number, ry: number) => {
+  if (s.kind === 'cells') {
+    for (const p of s.pts) shapes.push([cellPoly(grid, snapToCellCenter(grid,p)).map(({x,y}): Pair => [Math.round(x*1e7)/1e7, Math.round(y*1e7)/1e7])]);
+  } else {
+    const ellipse = s.kind === 'ellipse';
+    const rx = ellipse ? w / 2 : s.r, ry = ellipse ? h / 2 : s.r;
     const tolerance = grid.cell / 600;
     const angle = Math.acos(1 - Math.min(1, tolerance / Math.max(rx, ry, 0.01)));
     const count = Math.min(512, Math.max(4, 4 * Math.ceil(Math.PI / (4 * angle))));
-    shapes.push([Array.from({length: count}, (_, i): Pair => {
+    const rim = Array.from({length: count}, (_, i) => {
       const a = 2 * Math.PI * i / count;
-      return [p.x + rx * Math.cos(a), p.y + ry * Math.sin(a)];
-    })]);
-  };
-  if (s.kind === 'cells') {
-    for (const p of s.pts) shapes.push([cellPoly(grid, snapToCellCenter(grid,p)).map(({x,y}): Pair => [Math.round(x*1e7)/1e7, Math.round(y*1e7)/1e7])]);
-  } else if (s.kind === 'ellipse') {
-    oval({ x: x + w / 2, y: y + h / 2 }, w / 2, h / 2);
-  } else {
-    s.pts.forEach((p, i) => {
-      oval(p, s.r, s.r);
-      if (!i) return;
-      const q = s.pts[i - 1], len = Math.hypot(p.x - q.x, p.y - q.y);
-      if (!len) return;
-      const nx = (p.y - q.y) * s.r / len, ny = (q.x - p.x) * s.r / len;
-      shapes.push([[[q.x+nx,q.y+ny],[p.x+nx,p.y+ny],[p.x-nx,p.y-ny],[q.x-nx,q.y-ny]]]);
+      return {x: rx * Math.cos(a), y: ry * Math.sin(a)};
     });
+    const centers = ellipse ? [{x:x+w/2,y:y+h/2}] : s.pts;
+    if (!centers.length) return [];
+    const vertex = (p: Vec, i: number): Pair => [p.x + rim[i].x, p.y + rim[i].y];
+    for (let i = 1; i < centers.length; i++) {
+      const a = centers[i-1], b = centers[i];
+      const dx = b.x-a.x, dy = b.y-a.y;
+      if (!dx && !dy) continue;
+      // Sweep the polygonal brush tip as one closed capsule. Joining a separate
+      // tangent rectangle to two disks can leave microscopic gaps on diagonals.
+      const normal = rim.map(p => dx*p.y - dy*p.x);
+      const top = normal.indexOf(Math.max(...normal)), bottom = (top + count/2) % count;
+      const ring: Pair[] = [];
+      for (let k=0; k<=count/2; k++) ring.push(vertex(a,(top+k)%count));
+      for (let k=0; k<=count/2; k++) ring.push(vertex(b,(bottom+k)%count));
+      shapes.push([ring]);
+    }
+    if (!shapes.length) return [[rim.map((_,i) => vertex(centers[0],i))]];
   }
   return shapes.length ? clip.union(shapes) : [];
 }

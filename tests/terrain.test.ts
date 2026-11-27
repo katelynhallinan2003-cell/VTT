@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_GRID, drawingToWire, normalizeDrawing } from '../src/core/model';
 import { areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, cellsAround, groundAtTerrain, newAreaId, paintedAreaAt, terrainOf, totalWith } from '../src/core/terrain';
-import { clippedBrush, patchStroke } from '../src/core/terrainEdges';
+import { areaShape, clippedBrush, inRegion, patchStroke, terrainEdges } from '../src/core/terrainEdges';
 import { hexToPx } from '../src/core/hex';
 import type { Drawing } from '../src/types';
 
@@ -207,4 +207,16 @@ describe('painting at a map boundary', () => {
     expect(clippedBrush(grid,[{x:-50,y:-50}],10,false,pages)).toEqual([]);
     expect(clippedBrush(grid,[{x:50,y:50}],10,false,pages)).toBeNull();
   });
+});
+
+it('rebuilds a fractional-width diagonal brush after saving and reopening it', () => {
+  const g = { ...grid, cell: 99.96 };
+  const brush = stroke('diagonal','1718.6,381.3,1742.9,405.6',{w:99.96,hz:15,hg:'ledge'});
+  const saved = normalizeDrawing(brush.id,drawingToWire(brush))!;
+  const terrain = terrainOf([saved],g);
+  const shape = areaShape(terrain,'ledge');
+  expect(shape).toHaveLength(1);
+  for (const p of [{x:1680,y:381.3},{x:1730,y:390},{x:1782,y:405.6}]) expect(inRegion(shape[0],p)).toBe(true);
+  expect(inRegion(shape[0],{x:1800,y:406})).toBe(false);
+  expect(terrainEdges(terrain).length).toBeGreaterThan(0);
 });

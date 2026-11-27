@@ -237,3 +237,4 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
 - [x] **#127 Save grid-removed pictures** (added 2026-11-26, completed 2026-11-26). Reopen a saved lossless copy directly from browser storage. Changing the removal settings selects its own copy.
 - [x] **#128 Run relevant tests** (added 2026-11-26, completed 2026-11-26). Added six feature groups and changed-file selection for local work and deployments. The full suite is available explicitly.
 - [x] **#129 Stop terrain paint at the map edge** (added 2026-11-26, completed 2026-11-26). Clip round and cell-based strokes to the map pages, including the preview and saved geometry.
+- [x] **#130 Frozen terrain brush and blank reload** (added 2026-11-26, completed 2026-11-26). Build each round-brush segment with a single closed outline. Replayed Elevation test 2 with all 215 original strokes, added paint, and reopened with the original geometry and heights preserved.

@@ -174,6 +174,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
   const editing = mine.length > 0;
   // the number box shows the selected area (and edits it), or else what the next area will be
   const picks = d.heightPatches;
+  const selectionCount = picks?.length ?? mine.length;
   const shownH = picks?.[0].height ?? (editing ? mine[0].h : d.heightFt);
   const shownAdd = picks ? false : editing ? paintable.length > 0 && paintable[0].add : d.heightAdds;
   const setH = (h: number) => {
@@ -196,9 +197,9 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
   const roughN = roughOf(client.drawingsSorted(), grid).areas.length;
   const modes = rough ? ([['paint', 'Paint'], ['erase', 'Erase']] as const) : ([['paint', 'Paint'], ['erase', 'Erase'], ['move', 'Select']] as const);
   const gradient = !!d.gradientArea;
-  const holes=useMemo(()=>!rough && editing && (!picks || picks.length===1)
+  const holes=useMemo(()=>!rough && mode !== 'erase' && editing && (!picks || picks.length===1)
     ? terrainHoleOptions(terrain,mine.map(a=>a.id),picks?.[0]) : undefined,
-    [rough,terrain.sig,d.drawSel,picks,editing]);
+    [rough,mode,terrain.sig,d.drawSel,picks,editing]);
   async function fillHoles(all:boolean) {
     const scene=client.scene;
     const ids=await client.fillGroundHoles(mine.map(a=>a.id),picks?.[0],all);
@@ -235,10 +236,10 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
         <span class="field-label">Brush diameter ({gridless ? 'ft' : cellWord+'s'})</span>
         <div class="chips terrain-presets">{BRUSH_SIZES.map(x => <button key={x} class={`chip ${d.heightBrush===x ? 'on' : ''}`} onClick={()=>ui.set({heightBrush:x})}>{x==='fine' ? (gridless ? '2' : '2 ft') : gridless ? x*grid.ft : x}</button>)}</div>
       </>}
-      {rough && roughN > 0 && <button class="btn small danger" onClick={()=>void client.clearDrawings(x=>!!x.dt,'Clear difficult ground')}>Clear difficult ground</button>}
-      {!rough && <div class="ht-card">
+      {rough && roughN > 0 && <button class="btn small danger" onClick={()=>void client.clearDrawings(x=>!!x.dt,'Clear difficult terrain')}>Clear difficult terrain</button>}
+      {!rough && (mode === 'paint' || (mode === 'move' && selectionCount > 0)) && <div class="ht-card">
         <div class="row">
-          <strong>{picks ? (picks.length === 1 ? 'Selected ground' : `${picks.length} areas selected`) : editing ? (one ? 'Selected ground' : `${mine.length} areas selected`) : 'Next ground you paint'}</strong>
+          <strong>{mode === 'move' ? 'Set Height' : selectionCount > 1 ? `${selectionCount} areas selected` : editing ? 'Selected ground' : 'Next ground you paint'}</strong>
           <span class="grow" />
           {editing && <button class="btn small" title="Deselect terrain (Esc)" onClick={() => ui.selectDrawings([])}>Done</button>}
         </div>
@@ -271,7 +272,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
           {mode === 'move' && (gridless ? 'Select ground to change its height or drag it.' : `Click an area to select it and change its height. Drag to move it.`)}
         </p>
       )}
-      {rough && <p class="hint">{mode === 'paint' ? 'Paint or drag across the map.' : 'Erases difficult ground wherever you drag.'}</p>}
+      {rough && <p class="hint">{mode === 'paint' ? 'Paint or drag across the map.' : 'Erases difficult terrain wherever you drag.'}</p>}
       {!rough && n>0 && <button class="btn small danger" onClick={async () => { await client.clearDrawings(x=>!x.dt && !x.dl && (x.hz!=null || x.k==='terrain'),'Clear all heights'); ui.selectDrawings([]); }}>Clear all heights</button>}
       <details>
         <summary>Advanced</summary>
@@ -470,7 +471,7 @@ export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
           </div>
         </>
       )}
-      <Toggle checked={d.tplRough} onChange={(v) => ui.set({ tplRough: v })} label="Counts as difficult ground" hint="For templates you place next: tokens pay extra to move through them." />
+      <Toggle checked={d.tplRough} onChange={(v) => ui.set({ tplRough: v })} label="Counts as difficult terrain" hint="For templates you place next: tokens pay extra to move through them." />
       <Toggle checked={d.tplShare} onChange={(v) => ui.set({ tplShare: v })} label="Show others my templates" hint="Off: only you and the DM see them." />
       {!gridless && <Toggle checked={d.tplCover} onChange={(v) => ui.set({ tplCover: v })} label={hex ? 'Show the hexes it covers' : 'Show the squares it covers'} hint={hex ? 'A hex counts when its middle is inside the area.' : 'A square counts when its middle is inside the area.'} />}
       <p class="hint">{say(t.hint)} {say('Sizes snap to whole squares')} (hold Alt to turn that off, Shift to lock the angle).</p>
@@ -626,7 +627,7 @@ export function DrawInspector(props: { ui: UiState; client: TableClient; board: 
           <>
             <label class="field"><span class="field-label">Opacity</span>
               <input type="range" min={10} max={100} value={Math.round((first.fill || 0.28) * 100)} onInput={(e) => upd({ fill: Number((e.target as HTMLInputElement).value) / 100 })} /></label>
-            <Toggle checked={list.every((x) => !!x.td)} onChange={(v) => upd({ td: v })} label="Difficult ground" hint="Moving through it costs extra while it is here." />
+            <Toggle checked={list.every((x) => !!x.td)} onChange={(v) => upd({ td: v })} label="Difficult terrain" hint="Moving through it costs extra while it is here." />
           </>
         )}
         {!allText && !allTemplates && !allZones && (

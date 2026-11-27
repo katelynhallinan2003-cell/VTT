@@ -26,6 +26,20 @@ await dm.evaluate(async () => {
   const id=await client.addDrawing({k:'rect',p:[a.x,a.y,b.x,b.y].join(','),hz:5,color:'#fff',w:1,fill:0,dash:false,txt:'',fs:28,bw:5});
   ui.set({tool:'height',drawSel:new Set([id])});
 });
+const cursor = () => dm.locator('.board-host canvas').evaluate(canvas => getComputedStyle(canvas).cursor);
+await dm.getByRole('button',{name:'Paint',exact:true}).click();
+assert.equal(await cursor(),'crosshair');
+await dm.getByRole('button',{name:'Erase',exact:true}).click();
+assert.equal(await dm.locator('.ht-card').count(),0);
+await dm.getByRole('button',{name:'Select',exact:true}).click();
+assert.equal(await cursor(),'default');
+await dm.mouse.move(570,410);
+assert.equal(await cursor(),'default');
+assert.equal(await dm.locator('.ht-card strong').innerText(),'Set Height');
+await dm.locator('.ht-card').getByRole('button',{name:'Done'}).click();
+assert.equal(await dm.locator('.ht-card').count(),0);
+await dm.mouse.click(710,410);
+assert.equal(await dm.locator('.ht-card strong').innerText(),'Set Height');
 await dm.getByRole('button',{name:'Make Gradient',exact:true}).click();
 const fields = dm.getByRole('spinbutton',{name:'Gradient height'});
 await dm.mouse.click(502,600);
@@ -121,11 +135,25 @@ await dm.getByRole('button',{name:'Delete height point'}).nth(1).click();
 await dm.waitForFunction(() => document.querySelectorAll('.gradient-box').length===1);
 await dm.getByRole('button',{name:'Diff Terrain',exact:true}).click();
 await dm.getByText('Difficult terrain',{exact:true}).waitFor();
-assert.equal(await dm.getByRole('button',{name:'Clear difficult ground'}).count(),0);
+assert.equal(await dm.getByRole('button',{name:'Clear difficult terrain'}).count(),0);
 await dm.evaluate(async()=>{const {board}=window.__vtt; await board.chooseGridOverlay('none');});
 await dm.mouse.move(630,390); await dm.mouse.down(); await dm.mouse.move(740,430,{steps:4}); await dm.mouse.up();
-await dm.getByRole('button',{name:'Clear difficult ground'}).waitFor();
+await dm.getByRole('button',{name:'Clear difficult terrain'}).waitFor();
 assert.ok(await dm.evaluate(()=>[...window.__vtt.client.scene.draws.values()].some(d=>d.dt && !d.hc)));
+await dm.waitForFunction(() => {
+  const {board} = window.__vtt;
+  if (!board.rough.areas.length) return false;
+  const {pixels,width,height} = board.app.renderer.extract.pixels(board.roughG);
+  const row = 4*width*Math.floor(height/2);
+  let stripes = 0, wasInk = false;
+  for (let x=0; x<width; x++) {
+    const i = row+4*x, ink = pixels[i+3] > 75;
+    if (ink && Math.max(pixels[i],pixels[i+1],pixels[i+2]) > 8) return false;
+    if (ink && !wasInk) stripes++;
+    wasInk = ink;
+  }
+  return stripes >= 2;
+});
 await dm.locator('.terrain-menu summary',{hasText:'Advanced'}).click();
 await dm.getByRole('checkbox',{name:'Always show terrain',exact:true}).check();
 assert.equal(await dm.evaluate(()=>window.__vtt.ui.data.heightView),'always');

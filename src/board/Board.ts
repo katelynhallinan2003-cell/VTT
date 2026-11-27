@@ -1,4 +1,4 @@
-import { Application, Container, Graphics, Sprite, Text, Texture } from 'pixi.js';
+import { Application, Container, FillPattern, Graphics, Matrix, Sprite, Text, Texture } from 'pixi.js';
 import {
   clamp, cornerTotals, distanceFt, fitCamera, pathFt, gridFromRect, mapRect, normRect, sceneRect, pointInToken, rectContains, snapDragCenter, snapTokenCenter, snapToCellCenter, snapToCorner, zoomAt,
 } from '../core/geometry';
@@ -60,7 +60,7 @@ type Drag =
   | { kind: 'erase'; ids: Set<string> }
   /** painting (or rubbing out) ground with the Heights brush */
   | { kind: 'lightpaint'; /** taking painted light away instead of adding it */ erase: boolean; /** dim light (half as strong) instead of daylight */ dim: boolean; pts: Vec[]; last: Vec; /** brush width in pixels */ size: number }
-  | { kind: 'terrain'; /** painting difficult ground instead of height */ rough?: boolean; erase: boolean; /** the area it paints into (empty: erase from every area) */ group: string; h: number; add: boolean; /** the cells covered so far (null for a free brush) */ cells: Map<string, Vec> | null; pts: Vec[]; last: Vec; size: number }
+  | { kind: 'terrain'; /** painting difficult terrain instead of height */ rough?: boolean; erase: boolean; /** the area it paints into (empty: erase from every area) */ group: string; h: number; add: boolean; /** the cells covered so far (null for a free brush) */ cells: Map<string, Vec> | null; pts: Vec[]; last: Vec; size: number }
   | { kind: 'ruler'; /** another leg added to a measurement that is already there */ extend?: boolean }
   /** drawing a wall (or a box of walls) with the Walls tool; `cont` when it carries on from the last wall */
   | { kind: 'wall'; a: Vec; b: Vec; down: Vec; moved: boolean; cont: boolean; shape: 'line' | 'box' | 'free' | 'circle'; /** the pointer's path (freehand walls) */ pts: Vec[] }
@@ -103,9 +103,10 @@ export class Board {
   private fogLayer = new Container();
   private drawLayer = new DrawLayer();
   private terrainLayer = new TerrainLayer(()=>this.invalidate());
-  /** difficult ground: a layer of its own, hatched on the map */
+  /** difficult terrain: a layer of its own, hatched on the map */
   private rough: Terrain = EMPTY_TERRAIN({ ...DEFAULT_GRID });
   private roughG = new Graphics();
+  private roughPattern?: FillPattern;
   private terrainGraphics = new Container();
   private terrainBrushG = new Graphics();
   private terrainMask = new Graphics();
@@ -301,6 +302,7 @@ export class Board {
     this.destroyed = true;
     window.clearTimeout(this.warmTimer);
     this.terrainLayer.destroy();
+    this.roughPattern?.destroy();
     this.cancelPress();
     if (this.liveSent) this.client.setLive({ ruler: null, ghosts: {} });
     setTextureFailHandler(null);
@@ -1010,8 +1012,8 @@ export class Board {
     }
   }
 
-  // ------------------------------------------------------------------ difficult ground and what moving costs
-  /** Difficult ground = what was painted as such, plus the squares of every spell template marked difficult (what a wall lets the spell reach). */
+  // ------------------------------------------------------------------ difficult terrain and what moving costs
+  /** Difficult terrain = what was painted as such, plus the squares of every spell template marked difficult (what a wall lets the spell reach). */
   private refreshRough() {
     const scene = this.client.scene;
     if (!scene) return;
@@ -1023,7 +1025,25 @@ export class Board {
     if (next.sig !== this.rough.sig) { this.rough = next; this.paintRough(); }
   }
 
-  /** Draw the painted silhouette on gridless maps and hatch occupied cells on grids. */
+  private difficultTerrainPattern() {
+    if (!this.roughPattern) {
+      const tile = document.createElement('canvas');
+      tile.width = tile.height = 32;
+      const ctx = tile.getContext('2d')!;
+      ctx.strokeStyle = 'rgba(0,0,0,0.68)';
+      ctx.lineWidth = 5;
+      for (const offset of [0,32,64]) {
+        ctx.moveTo(offset-32,32);
+        ctx.lineTo(offset,0);
+      }
+      ctx.stroke();
+      this.roughPattern = new FillPattern({texture:Texture.from(tile),repetition:'repeat'});
+    }
+    const scale = this.client.grid.cell / (3 * this.roughPattern.texture.width);
+    if (this.roughPattern.transform.a !== scale) this.roughPattern.setTransform(new Matrix().scale(scale,scale));
+    return this.roughPattern;
+  }
+
   private paintRough() {
     const g = this.roughG;
     g.clear();
@@ -1031,12 +1051,12 @@ export class Board {
     const grid = this.client.grid;
     const box = terrainBounds(t);
     if (!box) { this.invalidate(); return; }
-    const col = 0xc8791b;
+    const pattern = this.difficultTerrainPattern();
     if (currentOverlay(grid) === 'none') {
       for (const area of t.areas) for (const poly of areaShape(t,area.id)) {
         for (const [i,ring] of poly.entries()) {
           g.poly(ring.flat());
-          if (i===0) g.fill({color:col,alpha:0.3}); else g.cut();
+          if (i===0) g.fill(pattern); else g.cut();
         }
       }
       this.invalidate();
@@ -1044,10 +1064,7 @@ export class Board {
     }
     const cells = cellCentersIn(grid, box).filter((p) => isRough(t, p)).slice(0, 8000);
     for (const c of cells) g.poly(cellPoly(grid, c).flatMap((p) => [p.x, p.y]));
-    g.fill({ color: col, alpha: 0.24 });
-    const r = grid.cell * 0.32;
-    for (const c of cells) { g.moveTo(c.x - r, c.y + r).lineTo(c.x + r, c.y - r); }
-    g.stroke({ width: Math.max(1.5, grid.cell * 0.045), color: col, alpha: 0.8, cap: 'round' });
+    g.fill(pattern);
     this.invalidate();
   }
 
@@ -1729,6 +1746,7 @@ export class Board {
 
   // ------------------------------------------------------------------ test moves and the ruler
   private onUiChange() {
+    this.updateCursor();
     const u = this.ui.data;
     const prev = this.prevUi;
     this.prevUi = { testMove: u.testMove, sharePlot: u.sharePlot, tool: u.tool, rulerColor: u.rulerColor, cover: u.tplCover, heights: u.heightView, draft: u.fxDraft, sel: u.drawSel };
@@ -2279,13 +2297,15 @@ export class Board {
     on(window, 'blur', () => { this.spaceDown = false; });
   }
 
-  private updateCursor(hover?: boolean) {
+  private updateCursor() {
     const c = this.app.canvas;
     const d = this.drag;
+    const u = this.ui.data;
     if (d?.kind === 'pan' || d?.kind === 'tokens') c.style.cursor = 'grabbing';
     else if (this.spaceDown) c.style.cursor = 'grab';
-    else if (this.ui.data.tool !== 'select') c.style.cursor = 'crosshair';
-    else c.style.cursor = hover ? 'grab' : 'default';
+    else if (u.tool === 'select') c.style.cursor = this.pointerW && this.hitToken(this.pointerW) ? 'grab' : 'default';
+    else if ((u.tool === 'height' && terrainBrushMode(u) === 'move') || (u.tool === 'template' && u.tplMode === 'select')) c.style.cursor = 'default';
+    else c.style.cursor = 'crosshair';
   }
 
   private onWheel(e: WheelEvent) {
@@ -2789,11 +2809,11 @@ export class Board {
       return;
     }
     if (picks && d.erase) this.ui.selectDrawings(picks.flatMap(p => p.ids));
-    const col = d.rough ? '#c8791b' : this.terrainLayer.colourAt(d.h);
+    const col = d.rough ? '#000000' : this.terrainLayer.colourAt(d.h);
     const cur = this.selectedAreas();
     const keep = cur.length === 1 && cur[0].id === d.group ? cur[0].ids : [];
     const stroke: NewDrawing = { k: 'terrain', p: joinPts(pts), color: col, w: wpx, fill: 0, fc: '', dash: false, txt: '', fs: 28, bw: 5, hz: d.erase ? null : d.h, hg: d.group, ha: !d.erase && d.add, he: d.erase, hc: !!d.cells, ...(d.rough ? { dt: true } : {}) };
-    const label = d.rough ? (d.erase ? 'Erase difficult ground' : 'Paint difficult ground') : d.erase ? 'Erase ground' : 'Paint ground';
+    const label = d.rough ? (d.erase ? 'Erase difficult terrain' : 'Paint difficult terrain') : d.erase ? 'Erase ground' : 'Paint ground';
     const select = (ids: string[]) => {
       if (!d.erase && !d.rough) {
         if (d.add) this.ui.set({ heightAdds: true, heightFt: d.h, drawSel: new Set() });
@@ -2818,13 +2838,14 @@ export class Board {
     const pick = !rough && u.heightPatches?.[0];
     const h = d ? d.h : pick ? pick.height : cur ? cur.h : u.heightFt;
     const add = d ? d.add : pick ? false : cur ? cur.add : u.heightAdds;
-    const col = erase ? 0xff6b6b : rough ? 0xc8791b : num(this.terrainLayer.colourAt(h));
+    const col = erase ? 0xff6b6b : rough ? 0x000000 : num(this.terrainLayer.colourAt(h));
+    const pattern = rough && !erase ? this.difficultTerrainPattern() : undefined;
     const snap = d ? !!d.cells : u.heightBrush!=='fine' && currentOverlay(grid) !== 'none' && u.heightSnap !== !!this.altDown;
     const n = d ? d.size : u.heightBrush==='fine' ? 2/grid.ft : u.heightBrush;
     if (snap) {
       const cells = d?.cells ? [...d.cells.values()] : cellsAlong(grid, at, at, n);
       for (const c of cells) g.poly(cellPoly(grid, c).flatMap((p) => [p.x, p.y]), true);
-      g.fill({ color: col, alpha: d ? 0.5 : 0.28 });
+      g.fill(pattern ?? { color: col, alpha: d ? 0.5 : 0.28 });
       for (const c of cells) g.poly(cellPoly(grid, c).flatMap((p) => [p.x, p.y]), true);
       g.stroke({ width: 1.5 / z, color: col, alpha: 0.9 });
     } else {
@@ -2832,8 +2853,8 @@ export class Board {
       if (d && d.pts.length > 1) {
         g.moveTo(d.pts[0].x, d.pts[0].y);
         for (const p of d.pts.slice(1)) g.lineTo(p.x, p.y);
-        g.stroke({ width: r * 2, color: col, alpha: 0.45, cap: 'round', join: 'round' });
-      } else if (d) g.circle(d.pts[0].x, d.pts[0].y, r).fill({ color: col, alpha: 0.45 });
+        g.stroke({ width: r * 2, ...(pattern ? {fill:pattern} : {color:col,alpha:0.45}), cap: 'round', join: 'round' });
+      } else if (d) g.circle(d.pts[0].x, d.pts[0].y, r).fill(pattern ?? { color: col, alpha: 0.45 });
       g.circle(at.x, at.y, r).stroke({ width: 1.5 / z, color: col, alpha: 0.9 });
     }
     if (d && !erase && !rough) this.plotLabel(li++, areaLabelAt(add ? groundAt(this.zones, at) + h : h), at.x, at.y - Math.max(grid.cell * 0.7, 18 / z), col);
@@ -3148,8 +3169,7 @@ export class Board {
     if (this.press && Math.hypot(e.clientX - this.press.x, e.clientY - this.press.y) > 6) this.cancelPress();
     const d = this.drag;
     if (!d) {
-      const hover = this.ui.data.tool === 'select' && !!this.hitToken(w);
-      this.updateCursor(hover);
+      this.updateCursor();
       if (this.ui.data.tool === 'wall') this.updateWallHover(w);
       if (this.ui.data.tool !== 'select') this.invalidate();
       return;

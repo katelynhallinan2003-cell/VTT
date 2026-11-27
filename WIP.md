@@ -252,3 +252,7 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
 - [x] **#142 Always show terrain to players** (added 2026-11-26, completed 2026-11-26). Added an independent, scene-specific player overlay setting under Advanced. Verified live changes and player reload in a second browser view.
 - [x] **#143 Snap gradient controls to overpaint** (added 2026-11-26, completed 2026-11-26). The selection outline and edge handles follow the exposed perimeter, including interior islands. Existing controls are preserved and a matching line on the shared edge removes the terrain wall.
 - [x] **#144 Downhill sight from a plateau** (added 2026-11-26, completed 2026-11-26). A descending rim hides ground below the sightline from the viewer’s eyes. Lower ground reappears beyond the shadow, and a raised shelf can emerge sooner. Verified in the player view.
+- [x] **#145 Arrow cursor in Select mode** (added 2026-11-26, completed 2026-11-26). Show the normal cursor when selecting terrain.
+- [x] **#146 Height controls follow the terrain tool mode** (added 2026-11-26, completed 2026-11-26). Hide the box for Erase and empty Select. Label a selected area's controls Set Height.
+- [x] **#147 Difficult terrain wording** (added 2026-11-26, completed 2026-11-26). Use difficult terrain throughout the controls and movement readout.
+- [x] **#148 Stripe difficult terrain** (added 2026-11-26, completed 2026-11-26). Use black diagonal stripes with transparent gaps for difficult terrain.

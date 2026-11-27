@@ -1,4 +1,4 @@
-// Round Z15: the ruler labels every step; spell templates as difficult ground; auto lights; light marks.
+// Round Z15: the ruler labels every step; spell templates as difficult terrain; auto lights; light marks.
 import { launch, watch, sleep } from './lib.mjs';
 import { mkdirSync } from 'node:fs';
 const BASE = (process.env.BASE || 'http://127.0.0.1:4174/') + '?demo';
@@ -59,10 +59,10 @@ await dm.screenshot({ path: '/tmp/shots/z15-ruler.png' });
 await sleep(200);
 await dm.keyboard.press('Escape');
 
-// ---- #56: a spell template marked as difficult ground slows walking while it is there
+// ---- #56: a spell template marked as difficult terrain slows walking while it is there
 await dm.evaluate(() => window.__vtt.ui.set({ tool: 'template', tplKind: 'sphere' }));
-const roughSwitch = dm.locator('.flyout label', { hasText: 'Counts as difficult ground' }).locator('input');
-check('the template panel has "Counts as difficult ground", off to start with', (await roughSwitch.count()) === 1 && !(await roughSwitch.isChecked()));
+const roughSwitch = dm.locator('.flyout label', { hasText: 'Counts as difficult terrain' }).locator('input');
+check('the template panel has "Counts as difficult terrain", off to start with', (await roughSwitch.count()) === 1 && !(await roughSwitch.isChecked()));
 const roughAt = (gxv, gyv) => dm.evaluate(([x, y]) => window.__vtt.board.isRoughAt({ x, y }), [gx(gxv), gy(gyv)]);
 const costOf = (path) => dm.evaluate((pts) => window.__vtt.board.moveCost(pts, false), path.map(([i, j]) => ({ x: gx(i), y: gy(j) })));
 await drag([gx(12.5), gy(6.5)], [gx(14.5), gy(6.5)]);
@@ -78,13 +78,13 @@ await drag([gx(12.5), gy(6.5)], [gx(14.5), gy(6.5)]);
 await sleep(300);
 check('a marked template makes the squares it covers difficult', (await roughAt(12.5, 6.5)) && (await roughAt(13.5, 6.5)) && !(await roughAt(17.5, 6.5)));
 const through = await costOf([[8.5, 6.5], [17.5, 6.5]]);
-check('and a walk through it pays the extra', through.ft > 45 && /difficult ground/.test(through.note), JSON.stringify(through));
+check('and a walk through it pays the extra', through.ft > 45 && /difficult terrain/.test(through.note), JSON.stringify(through));
 await dm.screenshot({ path: '/tmp/shots/z15-rough-template.png' });
 // the selected template has the same switch, and turning it off lifts the ground
 await dm.evaluate(() => window.__vtt.ui.set({ tool: 'select' }));
 const tplId = await dm.evaluate(() => [...window.__vtt.client.scene.draws.values()].find((d) => d.k === 'sphere').id);
 await dm.evaluate((id) => window.__vtt.ui.selectDrawings([id]), tplId);
-const tag = dm.locator('.drawtag label', { hasText: 'Difficult ground' }).locator('input');
+const tag = dm.locator('.drawtag label', { hasText: 'Difficult terrain' }).locator('input');
 await tag.waitFor();
 check('a selected template shows the switch, on', await tag.isChecked());
 await tag.uncheck();
@@ -95,7 +95,7 @@ await sleep(400);
 check('and on again', await roughAt(12.5, 6.5));
 await dm.keyboard.press('Delete');
 await sleep(400);
-check('deleting the template takes the difficult ground with it', !(await roughAt(12.5, 6.5)));
+check('deleting the template takes the difficult terrain with it', !(await roughAt(12.5, 6.5)));
 await dm.keyboard.press('Control+z');
 await sleep(500);
 check('undo brings both back', await roughAt(12.5, 6.5));

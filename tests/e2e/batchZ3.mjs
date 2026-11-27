@@ -1,4 +1,4 @@
-// Round 7d: difficult ground, ramps, cliffs and stairs.
+// Round 7d: difficult terrain, ramps, cliffs and stairs.
 import { launch, watch, sleep } from './lib.mjs';
 import { mkdirSync } from 'node:fs';
 const BASE = (process.env.BASE || 'http://127.0.0.1:4174/') + '?demo';
@@ -38,9 +38,9 @@ const ground = (p) => dm.evaluate((q) => window.__vtt.board.groundAtPoint(q), p)
 await dm.evaluate(() => window.__vtt.board.fit());
 await sleep(300);
 
-// ---- difficult ground
+// ---- difficult terrain
 await dm.keyboard.press('h');
-check('the Heights panel offers difficult ground', (await dm.locator('.flyout button', { hasText: 'Diff Terrain' }).count()) === 1);
+check('the Heights panel offers difficult terrain', (await dm.locator('.flyout button', { hasText: 'Diff Terrain' }).count()) === 1);
 await dm.locator('.flyout button', { hasText: 'Diff Terrain' }).click();
 check('and then only paints and erases', (await dm.locator('.flyout .seg button', { hasText: 'Ramp' }).count()) === 0 && (await dm.locator('.flyout .seg button', { hasText: 'Select' }).count()) === 0);
 await dragTo(C(8, 6), C(11, 6));
@@ -61,7 +61,7 @@ for (let i = 1; i <= 12; i++) await dm.mouse.move(a0.x + ((b0.x - a0.x) * i) / 1
 const label = await dm.evaluate(() => window.__vtt.board.distText.text);
 await dm.screenshot({ path: '/tmp/shots/z3-rough-drag.png' });
 await dm.mouse.up(); await sleep(300);
-check('dragging a token across it says what it costs: 35 ft plus 4 squares', /55 ft/.test(label) && /difficult ground \+20 ft/.test(label), label);
+check('dragging a token across it says what it costs: 35 ft plus 4 squares', /55 ft/.test(label) && /difficult terrain \+20 ft/.test(label), label);
 await dm.evaluate((id) => window.__vtt.client.updateTokens([id], { fly: true, elev: 10 }), tok);
 await sleep(300);
 const fl = await dm.evaluate(([id]) => { const b = window.__vtt.board; const t = window.__vtt.client.scene.tokens.get(id); return b.moveCost([{ x: t.x, y: t.y }, { x: t.x + 7 * 70, y: t.y }], true); }, [tok]);
@@ -73,7 +73,7 @@ await dm.locator('.flyout .seg button', { hasText: 'Erase' }).click();
 await dragTo(C(9, 6), C(10, 6));
 const cells2 = await dm.evaluate(() => { const b = window.__vtt.board; return [8, 9, 10, 11].filter((i) => { const p = { x: b.client.grid.ox + (i + 0.5) * b.client.grid.cell, y: b.client.grid.oy + 6.5 * b.client.grid.cell }; return window.__vtt.board.isRoughAt(p); }).length; });
 check('rubbing out takes squares away', cells2 === 2, `${cells2}`);
-await dm.locator('.flyout button', { hasText: 'Clear difficult ground' }).click();
+await dm.locator('.flyout button', { hasText: 'Clear difficult terrain' }).click();
 await sleep(400);
 check('and it can be cleared', (await dm.evaluate(() => window.__vtt.board.rough.areas.length)) === 0);
 await dm.locator('.flyout button', { hasText: 'Elevation' }).first().click();

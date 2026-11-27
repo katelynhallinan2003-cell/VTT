@@ -233,6 +233,7 @@ export interface GradientControl { id: string; height: number; path: Vec[]; boun
 export interface Drawing {
   gradient?: GradientControl[];
   gradientEnabled?: boolean;
+  gradientFixed?: boolean;
   id: string;
   /** who made it */
   uid: string;

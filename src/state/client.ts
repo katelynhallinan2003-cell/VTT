@@ -1,5 +1,5 @@
+import { initialBoundaryControls } from '../core/gradientBoundaries';
 import { brushWall, resolveWalls } from '../core/wallBrush';
-import { gradientCutsForPaint } from '../core/gradientBoundaries';
 import { reuseStrokeGeometry, standingGround } from '../core/terrain';
 import type { Backend, Unsub } from '../backend/types';
 import { SERVER_TS } from '../backend/types';
@@ -63,7 +63,7 @@ export interface SceneState {
 
 /** A drawing as the caller describes it; the text styling and the fill colour are optional. */
 export type NewDrawing = Omit<Drawing, 'id' | 'uid' | 't' | 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc' | 'dt' | 'dl' | 'dd'> & Partial<Pick<Drawing, 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc' | 'dt' | 'dl' | 'dd'>>;
-export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'hg' | 'ha' | 'he' | 'hc' | 'gradientEnabled' | 'gradient' | 'td'>>;
+export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'hg' | 'ha' | 'he' | 'hc' | 'gradientEnabled' | 'gradientFixed' | 'gradient' | 'td'>>;
 
 export type ScenePatch = Partial<Omit<SceneMeta, 'grid' | 'fog' | 'light'>> & {
   grid?: Partial<GridSettings>;
@@ -925,11 +925,11 @@ export class TableClient {
     if (!this.canDo(isTemplate(d.k) ? 'template' : 'draw')) throw new Error(isTemplate(d.k) ? 'The DM has turned off spell templates for players.' : 'The DM has turned off drawing for players.');
     const id = this.backend.newKey();
     const full: Drawing = { fc: '', font: '', b: false, i: false, u: false, ho: false, hz: null, ...d, id, uid: this.uid, t: this.backend.now() };
-    const all = this.withGradientCuts([full]);
-    const wrote = all.length===1 ? this.backend.set(this.drawPath(id), drawingToWire(full)) : this.restoreDrawings(all);
+    if (this.isGroundDrawing(full)) await this.prepareGradients();
+    const wrote = this.backend.set(this.drawPath(id), drawingToWire(full));
     opts.onId?.(id);
     await wrote;
-    if (opts.record !== false) this.recordDrawn(all, opts.label ?? (isTemplate(d.k) ? 'Place template' : 'Draw'));
+    if (opts.record !== false) this.recordDrawn([full], opts.label ?? (isTemplate(d.k) ? 'Place template' : 'Draw'));
     return id;
   }
 
@@ -940,17 +940,66 @@ export class TableClient {
     if (list.some((d) => !this.canDo(isTemplate(d.k) ? 'template' : 'draw'))) throw new Error('The DM has turned off drawing for players.');
     const t = this.backend.now();
     const full: Drawing[] = list.map((d) => ({ fc: '', font: '', b: false, i: false, u: false, ho: false, hz: null, ...d, id: this.backend.newKey(), uid: this.uid, t }));
-    const all = this.withGradientCuts(full);
-    await this.restoreDrawings(all);
-    this.recordDrawn(all, label);
+    if (full.some(d=>this.isGroundDrawing(d))) await this.prepareGradients();
+    await this.restoreDrawings(full);
+    this.recordDrawn(full, label);
     return full.map((d) => d.id);
   }
 
-  private withGradientCuts(full:Drawing[]) {
-    if (!this.isDM || !this.scene || !full.some(d=>d.hz!=null && !d.he && !d.dt && !d.dl)) return full;
-    const cuts=gradientCutsForPaint([...this.scene.draws.values()],full,this.grid);
-    return [...full,...cuts.map(c=>({...full[0],...c,gradient:undefined,gradientEnabled:undefined,ha:false,hc:false,dt:false,dl:false,
-      id:this.backend.newKey()}))];
+  private isGroundDrawing(d:Drawing|undefined) {
+    return !!d && !d.dt && !d.dl && (d.k==='terrain' || d.hz!=null);
+  }
+
+  private gradientChecks = new WeakMap<SceneState,Promise<void>>();
+  private checkedGradients = new WeakSet<SceneState>();
+
+  /** Old maps saved only exceptions to inferred boundary lines. Capture their visible
+   * controls together before any terrain edit can change the neighboring heights. */
+  private async prepareGradients() {
+    const scene=this.scene;
+    if (!scene || !this.isDM) return;
+    const legacy=(d:Drawing)=>!d.gradientFixed && (d.gradientEnabled || !!d.gradient?.length);
+    if (this.checkedGradients.has(scene) && ![...scene.draws.values()].some(legacy)) return;
+    let pending=this.gradientChecks.get(scene);
+    if (!pending) {
+      const path=P.sceneDraw(this.tableId,scene.id);
+      const check=async () => {
+        const saved=await this.backend.get(path);
+        if (Object.values<Drawing>(saved ?? {}).some(legacy)) {
+          const grid=scene.meta?.grid ?? normalizeSceneMeta(await this.backend.get(P.sceneMeta(this.tableId,scene.id)) ?? {}).grid;
+          await this.backend.transaction(path,raw=>{
+            if (!raw || !Object.values<Drawing>(raw).some(legacy)) return;
+            const draws=Object.entries(raw).map(([id,d])=>normalizeDrawing(id,d)).filter((d):d is Drawing=>!!d);
+            const updated={...raw};
+            let changed=false;
+            for (const area of zonesOf(draws,grid).areas) {
+              if (!area.gradientEnabled || area.gradientFixed) continue;
+              const anchor=[...area.paint].sort((a,b)=>a.t-b.t || a.id.localeCompare(b.id))[0];
+              const row={...raw[anchor.id],gradientEnabled:true,gradientFixed:true};
+              if (area.gradient?.length) row.gradient=area.gradient.map(({id,height,path})=>({id,height,path}));
+              else delete row.gradient;
+              updated[anchor.id]=row;
+              changed=true;
+            }
+            return changed ? updated : undefined;
+          });
+        }
+        this.checkedGradients.add(scene);
+      };
+      pending=check().finally(()=>this.gradientChecks.delete(scene));
+      this.gradientChecks.set(scene,pending);
+    }
+    await pending;
+    if (scene!==this.scene) throw new Error('The scene changed before the terrain edit finished.');
+  }
+
+  async makeGradient(anchorId:string) {
+    await this.prepareGradients();
+    const anchor=this.scene?.draws.get(anchorId);
+    if (!anchor || !this.isDM || anchor.gradientEnabled) return;
+    const terrain=zonesOf(this.drawingsSorted(),this.grid);
+    const controls=initialBoundaryControls(terrain,anchor.hg || anchor.id);
+    await this.updateDrawings([anchorId],{gradientEnabled:true,gradientFixed:true,gradient:controls},'Make gradient');
   }
 
   private async restoreDrawings(list: Drawing[]) {
@@ -1112,6 +1161,7 @@ export class TableClient {
   }
 
   async removeDrawings(ids: string[], label = 'Erase drawing'): Promise<void> {
+    if (ids.some(id=>this.isGroundDrawing(this.scene?.draws.get(id)))) await this.prepareGradients();
     const snaps = ids.map((id) => this.scene?.draws.get(id)).filter((d): d is Drawing => !!d && this.canEditDrawing(d)).map((d) => ({ ...d }));
     if (!snaps.length) return;
     await this.deleteDrawingsRaw(snaps.map((d) => d.id));
@@ -1173,6 +1223,7 @@ export class TableClient {
 
   /** Slide drawings by (dx, dy). `record` makes it one undo step. */
   async moveDrawings(ids: string[], dx: number, dy: number, record = true): Promise<void> {
+    if (ids.some(id=>this.isGroundDrawing(this.scene?.draws.get(id)))) await this.prepareGradients();
     const before = ids.map((id) => this.scene?.draws.get(id)).filter((d): d is Drawing => !!d && this.canEditDrawing(d)).map((d) => ({ id: d.id, p: d.p, gradient: d.gradient }));
     if (!before.length) return;
     const after = before.map((b) => ({ id: b.id, p: movedPoints(b, dx, dy), gradient: b.gradient?.map(c => ({...c, path: c.path.map(p => ({x:p.x+dx,y:p.y+dy}))})) }));
@@ -1189,6 +1240,7 @@ export class TableClient {
   }
 
   async updateDrawings(ids: string[], patch: DrawingPatch, label = 'Edit drawing'): Promise<void> {
+    if (ids.some(id=>this.isGroundDrawing(this.scene?.draws.get(id)))) await this.prepareGradients();
     const cur = ids.map((id) => this.scene?.draws.get(id)).filter((d): d is Drawing => !!d && this.canEditDrawing(d));
     if (!cur.length) return;
     const prev = cur.map((d) => ({ id: d.id, vals: Object.fromEntries(Object.keys(patch).map((k) => [k, (d as any)[k]])) }));

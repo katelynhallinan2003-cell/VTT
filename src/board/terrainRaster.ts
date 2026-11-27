@@ -137,13 +137,15 @@ export function paintTerrain(t:Terrain,selected:Set<string>,context:(w:number,h:
   const heights = new Set<number>();
   for (let i = 0; i < N; i++) if (cov[i]) heights.add(smooth[i] ? Math.round(hgt[i]/5)*5 : hgt[i]);
   const levels = [...heights].sort((a,b) => a-b);
-  const colour = (h: number) => {
+  const colour = (h: number, continuous: boolean) => {
     const key = Math.round(h * 10) / 10;
-    let rgb = lut.get(key);
+    // A flat 0 ft area is neutral. A slope passing through 0 uses its continuous palette.
+    const slot = continuous && key === 0 ? Infinity : key;
+    let rgb = lut.get(slot);
     if (!rgb) {
-      const c = parseInt(heightColor(key,levels).slice(1),16);
+      const c = parseInt(heightColor(key,levels,continuous).slice(1),16);
       rgb = [(c >> 16) & 255,(c >> 8) & 255,c & 255];
-      lut.set(key,rgb);
+      lut.set(slot,rgb);
     }
     return rgb;
   };
@@ -151,7 +153,7 @@ export function paintTerrain(t:Terrain,selected:Set<string>,context:(w:number,h:
     // tint, only on the ground itself
     let a = 0, R_ = 0, G_ = 0, B_ = 0;
     const coverage = cov[i];
-    if (coverage) { const c = colour(hgt[i]); R_ = c[0]; G_ = c[1]; B_ = c[2]; a = 0.36 * coverage; }
+    if (coverage) { const c = colour(hgt[i],!!smooth[i]); R_ = c[0]; G_ = c[1]; B_ = c[2]; a = 0.36 * coverage; }
     // shadow on the low side of a drop, light on the high side
     const d = around[i] - hgt[i];
     const k = Math.min(1, Math.abs(d) / 6) ** 0.7;
@@ -165,7 +167,7 @@ export function paintTerrain(t:Terrain,selected:Set<string>,context:(w:number,h:
     };
     over(10, 12, 20, sh);
     over(255, 255, 255, hi);
-    if (cov[i] && line[i] > 0.02) { const c = colour(hgt[i]); over(c[0] * 0.4, c[1] * 0.4, c[2] * 0.4, 0.58 * line[i]); }
+    if (cov[i] && line[i] > 0.02) { const c = colour(hgt[i],!!smooth[i]); over(c[0] * 0.4, c[1] * 0.4, c[2] * 0.4, 0.58 * line[i]); }
     if (ring[i]) over(SELECT_RGB[0], SELECT_RGB[1], SELECT_RGB[2], 1);
     const o = i * 4;
     px[o] = R_; px[o + 1] = G_; px[o + 2] = B_; px[o + 3] = Math.round(Math.min(1, a) * 255);

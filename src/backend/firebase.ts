@@ -5,7 +5,7 @@ import {
 } from 'firebase/auth';
 import {
   getDatabase, get as dbGet, onChildAdded, onChildChanged, onChildRemoved, onDisconnect, onValue,
-  push, ref, remove as dbRemove, set as dbSet, update as dbUpdate, type Database,
+  push, ref, runTransaction, remove as dbRemove, set as dbSet, update as dbUpdate, type Database,
 } from 'firebase/database';
 import type { AppConfig, AuthUser } from '../types';
 import type { Backend, ChildHandlers, Unsub } from './types';
@@ -54,6 +54,9 @@ export class FirebaseBackend implements Backend {
   async set(path: string, value: any) { await dbSet(ref(this.db, path), value); }
   async remove(path: string) { await dbRemove(ref(this.db, path)); }
   async update(updates: Record<string, any>) { await dbUpdate(ref(this.db), updates); }
+  async transaction(path: string, change: (value: any) => any) {
+    await runTransaction(ref(this.db,path),change,{applyLocally:false});
+  }
   newKey() { return push(ref(this.db, 'keys')).key!; }
 
   listen(path: string, cb: (v: any) => void, onError?: (e: Error) => void): Unsub {

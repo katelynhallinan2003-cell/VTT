@@ -1,9 +1,10 @@
-import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'preact/hooks';
 import type { Board } from '../board/Board';
 import { DRAW_COLORS, DRAW_NAME, FILL_LEVEL, FONTS, LINE_H, STROKE_CELLS, fillModeOf, fontStack, isTemplate, sizeFt, withSizeFt, type FillMode } from '../core/draw';
 import type { TableClient } from '../state/client';
 import { terrainBrushMode, type DrawTool, type StrokeSize, type TemplateKind, type UiState } from '../state/ui';
 import { ZONE_PRESETS, roughOf, zoneColor, zonesOf } from '../core/height';
+import { terrainHoleOptions } from '../core/terrainEdges';
 import { areasSelected } from '../core/terrain';
 import { isHex } from '../core/hex';
 import { currentOverlay } from '../core/gridOverlay';
@@ -195,11 +196,14 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
   const roughN = roughOf(client.drawingsSorted(), grid).areas.length;
   const modes = rough ? ([['paint', 'Paint'], ['erase', 'Erase']] as const) : ([['paint', 'Paint'], ['erase', 'Erase'], ['move', 'Select']] as const);
   const gradient = !!d.gradientArea;
+  const holes=useMemo(()=>!rough && editing && (!picks || picks.length===1)
+    ? terrainHoleOptions(terrain,mine.map(a=>a.id),picks?.[0]) : undefined,
+    [rough,terrain.sig,d.drawSel,picks,editing]);
   async function fillHoles(all:boolean) {
     const scene=client.scene;
     const ids=await client.fillGroundHoles(mine.map(a=>a.id),picks?.[0],all);
     if (client.scene!==scene) return;
-    if (!ids.length) { toast(all ? 'No enclosed holes to fill.' : 'No enclosed unpainted holes.'); return; }
+    if (!ids.length) return;
     if (!gradient) ui.selectDrawings([...(one?.ids ?? []),...ids]);
   }
   async function editGradient() {
@@ -212,9 +216,9 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
     if (!area) return;
     if (!area.gradientEnabled) {
       const anchor = [...area.paint].sort((a,b)=>a.t-b.t || a.id.localeCompare(b.id))[0];
-      await client.updateDrawings([anchor.id],{gradientEnabled:true},'Make gradient');
+      await client.makeGradient(anchor.id);
     }
-    ui.set({drawSel:new Set(area.ids),gradientArea:area.id});
+    ui.set({drawSel:new Set(area.ids),heightMode:'move',gradientArea:area.id});
   }
   return (
     <div class="flyout terrain-menu">
@@ -236,7 +240,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
         <div class="row">
           <strong>{picks ? (picks.length === 1 ? 'Selected ground' : `${picks.length} areas selected`) : editing ? (one ? 'Selected ground' : `${mine.length} areas selected`) : 'Next ground you paint'}</strong>
           <span class="grow" />
-          {editing && <button class="btn small" title="Let go of this ground so the next stroke starts a new one (Esc)" onClick={() => ui.selectDrawings([])}>New area</button>}
+          {editing && <button class="btn small" title="Deselect terrain (Esc)" onClick={() => ui.selectDrawings([])}>Done</button>}
         </div>
         {!gradient && !one?.gradientEnabled && <>
         <NumField label={shownAdd ? 'Raise by' : 'Height'} value={shownH} min={-1000} max={5000} step={5} unit="ft" title={shownAdd ? 'How much higher this makes the ground it sits on. Negative digs it down.' : 'How high this ground is. Negative is a pit.'} onCommit={setH} />
@@ -253,9 +257,9 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
         {editing ? (
           <div class="row wrap">
             {(!picks || picks.every(p => p.whole)) && paintable.length > 1 && <button class="btn small" title="Make these one area" onClick={() => { ui.selectDrawings(paintable.flatMap(a => a.ids)); void client.mergeAreas(paintable); }}>Merge</button>}
-            {(one || picks?.length === 1) && <button class="btn small" onClick={() => gradient ? ui.set({gradientArea:undefined,gradientFocus:undefined}) : void editGradient().catch(e=>toast(e.message,'error'))}>{gradient ? 'Done' : one?.gradientEnabled ? 'Edit Gradient' : 'Make Gradient'}</button>}
-            {(one || picks?.length===1) && <button class="btn small" onClick={()=>void fillHoles(false).catch(e=>toast(e.message,'error'))}>Fill unpainted holes</button>}
-            {one?.gradientEnabled && <button class="btn small" onClick={()=>void fillHoles(true).catch(e=>toast(e.message,'error'))}>Fill all holes</button>}
+            {!one?.gradientEnabled && (one || picks?.length === 1) && <button class="btn small" onClick={() => void editGradient().catch(e=>toast(e.message,'error'))}>Make Gradient</button>}
+            {holes?.bare && <button class="btn small" onClick={()=>void fillHoles(false).catch(e=>toast(e.message,'error'))}>Fill unpainted holes</button>}
+            {holes?.all && <button class="btn small" onClick={()=>void fillHoles(true).catch(e=>toast(e.message,'error'))}>Fill all holes</button>}
             <button class="btn small danger" onClick={() => { if (picks) void client.editHeightPatches(picks,'delete'); else void client.removeDrawings(mine.flatMap((a) => a.ids), 'Delete ground'); ui.selectDrawings([]); }}>Delete {one || picks?.length === 1 ? 'area' : 'areas'}</button>
           </div>
         ) : null}

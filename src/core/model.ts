@@ -253,6 +253,7 @@ export function normalizeDrawing(id: string, raw: any): Drawing | null {
     hz: typeof raw.hz === 'number' && Number.isFinite(raw.hz) && (raw.k === 'rect' || raw.k === 'ellipse' || raw.k === 'terrain') ? Math.min(5000, Math.max(-1000, Math.round(raw.hz))) : null,
     ...(raw.pv === true ? { pv: true } : {}),
     ...(raw.td === true && isTemplate(raw.k) ? { td: true } : {}),
+    ...(raw.gradientFixed === true ? {gradientFixed:true} : {}),
     ...(raw.gradientEnabled === true ? {gradientEnabled:true} : {}),
     ...(raw.gradient && ['terrain','rect','ellipse'].includes(raw.k) ? {gradient:readGradient(raw.gradient)} : {}),
     ...(raw.k === 'terrain' ? { hg: typeof raw.hg === 'string' ? raw.hg.slice(0, 24) : '', ha: bool(raw.ha, false), he: bool(raw.he, false), hc: bool(raw.hc, false), ...(typeof raw.hr === 'string' && raw.hr ? { hr: raw.hr } : {}), ...(raw.dt === true ? { dt: true } : {}), ...(raw.dl === true ? { dl: true } : {}), ...(raw.dl === true && raw.dd === true ? { dd: true } : {}) } : {}),

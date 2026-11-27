@@ -41,6 +41,7 @@ export interface Area {
   legacy: boolean;
   gradient?: Drawing['gradient'];
   gradientEnabled?: boolean;
+  gradientFixed?: boolean;
   boundaryDefaults?: Drawing['gradient'];
   /** the height in feet */
   h: number;
@@ -193,7 +194,7 @@ export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings, layer: '
     if (d.hz == null && d.k !== 'terrain') continue;
     // difficult ground and daylight are painted with the same brush but are layers of their own: they never change how high anything is
     if ((d.dt ? 'rough' : d.dl ? (d.dd ? 'dim' : 'day') : 'ground') !== layer) continue;
-    sigParts.push(`${d.id}|${d.k}|${d.p}|${d.w}|${d.hz}|${d.hg ?? ''}|${d.ha ? 1 : 0}|${d.he ? 1 : 0}|${d.hc ? 1 : 0}|${d.hr ?? ''}|${d.gradientEnabled ? 1 : 0}|${JSON.stringify(d.gradient ?? [])}|${d.t}`);
+    sigParts.push(`${d.id}|${d.k}|${d.p}|${d.w}|${d.hz}|${d.hg ?? ''}|${d.ha ? 1 : 0}|${d.he ? 1 : 0}|${d.hc ? 1 : 0}|${d.hr ?? ''}|${d.gradientFixed ? 2 : d.gradientEnabled ? 1 : 0}|${JSON.stringify(d.gradient ?? [])}|${d.t}`);
     if (d.k === 'terrain') {
       if (d.he) { erasers.push(d); continue; }
       if (d.hz == null) continue;
@@ -203,7 +204,7 @@ export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings, layer: '
     } else if ((d.k === 'rect' || d.k === 'ellipse') && d.hz != null) {
       const s = strokeOf(d, grid);
       if (!s) continue;
-      legacy.push({ id: d.id, legacy: true, gradient: d.gradient, gradientEnabled: !!(d.gradientEnabled || d.gradient?.length), h: d.hz, add: false, order: 0, strokes: [s], paint: [s], ids: [d.id], b: s.b });
+      legacy.push({ id: d.id, legacy: true, gradient: d.gradient, gradientFixed: d.gradientFixed, gradientEnabled: !!(d.gradientEnabled || d.gradient?.length), h: d.hz, add: false, order: 0, strokes: [s], paint: [s], ids: [d.id], b: s.b });
     }
   }
   // old-style: bigger ones go below, so a nest drawn inside a cliff counts as the nest
@@ -226,7 +227,7 @@ export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings, layer: '
     const all = [...paint, ...mine, ...eras.filter((e) => e.hg === '')].sort((a, b) => a.t - b.t || (a.id < b.id ? -1 : 1));
     // the area's height and mode are those of its first stroke (editing an area rewrites all of them together)
     const first = [...g.paint].sort((a, b) => a.t - b.t || a.id.localeCompare(b.id))[0];
-    painted.push({ id, legacy: false, gradient: first.gradient, gradientEnabled: !!(first.gradientEnabled || first.gradient?.length), h: first.hz ?? g.hz, add: !!first.ha, order: 0, strokes: all, paint, ids: [...paint, ...mine].map((s) => s.id), b: unionRect(paint.map((s) => s.b)) });
+    painted.push({ id, legacy: false, gradient: first.gradient, gradientFixed: first.gradientFixed, gradientEnabled: !!(first.gradientEnabled || first.gradient?.length), h: first.hz ?? g.hz, add: !!first.ha, order: 0, strokes: all, paint, ids: [...paint, ...mine].map((s) => s.id), b: unionRect(paint.map((s) => s.b)) });
   }
   painted.sort((a, b) => Math.min(...a.paint.map((s) => s.t)) - Math.min(...b.paint.map((s) => s.t)) || (a.id < b.id ? -1 : 1));
   const areas = [...legacy, ...painted];
@@ -234,7 +235,11 @@ export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings, layer: '
   const terrain = { areas, grid, sig: `${layer}|${grid.visible}|${grid.snap}|${grid.shape}|${grid.ft}|${grid.cell}|${grid.ox}|${grid.oy}#${sigParts.join(';')}` };
   if (areas.some(a => a.gradientEnabled)) {
     if (lastGradientTerrain?.sig === terrain.sig && lastGradientTerrain.grid === grid) return lastGradientTerrain;
-    resolveGradientBoundaries(terrain);
+    if (areas.some(a => a.gradientEnabled && !a.gradientFixed)) resolveGradientBoundaries(terrain);
+    for (const a of areas) if (a.gradient?.length === 1 && a.gradient[0].id.startsWith('join:')) {
+      a.h = a.gradient[0].height;
+      a.add = false;
+    }
     lastGradientTerrain = terrain;
   }
   return terrain;
@@ -336,8 +341,8 @@ export function totalWith(below: number, h: number, add: boolean): number {
 }
 
 /** Topographical colours by rank among the finished elevations on the map. */
-export function heightColor(h: number, levels: readonly number[] = [-10,0,5,10,15,20,25,30,35,40,60]): string {
-  if (h === 0) return '#a8b0ba';
+export function heightColor(h: number, levels: readonly number[] = [-10,0,5,10,15,20,25,30,35,40,60], continuous = false): string {
+  if (h === 0 && !continuous) return '#a8b0ba';
   const stops = [[53,139,177],[65,174,150],[169,197,105],[236,203,111],[216,140,111],[157,122,172]];
   let rank = levels.findIndex(level => level >= h);
   if (rank < 0) rank = levels.length-1;

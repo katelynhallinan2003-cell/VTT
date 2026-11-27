@@ -67,21 +67,26 @@ assert.ok(await fields.nth(1).evaluate(el=>el===document.activeElement));
 await dm.keyboard.type('30'); await dm.keyboard.press('Enter');
 await dm.waitForFunction(()=>Math.abs(window.__vtt.board.groundAtPoint(window.__vtt.board.screenToWorld(850,465))-30)<0.1);
 
+const original=await dm.evaluate(()=>{
+  const {ui,board}=window.__vtt;
+  return {controls:board.gradientControls(ui.data.gradientArea),height:board.groundAtPoint(board.screenToWorld(995,450))};
+});
 const shelf=await dm.evaluate(async()=>{
   const {client,board}=window.__vtt;
   const a=board.screenToWorld(960,250), b=board.screenToWorld(1060,660);
   return client.addDrawing({k:'terrain',hg:'shelf',hz:18,hr:'5',p:[a.x,a.y,b.x,a.y,b.x,b.y,a.x,b.y,a.x,a.y].join(','),
     color:'#fff',w:1,fill:0,dash:false,txt:'',fs:28,bw:5});
 });
-await dm.waitForFunction(()=>document.querySelectorAll('.gradient-box').length===3);
-assert.equal(await fields.first().inputValue(),'18');
-await fields.first().fill('22'); await fields.first().press('Enter');
-await dm.waitForFunction(()=>window.__vtt.board.gradientControls(window.__vtt.ui.data.gradientArea)[0].height===22);
+await dm.waitForFunction(()=>window.__vtt.board.groundAtPoint(window.__vtt.board.screenToWorld(995,450))===18);
+assert.deepEqual(await dm.evaluate(()=>{const {ui,board}=window.__vtt;return board.gradientControls(ui.data.gradientArea);}),original.controls);
 await dm.evaluate(shelf=>window.__vtt.client.removeDrawings([shelf]),shelf);
-await dm.waitForFunction(()=>window.__vtt.board.groundAtPoint(window.__vtt.board.screenToWorld(995,450))===0);
+await dm.waitForFunction(h=>window.__vtt.board.groundAtPoint(window.__vtt.board.screenToWorld(995,450))===h,original.height);
 await dm.getByRole('button',{name:'Done',exact:true}).click();
-await dm.getByRole('button',{name:'Edit Gradient',exact:true}).click();
-assert.equal(await fields.count(),2);
+assert.equal(await fields.count(),0);
+assert.equal(await dm.evaluate(()=>window.__vtt.ui.data.drawSel.size),0);
+await dm.mouse.click(700,490);
+await fields.nth(1).waitFor();
+assert.equal(await dm.getByRole('button',{name:'Fill all holes',exact:true}).count(),0);
 // A painted island in the old rectangle gradient leaves the controls and the deck intact.
 await dm.evaluate(async()=>{
   const {board,client}=window.__vtt;
@@ -91,7 +96,7 @@ await dm.evaluate(async()=>{
 });
 const islandHeight=()=>dm.evaluate(()=>window.__vtt.board.groundAtPoint(window.__vtt.board.screenToWorld(735,400)));
 await dm.waitForFunction(()=>window.__vtt.board.groundAtPoint(window.__vtt.board.screenToWorld(735,400))===45);
-await dm.getByRole('button',{name:'Fill unpainted holes',exact:true}).click();
+assert.equal(await dm.getByRole('button',{name:'Fill unpainted holes',exact:true}).count(),0);
 assert.equal(await islandHeight(),45);
 await dm.getByRole('button',{name:'Fill all holes',exact:true}).click();
 await dm.waitForFunction(()=>{const {board}=window.__vtt;const h=board.groundAtPoint(board.screenToWorld(735,400));return h>5 && h<30;});

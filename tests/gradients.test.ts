@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_GRID, drawingToWire, normalizeDrawing } from '../src/core/model';
-import { gradientCutsForPaint, storedControls } from '../src/core/gradientBoundaries';
+import { initialBoundaryControls } from '../src/core/gradientBoundaries';
 import { dragGradient, gradientPath, initialGradientLine } from '../src/core/gradientGeometry';
-import { groundAtTerrain, slopeAt, standingGround, terrainOf } from '../src/core/terrain';
-import { areaShape, terrainEdges, fillTerrainHoles, patchStroke } from '../src/core/terrainEdges';
+import { heightColor, groundAtTerrain, slopeAt, standingGround, terrainOf } from '../src/core/terrain';
+import { connectedHeight, areaShape, terrainEdges, fillTerrainHoles, terrainHoleOptions, patchStroke } from '../src/core/terrainEdges';
 import { movementCost } from '../src/core/movementCost';
 import type { Seg } from '../src/core/walls';
 import type { GradientControl, Vec } from '../src/types';
@@ -49,6 +49,12 @@ describe('editable gradients',()=>{
     expect(groundAtTerrain(t,at(2,3))).toBeLessThan(groundAtTerrain(t,at(3,3)));
     expect(standingGround(t,at(2,3))).toBe(standingGround(t,at(3,3)));
   });
+  it('keeps a continuous tint through zero on a slope and a neutral tint on flat zero ground',()=>{
+    const levels=[-10,-5,0,5,10,15];
+    const rgb=(h:number)=>heightColor(h,levels,true).slice(1).match(/../g)!.map(c=>parseInt(c,16));
+    for (const h of [-0.1,0.1]) expect(rgb(h).every((c,i)=>Math.abs(c-rgb(0)[i])<4)).toBe(true);
+    expect(heightColor(0,levels)).toBe('#a8b0ba');
+  });
   it('immediately makes an edge segment and extends it beyond half the perimeter',()=>{
     const shape=areaShape(terrainOf([area([])],grid),'hill');
     const path=initialGradientLine(shape,at(0,0),3)!;
@@ -59,27 +65,31 @@ describe('editable gradients',()=>{
     expect(long.length).toBeGreaterThan(4);
     expect(long.at(-1)).toEqual(at(0,5));
   });
-  it('cuts the actual gradient and follows a neighboring flat height until overridden',()=>{
-    const hill=area([line(0,0),line(8,6)]);
+  it('keeps an established slope under overlapping paint and makes walls at unequal edges',()=>{
+    const hill={...area([line(0,0),line(8,6)]),gradientFixed:true};
     const flat=normalizeDrawing('shelf',{k:'terrain',hg:'shelf',hz:20,hr:'5',p:'6,-10,12,-10,12,10,6,10,6,-10',t:2})!;
-    const cuts=gradientCutsForPaint([hill],[flat],grid).map((d,i)=>normalizeDrawing('cut'+i,{...d,t:3})!);
-    expect(cuts.length).toBe(1);
-    const edited=terrainOf([hill,flat,...cuts],grid);
-    const slope=edited.areas.find(a=>a.id==='hill')!;
-    const seam=slope.boundaryDefaults![0];
-    expect(seam.height).toBe(20);
-    expect(seam.path.every(p=>p.x===6)).toBe(true);
-    expect(slope.gradient!.some(c=>c.id==='8')).toBe(false);
-    const seamWalls=(t:typeof edited)=>terrainEdges(t).filter(e=>Math.abs(e.a.x-6)<1e-6 && Math.abs(e.b.x-6)<1e-6);
-    expect(seamWalls(edited)).toHaveLength(0);
-    const raised={...flat,hz:25};
-    expect(terrainOf([hill,raised,...cuts],grid).areas[0].boundaryDefaults![0].height).toBe(25);
-    const gradient=storedControls([seam],slope.gradient!.map(c=>c===seam || c.id===seam.id ? {...c,height:15} : c),hill.gradient!);
-    const changed=terrainOf([{...hill,gradient},raised,...cuts],grid);
-    expect(seamWalls(changed).every(e=>e.low===15 && e.top===25)).toBe(true);
-    expect(seamWalls(changed).length).toBeGreaterThan(0);
-    expect(groundAtTerrain(terrainOf([hill,...cuts],grid),at(7))).toBe(0);
-    expect(groundAtTerrain(terrainOf([hill],grid),at(7))).toBeGreaterThan(0);
+    const original=terrainOf([hill],grid);
+    for (const cover of [flat,{...flat,gradientEnabled:true,gradientFixed:true,gradient:[line(6,20),line(12,40)]}]) {
+      const t=terrainOf([hill,cover],grid);
+      expect(t.areas[0].gradient).toEqual(hill.gradient);
+      expect(areaShape(t,'hill')).toEqual(areaShape(original,'hill'));
+      expect(groundAtTerrain(t,at(4))).toBe(groundAtTerrain(original,at(4)));
+      expect(groundAtTerrain(t,at(7))).toBeGreaterThanOrEqual(20);
+      expect(terrainEdges(t).some(e=>Math.abs(e.a.x-6)<1e-6 && Math.abs(e.b.x-6)<1e-6 && e.top>e.low)).toBe(true);
+    }
+  });
+  it('seeds a touching face at a 14 ft difference and skips a 15 ft rise or drop',()=>{
+    const hill=normalizeDrawing('hill',{k:'rect',hz:10,p:'0,0,60,30'})!;
+    const shelf=(id:string,left:number,h:number)=>normalizeDrawing(id,{k:'rect',hz:h,p:[left,-5,left+15,0].join(',')})!;
+    const t=terrainOf([hill,shelf('a',0,24),shelf('b',15,25),shelf('c',30,-5),shelf('d',45,-4)],grid);
+    const controls=initialBoundaryControls(t,'hill');
+    expect(controls.map(c=>c.height).sort((a,b)=>a-b)).toEqual([-4,24]);
+    for (const c of controls) expect(Math.abs(c.path[0].x-c.path.at(-1)!.x)).toBe(15);
+  });
+  it('selects a flat neighbor independently even if the gradient has no handles and matches its height',()=>{
+    const hill={...area([]),gradientEnabled:true,gradientFixed:true};
+    const shelf=normalizeDrawing('shelf',{k:'rect',hz:12,p:'8,-10,14,10'})!;
+    expect(connectedHeight(terrainOf([hill,shelf],grid),at(11))?.ids).toEqual(['shelf']);
   });
   it('only matches the touching stretch on either side of a corner',()=>{
     const hill=area([line(0,0),line(8,6)]);
@@ -108,7 +118,9 @@ describe('filling selected terrain holes',()=>{
       const edits=fillTerrainHoles(t,['base'],undefined,all).map((d,i)=>normalizeDrawing('e'+i,{...d,t:4})!);
       return terrainOf([...initial,...edits],grid);
     };
+    expect(terrainHoleOptions(t,['base'])).toEqual({bare:true,all:gradient});
     const normal=apply(false);
+    expect(terrainHoleOptions(normal,['base'])).toEqual({bare:false,all:gradient});
     expect(groundAtTerrain(normal,at(6,6))).toBeGreaterThan(0);
     expect(groundAtTerrain(normal,at(32,7))).toBeGreaterThan(0);
     expect(groundAtTerrain(normal,at(11,11))).toBe(0);
@@ -118,6 +130,7 @@ describe('filling selected terrain holes',()=>{
       expect(slopeAt(all,at(11,11))).toBeDefined();
       expect(groundAtTerrain(all,at(58,22))).toBe(0);
       expect(fillTerrainHoles(all,['base'],undefined,true)).toHaveLength(0);
+      expect(terrainHoleOptions(all,['base'])).toEqual({bare:false,all:false});
     }
   });
 });

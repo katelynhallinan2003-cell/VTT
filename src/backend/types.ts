@@ -31,6 +31,8 @@ export interface Backend {
   set(path: string, value: any): Promise<void>;
   /** Multi-path update from the database root. A null value deletes that path. Atomic. */
   update(updates: Record<string, any>): Promise<void>;
+  /** Retry against the latest value. Returning undefined leaves it alone. */
+  transaction(path: string, change: (value: any) => any): Promise<void>;
   remove(path: string): Promise<void>;
   /** A new time-sortable child key (does not write anything). */
   newKey(): string;

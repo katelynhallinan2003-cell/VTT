@@ -1,7 +1,7 @@
 import clip, { type MultiPolygon, type Pair } from 'polygon-clipping';
-import type { Drawing, GradientControl, GridSettings, Vec } from '../types';
-import { terrainOf, type Terrain } from './terrain';
-import { inRegion, patchStroke, terrainLayers } from './terrainEdges';
+import type { GradientControl, Vec } from '../types';
+import {groundAtTerrain, type Terrain} from './terrain';
+import { inRegion, terrainLayers } from './terrainEdges';
 import { locate } from './gradientGeometry';
 
 const eps = 1e-7;
@@ -88,9 +88,9 @@ function joinedBoundary(runs:BoundaryRun[],cell:number,protectedIds:Set<string>)
 type Layer=ReturnType<typeof terrainLayers>[number];
 const boundaryCache=new WeakMap<MultiPolygon,{ neighbors:MultiPolygon[]; key:string; shape:MultiPolygon; defaults:GradientControl[]; outline:ReturnType<typeof edges> }>();
 
-function boundaryShape(layer:Layer, neighbors:Layer[], cell:number, protectedIds:Set<string>) {
+function boundaryShape(layer:Layer, neighbors:Layer[], cell:number, protectedIds:Set<string>, original?:Terrain) {
   const area=layer.area;
-  const key=JSON.stringify([cell,area.order,[...protectedIds].sort(),...neighbors.map(l=>[l.area.id,l.area.order,l.area.h,l.area.add,l.area.gradientEnabled])]);
+  const key=JSON.stringify([cell,original?.sig,area.order,[...protectedIds].sort(),...neighbors.map(l=>[l.area.id,l.area.order,l.area.h,l.area.add,l.area.gradientEnabled])]);
   const cached=boundaryCache.get(layer.shape);
   if (cached?.key===key && neighbors.every((l,i)=>l.shape===cached.neighbors[i])) return cached;
   // Older scenes can already contain flat paint covering a gradient.
@@ -116,6 +116,11 @@ function boundaryShape(layer:Layer, neighbors:Layer[], cell:number, protectedIds
           height+=l.area.h;
           key=flat ? l.area.id : '';
         }
+        if (key && original) {
+          const inside={x:p.x-2*n*(b.y-a.y),y:p.y+2*n*(b.x-a.x)};
+          const from=area.add ? groundAtTerrain(original,inside) : area.h;
+          if (Math.abs(height-from)>=15) key='';
+        }
         const last=runs.at(-1);
         if(last && last.key===key && last.height===height && last.bare===bare) last.path.push(along(a,b,cuts[j]));
         else runs.push({key,height,bare,path:[along(a,b,cuts[j-1]),along(a,b,cuts[j])]});
@@ -137,14 +142,26 @@ function boundaryShape(layer:Layer, neighbors:Layer[], cell:number, protectedIds
   return result;
 }
 
+function nearbyLayers(layer:Layer,layers:Layer[]) {
+  const {b}=layer.area;
+  return layers.filter(l=>l!==layer && l.area.b.x<=b.x+b.w && l.area.b.x+l.area.b.w>=b.x &&
+    l.area.b.y<=b.y+b.h && l.area.b.y+l.area.b.h>=b.y);
+}
+
+export function initialBoundaryControls(t:Terrain, id:string) {
+  const layers=terrainLayers(t);
+  const layer=layers.find(l=>l.area.id===id);
+  return layer ? boundaryShape(layer,nearbyLayers(layer,layers),t.grid.cell,new Set(),t).defaults : [];
+}
+
+/** Resolve maps from before boundary controls were stored in full. */
 export function resolveGradientBoundaries(t:Terrain) {
   const layers=terrainLayers(t);
   for(const layer of layers) {
     const {area}=layer;
-    if(!area.gradientEnabled) continue;
+    if(!area.gradientEnabled || area.gradientFixed) continue;
     const stored=area.gradient ?? [];
-    const neighbors=layers.filter(l=>l!==layer && l.area.b.x<=area.b.x+area.b.w && l.area.b.x+l.area.b.w>=area.b.x &&
-      l.area.b.y<=area.b.y+area.b.h && l.area.b.y+l.area.b.h>=area.b.y);
+    const neighbors=nearbyLayers(layer,layers);
     const {shape,defaults,outline}=boundaryShape(layer,neighbors,t.grid.cell,new Set(stored.filter(c=>shared(c.id) && !c.id.startsWith('join:merged:')).map(c=>c.id)));
     layer.shape=shape;
     area.boundaryDefaults=defaults;
@@ -158,29 +175,5 @@ export function resolveGradientBoundaries(t:Terrain) {
       const height=saved?.boundary==='both' || saved?.boundary==='height' ? saved.height : c.height;
       return saved?.boundary==='both' || saved?.boundary==='path' ? visible({...c,height,path:saved.path}) : [{...c,height}];
     }),...stored.filter(c=>!shared(c.id)).flatMap(visible)];
-    if(area.gradient.length===1 && shared(area.gradient[0].id)) { area.h=area.gradient[0].height; area.add=false; }
   }
-}
-
-/** Write only explicit overrides so a matching line follows future edits to its neighbor. */
-export function storedControls(defaults:GradientControl[],desired:GradientControl[],previous:GradientControl[]) {
-  const out=desired.filter(c=>!shared(c.id));
-  for(const base of defaults) {
-    const c=desired.find(c=>c.id===base.id);
-    if(!c) { out.push({...base,boundary:'hidden'}); continue; }
-    const height=c.height!==base.height;
-    const path=c.path.length!==base.path.length || c.path.some((p,i)=>distance(p,base.path[i])>eps);
-    if(height || path) out.push({...c,boundary:height && path ? 'both' : height ? 'height' : 'path'});
-  }
-  return [...out,...previous.filter(c=>shared(c.id) && !defaults.some(d=>d.id===c.id))];
-}
-
-/** Persist a cut in the gradient's group, independently of the covering flat stroke. */
-export function gradientCutsForPaint(existing:Drawing[],added:Drawing[],grid:GridSettings) {
-  const flats=added.filter(d=>d.hz!=null && !d.he && !d.dt && !d.dl && !d.gradientEnabled && !d.gradient?.length);
-  if(!flats.length || !existing.some(d=>d.gradientEnabled || d.gradient?.length)) return [];
-  const ground=terrainOf(existing,grid);
-  const gradients=terrainLayers(ground).filter(l=>l.area.gradientEnabled);
-  const incoming=terrainLayers(terrainOf(flats,grid)).filter(l=>!gradients.some(g=>g.area.id===l.area.id));
-  return gradients.flatMap(g=>incoming.flatMap(l=>clip.intersection(g.shape,l.shape).map(poly=>patchStroke(poly,g.area.id,null))));
 }

@@ -129,6 +129,10 @@ export class MockBackend implements Backend {
   forceUser(u: AuthUser | null) { this.setUser(u); }
 
   // ---- data ----
+  async transaction(path: string, change: (value: any) => any) {
+    const next=change(structuredClone(getAt(this.tree,path)));
+    if (next !== undefined) this.apply({[path]:next},true);
+  }
   async get(path: string) { return structuredClone(getAt(this.tree, path)); }
   async set(path: string, value: any) { this.apply({ [path]: value }, true); }
   async remove(path: string) { this.apply({ [path]: null }, true); }

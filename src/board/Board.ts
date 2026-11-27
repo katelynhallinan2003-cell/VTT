@@ -7,11 +7,10 @@ import { templateRoughDraws } from '../core/templaterough';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
 import { altitudeOf, dayOf, dimOf, groundAt, heightNote, isRough, roughOf, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
-import { storedControls } from '../core/gradientBoundaries';
 import { dragGradient, gradientPath, initialGradientLine } from '../core/gradientGeometry';
 import { areaShape, brushCuts, clippedBrush, patchStroke, connectedHeight, type TerrainEdge } from '../core/terrainEdges';
 import { movementCost } from '../core/movementCost';
-import { EMPTY_TERRAIN, MAX_STROKE_CELLS, slopeAt, surfaceHeight, standingGround, groundAtTerrain, areaLabelAt, areasSelected, cellKey, cellsAlong, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
+import { EMPTY_TERRAIN, MAX_STROKE_CELLS, slopeAt, surfaceHeight, standingGround, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
 import { scaleCut, type GridCut, type PixelImage } from '../core/gridcut';
 import { AUTO_GRID_STRENGTH, detectPrintedGrid, impliedGrid } from '../core/mapgrid';
@@ -2676,9 +2675,7 @@ export class Board {
   saveGradient(id: string, controls: NonNullable<Area['gradient']>) {
     const anchor = this.gradientAnchor(id);
     if (!anchor || !this.client.isDM) return;
-    const area=this.gradientTerrain().areas.find(a=>a.id===id);
-    const gradient=storedControls(area?.boundaryDefaults ?? [],controls,anchor.gradient ?? []);
-    void this.client.updateDrawings([anchor.id],{gradientEnabled:true,gradient},'Edit gradient')
+    void this.client.updateDrawings([anchor.id],{gradientEnabled:true,gradientFixed:true,gradient:controls},'Edit gradient')
       .catch((err: Error) => this.cb.onNotice(err.message,'error'));
   }
 
@@ -2698,7 +2695,12 @@ export class Board {
     const rough = u.groundKind === 'rough';
     const gridless = currentOverlay(this.client.grid) === 'none';
     const mode = terrainBrushMode(u);
-    if (u.gradientArea && !rough) {
+    const clicked = !rough && mode === 'move' ? areaAt(this.zones,w) : null;
+    if (clicked?.gradientEnabled && clicked.id !== u.gradientArea && !e.shiftKey) {
+      this.ui.set({drawSel:new Set(clicked.ids),gradientArea:clicked.id,selection:new Set(),mapSelected:false,extraSel:null});
+      return;
+    }
+    if (u.gradientArea && !rough && (!clicked || clicked.id === u.gradientArea)) {
       e.preventDefault();
       const area = this.zones.areas.find(a => a.id === u.gradientArea);
       if (!area) return;

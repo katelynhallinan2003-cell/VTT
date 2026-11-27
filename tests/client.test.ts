@@ -61,6 +61,25 @@ describe('TableClient over the mock backend', () => {
     expect(dm.grid).toMatchObject({visible:false,snap:false});
   });
 
+  it('preserves a saved boundary when converting and editing its neighbor',async()=>{
+    const {dm,dmB,tid,sid}=await setup();
+    const path=P.sceneDraw(tid,sid);
+    await dmB.set(path,{
+      hill:{uid:'dm',k:'rect',p:'0,0,100,100',hz:5,gradientEnabled:true,
+        gradient:[{id:'join:shelf:0',boundary:'height',height:14,path:[{x:100,y:0},{x:100,y:100}]}]},
+      shelf:{uid:'dm',k:'rect',p:'100,0,200,100',hz:25}
+    });
+    await dm.makeGradient('shelf');
+    const saved=await dmB.get(path+'/hill');
+    expect(saved.gradientFixed).toBe(true);
+    expect(Object.values(saved.gradient)).toHaveLength(1);
+    expect(saved.gradient[0]).toMatchObject({id:'join:shelf:0',height:14});
+    await dm.updateDrawings(['shelf'],{gradient:[{id:'a',height:35,path:[{x:100,y:0}]}]});
+    await dm.moveDrawings(['shelf'],5,5);
+    await dm.removeDrawings(['shelf']);
+    expect(await dmB.get(path+'/hill')).toEqual(saved);
+  });
+
   it('syncs tokens both ways', async () => {
     const { dm, pl } = await setup();
     const id = await dm.addToken({ x: 35, y: 35, name: 'Goblin', size: 1 });

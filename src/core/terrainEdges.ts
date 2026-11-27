@@ -124,7 +124,8 @@ function heightRegions(t: Terrain): Plan {
   const nextPrefix:typeof flatPrefix=[];
   let same=true, flat=true;
   for (const {area,shape:mask} of layers) {
-    flat=flat && (area.gradient?.length ?? 0)<2;
+    const gradient=!!area.gradientEnabled;
+    flat=flat && !gradient;
     const prior=saved[nextPrefix.length];
     same=same && flat && !!prior && prior.mask===mask && prior.h===area.h && prior.add===area.add;
     if (same) { regions=prior.regions; nextPrefix.push(prior); continue; }
@@ -134,13 +135,13 @@ function heightRegions(t: Terrain): Plan {
       const current = next.get(z);
       next.set(z, current ? clip.union(current, shape) : shape);
     };
-    const gradient = (area.gradient?.length ?? 0) >= 2;
+    const adds = area.add && (area.gradient?.length ?? 0)<2;
     let bare = mask;
     for (const [z, region] of regions) {
       add(z, clip.difference(region, mask));
-      if (area.add && !gradient) {
+      if (adds) {
         const below = surfaces.get(z);
-        add(below ? surfaceKey(below.area,below.offset + area.h) : z + area.h, clip.intersection(region, mask));
+        add(below ? surfaceKey(below.area,below.offset + area.h) : gradient ? surfaceKey(area,z) : z + area.h, clip.intersection(region, mask));
         bare = clip.difference(bare, region);
       }
     }
@@ -189,7 +190,7 @@ export function connectedHeight(t: Terrain, point: Vec): HeightPatch | null {
   // where they coincide, while preserving the supporting ground below a terrace.
   let duplicates: MultiPolygon = [];
   for (const {area,shape} of [...layers].reverse()) {
-    const same = !area.add && area.h === height;
+    const same = !area.gradientEnabled && !area.add && area.h === height;
     const visible = clip.intersection(exposed,shape);
     const cut = same && duplicates.length ? clip.union(visible,clip.intersection(duplicates,shape)) : visible;
     if (cut.length) {
@@ -205,12 +206,12 @@ export function connectedHeight(t: Terrain, point: Vec): HeightPatch | null {
 }
 
 /** Only inner rings are candidates. A notch open to the exterior is never filled. */
-export function fillTerrainHoles(t:Terrain, ids:string[], patch:HeightPatch|undefined, all:boolean) {
+function enclosedHoles(t:Terrain, ids:string[], patch?:HeightPatch) {
   const layers=terrainLayers(t);
   const picked=layers.filter(l=>ids.includes(l.area.id));
-  if (!picked.length || (all && (picked.length!==1 || !picked[0].area.gradientEnabled))) return [];
+  if (!picked.length) return;
   const one=picked.length===1 ? picked[0] : undefined;
-  if (!one && !patch) return [];
+  if (!one && !patch) return;
   let shape:MultiPolygon=patch ? [patch.polygon] : one!.shape;
   // An occupied island may cover an older gradient with no stored erasure.
   if (one?.area.gradientEnabled) {
@@ -218,10 +219,24 @@ export function fillTerrainHoles(t:Terrain, ids:string[], patch:HeightPatch|unde
     if (over.length) shape=clip.difference(shape,...over.map(l=>l.shape));
   }
   const rings=shape.flatMap(p=>p.slice(1).map(r=>[r] as Polygon));
-  if (!rings.length) return [];
-  let holes=clip.difference(clip.union(rings),shape);
+  if (!rings.length) return;
+  const holes=clip.difference(clip.union(rings),shape);
   const others=layers.filter(l=>!picked.includes(l));
-  if (!all && others.length) holes=clip.difference(holes,...others.map(l=>l.shape));
+  if (!holes.length) return;
+  const bare=others.length ? clip.difference(holes,...others.map(l=>l.shape)) : holes;
+  return {one,others,holes,bare};
+}
+
+export function terrainHoleOptions(t:Terrain, ids:string[], patch?:HeightPatch) {
+  const found=enclosedHoles(t,ids,patch);
+  return {bare:!!found?.bare.length,all:!!found?.one?.area.gradientEnabled};
+}
+
+export function fillTerrainHoles(t:Terrain, ids:string[], patch:HeightPatch|undefined, all:boolean) {
+  const found=enclosedHoles(t,ids,patch);
+  if (!found || (all && !found.one?.area.gradientEnabled)) return [];
+  const {one,others}=found;
+  const holes=all ? found.holes : found.bare;
   if (!holes.length) return [];
   const edits:ReturnType<typeof patchStroke>[]=[];
   if (all && one) for (const other of others) {

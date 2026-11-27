@@ -1,5 +1,5 @@
 import clip, { type MultiPolygon, type Pair, type Polygon } from 'polygon-clipping';
-import type { GridSettings, Vec } from '../types';
+import type { GridSettings, Rect, Vec } from '../types';
 import { snapToCellCenter } from './geometry';
 import { cellPoly } from './cells';
 import { areaAt, groundAtTerrain, surfaceHeight, type Area, type Terrain, type TStroke } from './terrain';
@@ -20,6 +20,15 @@ const pair = (p: Vec): Pair => [p.x, p.y];
 function brushFootprint(grid: GridSettings, pts: Vec[], radius: number, cells: boolean): MultiPolygon {
   const bounds = {x:0,y:0,w:0,h:0};
   return footprint({kind:cells ? 'cells' : 'free',pts,r:radius,b:bounds},grid);
+}
+
+/** Null keeps the compact stroke format; an empty intersection adds no terrain. */
+export function clippedBrush(grid: GridSettings, pts: Vec[], width: number, cells: boolean, maps: Rect[]): MultiPolygon | null {
+  if (!maps.length || !pts.length) return null;
+  const r = cells ? grid.cell * 0.6 : width / 2;
+  if (maps.some(m => pts.every(p => p.x-r >= m.x && p.y-r >= m.y && p.x+r <= m.x+m.w && p.y+r <= m.y+m.h))) return null;
+  const rectangles: Polygon[] = maps.map(({x,y,w,h}) => [[[x,y],[x+w,y],[x+w,y+h],[x,y+h]]]);
+  return clip.intersection(brushFootprint(grid,pts,width/2,cells),clip.union(rectangles));
 }
 
 function footprint(s: Pick<TStroke,'kind'|'pts'|'r'|'b'|'rings'>, grid: GridSettings): MultiPolygon {
@@ -169,8 +178,8 @@ export function connectedHeight(t: Terrain, point: Vec): HeightPatch | null {
 }
 
 /** Limit a brush erasure to the selected surface, even if another island shares its stroke. */
-export function brushCuts(patches: HeightPatch[], grid: GridSettings, pts: Vec[], width: number, cells: boolean) {
-  const brush = brushFootprint(grid,pts,width/2,cells);
+export function brushCuts(patches: HeightPatch[], grid: GridSettings, pts: Vec[], width: number, cells: boolean, clipped?: MultiPolygon | null) {
+  const brush = clipped ?? brushFootprint(grid,pts,width/2,cells);
   return patches.map(p => ({...p,whole:false,cuts:p.cuts.map(c => ({...c,shape:clip.intersection(c.shape,brush)}))
     .filter(c => c.shape.length)})).filter(p => p.cuts.length);
 }

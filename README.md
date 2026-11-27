@@ -75,7 +75,9 @@ together with a link. Built for one DM and a handful of trusted friends, hosted 
 ```bash
 npm install
 npm run dev        # open http://localhost:5173/?demo for demo mode (no Firebase needed)
-npm test           # unit tests, including the security-rule checks
+npm test           # tests affected by current changes
+npm run test:maps  # feature groups: maps, terrain, vision, drawing, tokens, table
+npm run test:all   # full unit suite, including the database rules
 npm run build      # production build into dist/
 npm run e2e        # headless-browser smoke test (needs Chrome, and `npm run dev` running)
 ```

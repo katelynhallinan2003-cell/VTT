@@ -136,15 +136,53 @@ export async function readGridSample(tex: LoadedTexture, url: string, maxSide = 
   }
 }
 
+// Pictures are immutable upload URLs. Version the key when the pixel repair or display limits change.
+export function gridlessKey(url: string, cut: GridCut): string {
+  return JSON.stringify([url, maxTextureSide(), cut.p, cut.x, cut.y, cut.t, cut.hex ?? 'square']);
+}
+
+const pendingSaves = new Map<string, Promise<void>>();
+async function pictureCache(key: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
+  const hash = Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2,'0')).join('');
+  return { cache: await caches.open('vtt-gridless-v1'), path: new URL('./__gridless/' + hash, document.baseURI).href };
+}
+
+export async function savedGridlessTexture(key: string): Promise<LoadedTexture | null> {
+  try {
+    await pendingSaves.get(key);
+    const { cache, path } = await pictureCache(key);
+    const entry = await cache.match(path);
+    if (!entry) return null;
+    const w = Number(entry.headers.get('X-Map-Width')), h = Number(entry.headers.get('X-Map-Height'));
+    if (!(w > 0 && h > 0)) return null;
+    const bitmap = await createImageBitmap(await entry.blob());
+    return { w, h, scale: w / bitmap.width, texture: new Texture({ source: new ImageSource({
+      resource: bitmap, scaleMode: 'linear', autoGenerateMipmaps: true,
+    }) }) };
+  } catch { return null; } // Private browsing, eviction or an unreadable entry: rebuild from the original.
+}
+
+function saveGridless(key: string, canvas: HTMLCanvasElement, w: number, h: number) {
+  if (pendingSaves.has(key)) return;
+  const save = (async () => {
+    const { cache, path } = await pictureCache(key);
+    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
+    if (blob) await cache.put(path, new Response(blob, { headers: {
+      'Content-Type': 'image/png', 'X-Map-Width': String(w), 'X-Map-Height': String(h),
+    } }));
+  })().catch(() => {}).finally(() => pendingSaves.delete(key));
+  pendingSaves.set(key, save);
+}
+
 /** A copy of the map with its printed grid filled in. `cut` is in pixels of the original picture. */
-export async function gridlessTexture(tex: LoadedTexture, cut: GridCut): Promise<Texture | null> {
-  // let the screen paint ("working…") before the heavy part
-  await new Promise<void>((r) => setTimeout(r, 20));
+export async function gridlessTexture(tex: LoadedTexture, cut: GridCut, key: string): Promise<LoadedTexture | null> {
   const src = tex.texture.source;
   const px = readPixels(src.resource, src.pixelWidth, src.pixelHeight);
   if (!px) return null;
   const c = scaleCut(cut, 1 / tex.scale);
   if (c.hex) hideHexGrid(px.img, c); else hideGrid(px.img, c);
   px.ctx.putImageData(px.id, 0, 0);
-  return new Texture({ source: new CanvasSource({ resource: px.canvas, scaleMode: 'linear', autoGenerateMipmaps: true }) });
+  saveGridless(key, px.canvas, tex.w, tex.h);
+  return { ...tex, texture: new Texture({ source: new CanvasSource({ resource: px.canvas, scaleMode: 'linear', autoGenerateMipmaps: true }) }) };
 }

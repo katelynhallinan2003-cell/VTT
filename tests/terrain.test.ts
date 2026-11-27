@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_GRID, drawingToWire, normalizeDrawing } from '../src/core/model';
 import { areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, cellsAround, groundAtTerrain, newAreaId, paintedAreaAt, terrainOf, totalWith } from '../src/core/terrain';
+import { clippedBrush, patchStroke } from '../src/core/terrainEdges';
 import { hexToPx } from '../src/core/hex';
 import type { Drawing } from '../src/types';
 
@@ -188,5 +189,22 @@ describe('what an area is called on the map', () => {
   it('adds or sets over the ground below', () => {
     expect(totalWith(20, 5, true)).toBe(25);
     expect(totalWith(20, 5, false)).toBe(5);
+  });
+});
+
+describe('painting at a map boundary', () => {
+  const pages = [{ x: 20, y: 10, w: 90, h: 120 }, { x: 160, y: 10, w: 100, h: 120 }];
+  for (const [name,g,cells] of [['round',grid,false],['square',grid,true],['hex',hexGrid,true]] as const) {
+    it(`clips the saved ${name} brush to the artwork, including gaps between pages`, () => {
+      const pieces = clippedBrush(g,[{x:50,y:50},{x:150,y:50},{x:250,y:50}],100,cells,pages)!;
+      expect(pieces.length).toBeGreaterThan(0);
+      const ground = terrainOf(pieces.map((poly,i) => normalizeDrawing(String(i),patchStroke(poly,'hill',20))!),g);
+      expect(groundAtTerrain(ground,{x:60,y:50})).toBe(20);
+      for (const p of [{x:10,y:50},{x:125,y:50},{x:270,y:50}]) expect(groundAtTerrain(ground,p)).toBe(0);
+    });
+  }
+  it('discards strokes entirely beyond the edge and keeps interior strokes compact', () => {
+    expect(clippedBrush(grid,[{x:-50,y:-50}],10,false,pages)).toEqual([]);
+    expect(clippedBrush(grid,[{x:50,y:50}],10,false,pages)).toBeNull();
   });
 });

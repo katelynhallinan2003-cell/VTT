@@ -19,12 +19,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm test
+      - name: Test affected code
+        if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        env:
+          BASE_COMMIT: ${{ github.event.before }}
+        run: npm test -- "$BASE_COMMIT"
+      - name: Test all features
+        if: github.event_name == 'workflow_dispatch' || github.event.before == '0000000000000000000000000000000000000000'
+        run: npm run test:all
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:

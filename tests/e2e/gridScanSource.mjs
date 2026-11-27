@@ -58,6 +58,46 @@ try {
     return Math.abs(client.scene.meta.mapGrid?.p - 36) < 0.1 && client.grid.snap && client.grid.visible && ui.data.tool !== 'scale';
   });
   console.log('PASS  A previously missed map recovers without recreating the scene or setting the scale');
+
+  await page.waitForFunction(async () => (await (await caches.open('vtt-gridless-v1')).keys()).length === 1);
+  await page.evaluate(() => {
+    const { client } = window.__vtt;
+    client.openScene(client.viewSceneId);
+  });
+  await page.waitForFunction(() => {
+    const { board } = window.__vtt;
+    return board.mapCutTex && board.mapSprite?.texture === board.mapCutTex && !board.mapTex;
+  });
+  console.log('PASS  Reopening displays the saved clean picture without loading the original');
+  await page.evaluate(async () => {
+    const { client } = window.__vtt;
+    await client.updateScene({mapGrid:{...client.scene.meta.mapGrid,on:false}});
+  });
+  await page.waitForFunction(() => {
+    const { board } = window.__vtt;
+    return board.mapTex && board.mapSprite.texture === board.mapTex.texture;
+  });
+  await page.evaluate(async () => {
+    const { client } = window.__vtt;
+    const cut = client.scene.meta.mapGrid;
+    await client.updateScene({mapGrid:{...cut,on:true,x:cut.x + 1}});
+  });
+  await page.waitForFunction(async () => (await (await caches.open('vtt-gridless-v1')).keys()).length === 2);
+  console.log('PASS  Showing the original and changing alignment select distinct pictures');
+
+  const pos = await page.evaluate(async () => {
+    const {board,client,ui} = window.__vtt;
+    await client.updateScene({grid:{visible:false,snap:false}});
+    ui.set({tool:'height',heightMode:'paint',heightBrush:6,heightFt:20});
+    return board.worldToScreen({x:8,y:1200});
+  });
+  await page.mouse.click(pos.x,pos.y);
+  await page.waitForFunction(() => [...window.__vtt.client.scene.draws.values()].some(d => d.k === 'terrain' && d.hr));
+  await page.waitForFunction(() => {
+    const { board } = window.__vtt;
+    return board.groundAtPoint({x:5,y:1200}) === 20 && board.groundAtPoint({x:-5,y:1200}) === 0;
+  });
+  console.log('PASS  Painting across the map edge saves height up to the edge only');
 } finally {
   await browser.close();
 }

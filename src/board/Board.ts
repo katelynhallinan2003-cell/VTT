@@ -9,7 +9,7 @@ import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
 import { altitudeOf, dayOf, dimOf, groundAt, heightNote, isRough, roughOf, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
 import { storedControls } from '../core/gradientBoundaries';
 import { dragGradient, gradientPath, initialGradientLine } from '../core/gradientGeometry';
-import { areaShape, brushCuts, connectedHeight, terrainEdges, type TerrainEdge } from '../core/terrainEdges';
+import { areaShape, brushCuts, clippedBrush, patchStroke, connectedHeight, terrainEdges, type TerrainEdge } from '../core/terrainEdges';
 import { movementCost } from '../core/movementCost';
 import { EMPTY_TERRAIN, MAX_STROKE_CELLS, slopeAt, surfaceHeight, standingGround, groundAtTerrain, areaLabelAt, areasSelected, cellKey, cellsAlong, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
@@ -31,7 +31,7 @@ import { DrawLayer, paintShape } from './DrawLayer';
 import { TerrainLayer } from './TerrainLayer';
 import { WallLayer } from './WallLayer';
 import { WALL_NAME, boxSegments, chainSegments, circlePoints, distToSeg, endNear, freehandCorners, hatchTicks, moveSegs, rayHit, sideOf, sightSegs, snapWallPoint, visibilityPolygon, wallMid, wallNear, wallVisDefault, type Seg, type Wall } from '../core/walls';
-import { canvasTexture, loadTexture, releaseTexture, setTextureFailHandler, type LoadedTexture, gridlessTexture, readGridSample } from './textures';
+import { canvasTexture, loadTexture, releaseTexture, setTextureFailHandler, type LoadedTexture, gridlessKey, gridlessTexture, savedGridlessTexture, readGridSample } from './textures';
 import { diagnoseImage } from '../core/images';
 import { currentOverlay, overlaySettings, type GridOverlay } from '../core/gridOverlay';
 
@@ -106,6 +106,10 @@ export class Board {
   /** difficult ground: a layer of its own, hatched on the map */
   private rough: Terrain = EMPTY_TERRAIN({ ...DEFAULT_GRID });
   private roughG = new Graphics();
+  private terrainGraphics = new Container();
+  private terrainBrushG = new Graphics();
+  private terrainMask = new Graphics();
+  private terrainMaps: Rect[] = [];
   /** daylight and dim light the DM painted: they light the ground when the scene is dim or dark */
   private day: Terrain = EMPTY_TERRAIN({ ...DEFAULT_GRID });
   private dim: Terrain = EMPTY_TERRAIN({ ...DEFAULT_GRID });
@@ -169,7 +173,6 @@ export class Board {
   /** the map with its printed grid filled in (shown instead of the original while that is switched on) */
   private mapCutTex: Texture | null = null;
   private mapCutKey = '';
-  private cutSeq = 0;
 
   private views = new Map<string, TokenView>();
   private fogMask = new FogMask();
@@ -264,7 +267,8 @@ export class Board {
     this.distText.anchor.set(0.5, 1);
     this.distText.visible = false;
     this.ghostLayer.sortableChildren = true;
-    this.world.addChild(this.mapLayer, this.extraLayer, this.gridG, this.terrainLayer.container, this.roughG, this.lightLayer.tint, this.drawLayer.container, this.wallLayer.container, this.auraG, this.tokenLayer, this.ghostLayer, this.lightLayer.container, this.fogLayer, this.overlayG, this.fxLayer, this.distText);
+    this.terrainGraphics.addChild(this.terrainLayer.container, this.roughG, this.terrainBrushG);
+    this.world.addChild(this.mapLayer, this.extraLayer, this.gridG, this.terrainGraphics, this.terrainMask, this.lightLayer.tint, this.drawLayer.container, this.wallLayer.container, this.auraG, this.tokenLayer, this.ghostLayer, this.lightLayer.container, this.fogLayer, this.overlayG, this.fxLayer, this.distText);
     app.stage.addChild(this.world);
 
     this.bindInput(app.canvas);
@@ -621,13 +625,18 @@ export class Board {
         this.fitPending = false;
         this.applyCamera();
       }
-      if (meta.mapUrl) void this.loadMap(meta.mapUrl);
+      this.ui.set({ status: null });
     }
-    if (this.mapSprite && this.mapTex) {
+    if (meta.mapUrl) void this.loadMap(meta.mapUrl);
+    if (this.mapSprite) {
       this.mapSprite.position.set(meta.mapX, meta.mapY);
       this.mapSprite.scale.set(meta.mapScale * this.mapScaleToWorld);
-      this.applyMapCut();
     }
+    this.terrainMaps = [mapRect(meta), ...meta.maps.map(m => ({x:m.x,y:m.y,w:m.w*m.scale,h:m.h*m.scale}))].filter(r => r.w>0 && r.h>0);
+    this.terrainMask.clear();
+    for (const r of this.terrainMaps) this.terrainMask.rect(r.x,r.y,r.w,r.h);
+    if (this.terrainMaps.length) this.terrainMask.fill(0xffffff);
+    this.terrainGraphics.mask = this.terrainMaps.length ? this.terrainMask : null;
     this.syncPage(meta);
     if (this.fitPending && (!meta.mapUrl || (meta.mapW > 0 && meta.mapH > 0))) {
       this.fit();
@@ -714,35 +723,19 @@ export class Board {
   }
 
   private resetCut() {
-    this.cutSeq++;
+    this.mapLoadSeq++;
     this.mapCutKey = '';
     if (this.mapCutTex) { this.mapCutTex.destroy(true); this.mapCutTex = null; }
   }
 
-  /** Show the map with or without its printed grid, whichever the scene says. Done on every screen from the saved lines, so nothing extra is stored. */
-  private applyMapCut() {
-    const sprite = this.mapSprite, tex = this.mapTex;
-    const cut = this.client.scene?.meta?.mapGrid;
-    if (!sprite || !tex) return;
-    const want = cut && cut.on ? cut : null;
-    const key = want ? `${this.mapUrl}|${want.p}|${want.x}|${want.y}|${want.t}|${want.hex ?? ''}` : '';
-    if (key === this.mapCutKey) return;
-    this.mapCutKey = key;
-    const seq = ++this.cutSeq;
-    if (!want) {
-      sprite.texture = tex.texture;
-      if (this.mapCutTex) { this.mapCutTex.destroy(true); this.mapCutTex = null; }
-      this.invalidate();
-      return;
-    }
-    void gridlessTexture(tex, want).then((t) => {
-      if (seq !== this.cutSeq || this.destroyed || this.mapSprite !== sprite) { t?.destroy(true); return; }
-      if (!t) { this.mapCutKey = ''; this.cb.onNotice("Couldn't hide the map's grid lines on this device.", 'error'); return; }
-      sprite.texture = t;
-      if (this.mapCutTex) this.mapCutTex.destroy(true);
-      this.mapCutTex = t;
-      this.invalidate();
-    });
+  /** Load the original on demand for pixel tools and for showing the printed grid. */
+  private async originalMap(url: string) {
+    const seq = this.mapLoadSeq;
+    const scene = this.client.scene;
+    const tex = this.mapTex ?? await loadTexture(url, 'map');
+    if (this.destroyed || seq !== this.mapLoadSeq || scene !== this.client.scene || scene?.meta?.mapUrl !== url) return null;
+    this.mapTex = tex;
+    return tex;
   }
 
   /**
@@ -750,8 +743,8 @@ export class Board {
    * The answer is in pixels of the original picture, so it stays right however big the map is shown.
    */
   async findMapGrid(opts: { any?: boolean } = {}): Promise<{ cut: GridCut; strength: number } | { error: string; noGrid?: boolean }> {
-    const tex = this.mapTex;
     const meta = this.client.scene?.meta;
+    const tex = meta?.mapUrl ? await this.originalMap(meta.mapUrl) : null;
     if (!tex || !meta?.mapUrl) return { error: 'Add a map picture first.' };
     const seq = this.mapLoadSeq;
     const scene = this.client.scene;
@@ -776,8 +769,8 @@ export class Board {
    * `toScene` and `fromScene` convert between points in that sample and points on the board.
    */
   async readMapForWalls(maxSide: number): Promise<{ img: PixelImage; toScene: (p: Vec) => Vec; fromScene: (p: Vec) => Vec; cellPx: number } | { error: string }> {
-    const tex = this.mapTex;
     const meta = this.client.scene?.meta;
+    const tex = meta?.mapUrl ? await this.originalMap(meta.mapUrl) : null;
     if (!tex || !meta?.mapUrl) return { error: 'Add a map picture to this scene first.' };
     const px = await readGridSample(tex, meta.mapUrl, maxSide);
     if (!px) return { error: "This browser would not let me read the map picture, so I can't look for walls in it." };
@@ -811,16 +804,29 @@ export class Board {
     const sid = this.client.scene?.id;
     if (!url || !sid) return;
     this.cb.onMapError(null);
+    this.mapCutKey = '';
     void this.loadMap(url);
   }
 
   private async loadMap(url: string) {
-    const seq = ++this.mapLoadSeq;
     const scene = this.client.scene;
+    const cut = scene?.meta?.mapGrid;
+    const key = cut?.on ? gridlessKey(url,cut) : 'original';
+    if (key === this.mapCutKey) return;
+    this.mapCutKey = key;
+    const seq = ++this.mapLoadSeq;
     const current = () => !this.destroyed && this.client.scene === scene && scene?.meta?.mapUrl === url && this.mapLoadSeq === seq;
     this.ui.set({ status: 'Loading map…' });
-    const tex = await loadTexture(url, 'map');
+    let clean = cut?.on ? await savedGridlessTexture(key) : null;
+    if (!current()) { clean?.texture.destroy(true); return; }
+    const original = clean ? null : await this.originalMap(url);
     if (!current()) return;
+    if (cut?.on && !clean && original) {
+      clean = await gridlessTexture(original, cut, key);
+      if (!current()) { clean?.texture.destroy(true); return; }
+      if (!clean) this.cb.onNotice("Couldn't hide the map's grid lines on this device.", 'error');
+    }
+    const tex = clean ?? original;
     this.ui.set({ status: null });
     if (!tex) {
       // keep the camera on the (empty) board so tokens stay visible even without the picture
@@ -834,22 +840,23 @@ export class Board {
       return;
     }
     this.cb.onMapError(null);
-    this.mapTex = tex;
     this.mapScaleToWorld = tex.scale;
-    const sprite = new Sprite(tex.texture);
+    const sprite = this.mapSprite ?? new Sprite();
+    sprite.texture = tex.texture;
+    if (!this.mapSprite) this.mapLayer.addChild(sprite);
     this.mapSprite = sprite;
-    this.mapLayer.addChild(sprite);
+    this.mapCutTex?.destroy(true);
+    this.mapCutTex = clean?.texture ?? null;
     const meta = this.client.scene!.meta!;
     // the DM's client repairs missing dimensions
     if (this.client.isDM && (!meta.mapW || !meta.mapH)) void this.client.updateScene({ mapW: tex.w, mapH: tex.h });
     sprite.position.set(meta.mapX, meta.mapY);
     sprite.scale.set(meta.mapScale * tex.scale);
-    this.applyMapCut();
     if (this.fitPending) { this.fit(); this.fitPending = false; }
     this.gridDirty = true;
     this.updateFog();
     this.invalidate();
-    if (this.client.isDM && meta.mapUrl && !meta.gridTried) {
+    if (this.client.isDM && meta.mapUrl && !meta.gridTried && !meta.mapGrid) {
       // with the setting off the map is still marked as looked at, so switching it on later does not surprise anyone
       if (this.ui.data.autoGrid) void this.autoMapGrid(current);
       else void this.client.updateScene({ gridTried: true }, { record: false });
@@ -1951,6 +1958,7 @@ export class Board {
   private drawOverlay() {
     const g = this.overlayG;
     g.clear();
+    this.terrainBrushG.clear();
     this.distText.visible = false;
     for (const t of this.plotLabels) t.visible = false;
     this.plotNext = 0;
@@ -2120,10 +2128,10 @@ export class Board {
     const brushLabelIndex = li;
     if (d?.kind === 'lightpaint') this.paintLightBrush(g, z, d.last, d);
     else if (!d && u.tool === 'light' && this.pointerW && this.client.isDM) this.paintLightBrush(g, z, this.pointerW, null);
-    else if (d?.kind === 'terrain') li = this.paintBrush(g, z, d.last, d, li);
+    else if (d?.kind === 'terrain') li = this.paintBrush(this.terrainBrushG, z, d.last, d, li);
     else if (!d && !u.gradientArea && u.tool === 'height' && this.pointerW && this.client.isDM) {
       const mode = terrainBrushMode(u);
-      if (mode === 'paint' || mode === 'erase') li = this.paintBrush(g, z, this.pointerW, null, li);
+      if (mode === 'paint' || mode === 'erase') li = this.paintBrush(this.terrainBrushG, z, this.pointerW, null, li);
     }
     this.terrainLayer.avoidBrushReadout(li > brushLabelIndex ? this.plotLabels[brushLabelIndex] : undefined);
     if (!u.heightPatches && d?.kind === 'drawmove' && d.moved) this.paintMoveGhost(g, d);
@@ -2740,9 +2748,11 @@ export class Board {
       pts = d.pts.length > 2 ? fitPenPoints(d.pts, Math.max(0.5, wpx * 0.06)) : d.pts;
     }
     if (!pts.length) return;
+    const clipped = clippedBrush(grid,pts,wpx,!!d.cells,this.terrainMaps);
+    if (clipped && !clipped.length) return;
     const picks = this.ui.data.heightPatches;
     if (picks && !d.rough && d.erase && !(picks.length === 1 && picks[0].whole && this.currentArea())) {
-      const cuts = brushCuts(picks,grid,pts,wpx,!!d.cells);
+      const cuts = brushCuts(picks,grid,pts,wpx,!!d.cells,clipped);
       if (cuts.length) {
         void this.client.editHeightPatches(cuts,'delete').catch((err: Error) => this.cb.onNotice(err.message,'error'));
         this.ui.selectDrawings([]);
@@ -2753,15 +2763,20 @@ export class Board {
     const col = d.rough ? '#c8791b' : this.terrainLayer.colourAt(d.h);
     const cur = this.selectedAreas();
     const keep = cur.length === 1 && cur[0].id === d.group ? cur[0].ids : [];
-    void this.client.addDrawing(
-      { k: 'terrain', p: joinPts(pts), color: col, w: wpx, fill: 0, fc: '', dash: false, txt: '', fs: 28, bw: 5, hz: d.erase ? null : d.h, hg: d.group, ha: !d.erase && d.add, he: d.erase, hc: !!d.cells, ...(d.rough ? { dt: true } : {}) },
-      { label: d.rough ? (d.erase ? 'Erase difficult ground' : 'Paint difficult ground') : d.erase ? 'Erase ground' : 'Paint ground', onId: (id) => {
-        if (!d.erase && !d.rough) {
-          if (d.add) this.ui.set({ heightAdds: true, heightFt: d.h, drawSel: new Set() });
-          else this.ui.selectDrawings([...keep, id]);
-        }
-      } },
-    ).catch((err: Error) => this.cb.onNotice(err.message, 'error'));
+    const stroke: NewDrawing = { k: 'terrain', p: joinPts(pts), color: col, w: wpx, fill: 0, fc: '', dash: false, txt: '', fs: 28, bw: 5, hz: d.erase ? null : d.h, hg: d.group, ha: !d.erase && d.add, he: d.erase, hc: !!d.cells, ...(d.rough ? { dt: true } : {}) };
+    const label = d.rough ? (d.erase ? 'Erase difficult ground' : 'Paint difficult ground') : d.erase ? 'Erase ground' : 'Paint ground';
+    const select = (ids: string[]) => {
+      if (!d.erase && !d.rough) {
+        if (d.add) this.ui.set({ heightAdds: true, heightFt: d.h, drawSel: new Set() });
+        else this.ui.selectDrawings([...keep, ...ids]);
+      }
+    };
+    const scene = this.client.scene;
+    const saved = clipped
+      ? this.client.addDrawings(clipped.map(poly => ({ ...stroke, ...patchStroke(poly,d.group,stroke.hz ?? null), hc:false, color:col })),label)
+          .then(ids => { if (scene === this.client.scene) select(ids); })
+      : this.client.addDrawing(stroke,{label,onId:id => select([id])});
+    void saved.catch((err: Error) => this.cb.onNotice(err.message, 'error'));
   }
 
   /** What the brush would cover: the cells, or a circle. Drawn as the hover marker and for the stroke in progress. */

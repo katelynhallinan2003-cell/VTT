@@ -8,9 +8,16 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests --changed",
     "rules": "node scripts/build-rules.mjs",
-    "e2e": "node tests/e2e/smoke.mjs"
+    "e2e": "node tests/e2e/smoke.mjs",
+    "test:all": "vitest run",
+    "test:maps": "vitest run tests/blankgrid.test.ts tests/extramaps.test.ts tests/gridcut.test.ts tests/griddetect-hexes.test.ts tests/griddetect-none.test.ts tests/griddetect-squares.test.ts tests/hex.test.ts tests/hexcut.test.ts tests/mapgrid.test.ts tests/mapgrids.test.ts",
+    "test:terrain": "vitest run tests/colorcells.test.ts tests/connectedHeight.test.ts tests/gradients.test.ts tests/height.test.ts tests/movementCost.test.ts tests/multistep.test.ts tests/templaterough.test.ts tests/terrain.test.ts tests/walk.test.ts",
+    "test:vision": "vitest run tests/autolight.test.ts tests/daylight.test.ts tests/fog3.test.ts tests/light.test.ts tests/lightmodel.test.ts tests/paintedlight.test.ts tests/walls.test.ts tests/walltrace.test.ts",
+    "test:drawing": "vitest run tests/colornum.test.ts tests/draw.test.ts tests/emanation.test.ts tests/templates7b.test.ts tests/wand.test.ts",
+    "test:tokens": "vitest run tests/combat.test.ts tests/effects.test.ts tests/grouphp.test.ts tests/tokenlib.test.ts tests/charlib.test.ts",
+    "test:table": "vitest run tests/campaign.test.ts tests/client.test.ts tests/core.test.ts tests/folders.test.ts tests/handouts.test.ts tests/imgbb.test.ts tests/rules.test.ts tests/tables.test.ts"
   },
   "dependencies": {
     "firebase": "^13.4.0",

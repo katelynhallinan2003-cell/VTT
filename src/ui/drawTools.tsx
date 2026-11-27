@@ -1,3 +1,5 @@
+import { aimedSpell, spellVolume, mapPoint } from '../core/spellVolume';
+import { joinPts, parsePts } from '../core/draw';
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'preact/hooks';
 import type { Board } from '../board/Board';
 import { DRAW_COLORS, DRAW_NAME, FILL_LEVEL, FONTS, LINE_H, STROKE_CELLS, fillModeOf, fontStack, isTemplate, sizeFt, withSizeFt, type FillMode } from '../core/draw';
@@ -9,7 +11,7 @@ import { areasSelected, groundAtTerrain } from '../core/terrain';
 import { isHex } from '../core/hex';
 import { currentOverlay } from '../core/gridOverlay';
 import { WALL_KINDS, WALL_NAME, wallVisDefault, type WallKind } from '../core/walls';
-import type { Drawing } from '../types';
+import type { Drawing, SpellSettings } from '../types';
 import { Toggle, toast, useClient, useUi } from './common';
 
 const TOOLS: { id: DrawTool; label: string; hint: string }[] = [
@@ -22,12 +24,9 @@ const TOOLS: { id: DrawTool; label: string; hint: string }[] = [
   { id: 'erase', label: 'Erase', hint: 'Click or swipe over drawings to remove them.' },
 ];
 
-const TEMPLATES: { id: TemplateKind; label: string; hint: string }[] = [
-  { id: 'cone', label: 'Cone', hint: 'Click the middle of the edge of the caster\'s square and drag out. It is as wide at the far end as it is long.' },
-  { id: 'cube', label: 'Cube', hint: 'Click on one face and drag out. The distance is the side length, and it lines up with the squares.' },
-  { id: 'sphere', label: 'Sphere', hint: 'Click the centre and drag out the radius. The centre snaps to the middle of a square, a corner, or nowhere: your choice below.' },
-  { id: 'emanation', label: 'Emanation', hint: 'Click the square it comes out of and drag out. Its size is counted from the edge of that square, and the square itself is left out.' },
-  { id: 'beam', label: 'Line', hint: 'Click where it starts and drag out the length. Pick its width below.' },
+const TEMPLATES: {id:TemplateKind; label:string}[] = [
+  {id:'cone',label:'Cone'}, {id:'cube',label:'Cube'}, {id:'sphere',label:'Sphere'},
+  {id:'emanation',label:'Emanation'}, {id:'beam',label:'Line'},
 ];
 
 function Colors(props: { value: string; onPick: (c: string) => void; /** shown for a colour that can also be "the same as the outline" (value '') */ sameLabel?: string; fallback?: string; small?: boolean }) {
@@ -430,16 +429,29 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
   );
 }
 
+function SpellAdvanced({settings,kind,placed=false,onChange}:{settings:SpellSettings;kind:Drawing['k'];placed?:boolean;onChange:(v:SpellSettings)=>void}) {
+  const heightField=(key:'start'|'end',label:string)=><label class="field"><span>{label} (ft)</span>
+    <input key={key+String(settings[key])} type="number" step="any" placeholder="Ground" defaultValue={settings[key] ?? ''}
+      onBlur={e=>{
+        const input=e.currentTarget, next={...settings};
+        if (!input.validity.valid) return;
+        if (input.value==='') delete next[key]; else next[key]=input.valueAsNumber;
+        if (next[key]!==settings[key]) onChange(next);
+      }} onKeyDown={e=>{if(e.key==='Enter') e.currentTarget.blur();}}/></label>;
+  return <details class="spell-advanced"><summary>Advanced</summary>
+    <Toggle checked={settings.walls!==false} onChange={walls=>onChange({...settings,walls})} label={placed?'This spell considers walls':'Consider walls'} />
+    {settings.walls!==false && kind!=='beam' && <Toggle checked={settings.wrap!==false} onChange={wrap=>onChange({...settings,wrap})} label={placed?'This spell wraps around corners':'Wrap around corners'} />}
+    <Toggle checked={settings.elevation!==false} onChange={elevation=>onChange({...settings,elevation})} label={placed?'This spell considers elevation':'Consider elevation'} />
+    {settings.elevation!==false && <>{heightField('start','Starting elevation')}
+      {aimedSpell(kind) && <>{heightField('end','Ending elevation')}<p class="hint">Ending elevation sets the center of the far face.</p></>}</>}
+  </details>;
+}
+
 export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
   const { ui, client } = props;
   const d = useUi(ui);
   useClient(client);
-  const t = TEMPLATES.find((x) => x.id === d.tplKind) ?? TEMPLATES[0];
-  const hex = isHex(client.grid);
-  // with no grid there are no squares to light up, so the switch for them is not offered (and nothing is lit)
-  const gridless = currentOverlay(client.grid) === 'none';
-  // on a hex grid "square" becomes "hex", and a cube or line lines up with the six directions between hexes
-  const say = (x: string) => (hex ? x.replace(/\bsquares\b/g, 'hexes').replace(/\ba square\b/g, 'a hex').replace(/\bsquare\b/g, 'hex') : x);
+  const hex=isHex(client.grid);
   return (
     <div class="flyout">
       <div class="flyout-title">Spell templates</div>
@@ -449,9 +461,7 @@ export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
           <button key={k} class={d.tplMode === k ? 'on' : ''} onClick={() => ui.set({ tplMode: k, ...(k === 'place' ? { drawSel: new Set<string>() } : {}) })}>{label}</button>
         ))}
       </div>
-      {d.tplMode === 'select' ? (
-        <p class="hint">Click a template to pick it (Shift adds more). Drag it to move it a square at a time (Alt: freely), drag its dots to resize it, or press Delete.</p>
-      ) : <>
+      {d.tplMode === 'place' && <>
       <div class="seg wrap">
         {TEMPLATES.map((x) => <button key={x.id} class={d.tplKind === x.id ? 'on' : ''} onClick={() => ui.set({ tplKind: x.id })}>{x.label}</button>)}
       </div>
@@ -473,10 +483,9 @@ export function TemplateFlyout(props: { ui: UiState; client: TableClient }) {
           </div>
         </>
       )}
-      <Toggle checked={d.tplRough} onChange={(v) => ui.set({ tplRough: v })} label="Counts as difficult terrain" hint="For templates you place next: tokens pay extra to move through them." />
-      <Toggle checked={d.tplShare} onChange={(v) => ui.set({ tplShare: v })} label="Show others my templates" hint="Off: only you and the DM see them." />
-      {!gridless && <Toggle checked={d.tplCover} onChange={(v) => ui.set({ tplCover: v })} label={hex ? 'Show the hexes it covers' : 'Show the squares it covers'} hint={hex ? 'A hex counts when its middle is inside the area.' : 'A square counts when its middle is inside the area.'} />}
-      <p class="hint">{say(t.hint)} {say('Sizes snap to whole squares')} (hold Alt to turn that off, Shift to lock the angle).</p>
+      <Toggle checked={d.tplRough} onChange={v=>ui.set({tplRough:v})} label="Counts as difficult terrain" hint="Only affects new templates." />
+      <Toggle checked={d.tplShare} onChange={v=>ui.set({tplShare:v})} label="Show others my templates" />
+      <SpellAdvanced settings={d.tplSettings} kind={d.tplKind} onChange={tplSettings=>ui.set({tplSettings})} />
       </>}
       <div class="row wrap">
         <button class="btn small" onClick={async () => { const n = await client.clearDrawings((x) => isTemplate(x.k), 'Clear templates'); ui.selectDrawings([]); toast(n ? `Cleared ${n} template${n > 1 ? 's' : ''}` : 'No templates to clear', 'info', 1800); }}>
@@ -592,6 +601,9 @@ export function DrawInspector(props: { ui: UiState; client: TableClient; board: 
   const allZones = list.every((x) => x.hz != null);
   const strokeKey = (['thin', 'medium', 'thick'] as StrokeSize[]).reduce((best, k) => (Math.abs(STROKE_CELLS[k] * client.grid.cell - first.w) < Math.abs(STROKE_CELLS[best] * client.grid.cell - first.w) ? k : best), 'medium' as StrokeSize);
   const size = one ? sizeFt(one, client.grid) : null;
+  const ends=one && allTemplates ? parsePts(one.p) : [];
+  const measure=(end:typeof ends[number])=>spellVolume(one!,ends[0],end,client.grid,{segs:[],ground:p=>board?.groundAtPoint(p) ?? 0}).feet;
+  if (size && 'len' in size && ends.length===2) size.len=Math.round(measure(ends[1])*10)/10;
   const ft = client.grid.ft;
   return (
     <div class="drawtag" onMouseDown={(e) => e.stopPropagation()}>
@@ -647,8 +659,14 @@ export function DrawInspector(props: { ui: UiState; client: TableClient; board: 
           </div>
         )}
         {one && size && 'len' in size && (
-          <NumField label="Length" value={size.len} min={1} max={2000} step={ft} unit="ft" title="Length in feet" onCommit={(n) => { const p = withSizeFt(one, client.grid, 'len', n); if (p.p) upd(p); }} />
+          <NumField label="Length" value={size.len} min={1} max={2000} step={ft} unit="ft" title="Length in feet" onCommit={(n) => { if (!allTemplates || ends.length!==2) { const p=withSizeFt(one,client.grid,'len',n); if(p.p) upd(p); return; }
+            const [a,b]=ends, run=Math.hypot(b.x-a.x,b.y-a.y), ux=run ? (b.x-a.x)/run : 1, uy=run ? (b.y-a.y)/run : 0;
+            const at=(r:number)=>mapPoint({x:a.x+ux*r,y:a.y+uy*r},board?.spellMaps() ?? []);
+            let lo=0,hi=(n/client.grid.ft+Math.max(1,(one.of ?? 0)/client.grid.ft))*client.grid.cell;
+            for(let i=0;i<32;i++) { const mid=(lo+hi)/2; if(measure(at(mid))<=n) lo=mid; else hi=mid; }
+            upd({p:joinPts([a,at(lo)])}); }} />
         )}
+            {one && allTemplates && <SpellAdvanced key={one.id} placed settings={one.spell ?? {}} kind={one.k} onChange={spell=>upd({spell})}/>}
         {allText && (
           <div class="row wrap">
             <FontSelect value={first.font} onChange={(k) => upd({ font: k })} />

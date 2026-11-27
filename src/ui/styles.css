@@ -490,6 +490,10 @@ input[type=text], input[type=number], input[type=password], select { border-radi
 .dt-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .dt-head .grow { flex: 1; }
 .dt-body { display: flex; flex-direction: column; gap: 8px; }
+.spell-advanced { margin: 8px 0; }
+.spell-advanced summary { cursor: pointer; }
+.spell-advanced .field { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:6px; }
+.spell-advanced input[type=number] { width:76px; }
 .dt-body .seg { margin-bottom: 0; }
 .drawtag .hint { margin-top: 6px; font-size: 11.5px; }
 .swatches.small { gap: 5px; }

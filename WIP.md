@@ -264,3 +264,8 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
 - [x] **#154 Cover the entire auto height map** (added 2026-11-26, completed 2026-11-26). Each applied draft covers the map edge to edge. Verified zero uncovered polygons on all three supplied maps with single and multiple marks.
 - [x] **#155 Automatic gradients in Auto height map** (added 2026-11-26, completed 2026-11-27). Detect editable slopes between height marks with a blended preview. Compared against Elevation test 2 and verified coverage on the coast, snow bridge and canyon.
 - [x] **#156 Keep auto height region outlines when choosing gradients** (added 2026-11-27, completed 2026-11-27). Restored the original map regions. Select a region and choose which shared edges meet smoothly. Compared actual outlines with the painted coast in Elevation test 2.
+- [x] **#157 Simplify spell template placement and selection** (added 2026-11-27, completed 2026-11-27).
+- [x] **#158 Choose wall blocking and corner wrapping per spell** (added 2026-11-27, completed 2026-11-27).
+- [x] **#159 Measure spell volumes and wall crossings at elevation** (added 2026-11-27, completed 2026-11-27).
+- [x] **#160 Show overlapping spell effects on creatures** (added 2026-11-27, completed 2026-11-27).
+- [x] **#161 Keep spell footprints on maps and omit exterior terrain walls** (added 2026-11-27, completed 2026-11-27).

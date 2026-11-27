@@ -8,6 +8,7 @@ import type { Effect, GridSettings, Token } from '../types';
 import { loadTexture, type LoadedTexture } from './textures';
 
 export interface TokenCtx {
+  spells?:string[];
   grid: GridSettings;
   /** DM sees names of hidden tokens flagged; players never get hidden tokens at all */
   showLabel: boolean;
@@ -102,7 +103,7 @@ export class TokenView {
     this.token = token;
     const g = ctx.grid;
     this.health = ctx.health;
-    const key = [token.size, token.shape, token.ring, token.ringW, token.imgScale, token.imgX, token.imgY, token.imgBg, token.name ? token.name[0] : '?', g.cell,
+    const key = [ctx.spells?.join(','),token.size, token.shape, token.ring, token.ringW, token.imgScale, token.imgX, token.imgY, token.imgBg, token.name ? token.name[0] : '?', g.cell,
       ctx.health ? `${ctx.health.pct}/${ctx.health.bar}/${ctx.health.nums ? `${ctx.health.nums.now}of${ctx.health.nums.cap}` : ''}` : '', fxKey(this.fxList(token)),
       isLightMark(token) ? `L${token.light?.c}` : ''].join('|');
     if (key !== this.key) {
@@ -168,6 +169,14 @@ export class TokenView {
     } else if (noImage) {
       this.base.circle(0, 0, r).fill(hashColor(t.name || t.id));
     }
+
+    const spells=ctx.spells ?? [];
+    spells.forEach((color,i)=>{
+      const angle=2*Math.PI/spells.length, gap=Math.min(.10,angle*.15);
+      const from=-Math.PI/2+i*angle+gap,to=from+angle-2*gap, radius=r+D*.08;
+      this.ring.arc(0,0,radius,from,to).stroke({color:0x17191d,width:D*.095});
+      this.ring.arc(0,0,radius,from,to).stroke({color:hex(color),width:D*.055});
+    });
 
     if (this.sprite && this.tex) {
       const tw = this.tex.texture.width;

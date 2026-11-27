@@ -100,15 +100,15 @@ check('and deleting a hidden light takes it from everyone', (await tokenOf(pl, '
 await dm.evaluate(() => { window.__vtt.ui.select([]); window.__vtt.ui.set({ dockTab: null, tool: 'template' }); });
 await sleep(400);
 const coverSwitch = () => dm.getByText(/Show the (squares|hexes) it covers/).count();
-check('with a grid, the flyout offers to show the squares a template covers', (await coverSwitch()) === 1);
+check('with a grid, covered squares are automatic', (await coverSwitch()) === 0 && await dm.evaluate(()=>window.__vtt.board.coverOn()));
 await dm.evaluate(() => window.__vtt.client.updateScene({ grid: { visible: false, snap: false, rule: 'euclid' } }));
 await sleep(500);
 check('with no grid it does not', (await coverSwitch()) === 0);
-check('and a template lights no squares, whatever the setting was', await dm.evaluate(() => window.__vtt.ui.data.tplCover === true && window.__vtt.board.coverOn() === false));
+check('and a template lights no squares, whatever the setting was', await dm.evaluate(() => window.__vtt.board.coverOn() === false));
 await dm.screenshot({ path: '/tmp/shots/z19-gridless-template.png' });
 await dm.evaluate(() => window.__vtt.client.updateScene({ grid: { visible: true, snap: true, rule: 'chebyshev' } }));
 await sleep(500);
-check('turn the grid back on and the switch and its setting are back', (await coverSwitch()) === 1 && await dm.evaluate(() => window.__vtt.board.coverOn() === window.__vtt.ui.data.tplCover));
+check('turn the grid back on and covered squares return', (await coverSwitch()) === 0 && await dm.evaluate(() => window.__vtt.board.coverOn()));
 
 const real = errors.filter((e) => !/GPU stall|ReadPixels|willReadFrequently/.test(e));
 check('no page errors', real.length === 0, real.slice(0, 3).join(' | '));

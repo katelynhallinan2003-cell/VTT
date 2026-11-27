@@ -1,8 +1,9 @@
+import { spellVolume, mapPoint, onMap } from '../core/spellVolume';
 import { Application, Container, FillPattern, Graphics, Matrix, Sprite, Text, Texture } from 'pixi.js';
 import {
-  clamp, cornerTotals, distanceFt, fitCamera, pathFt, gridFromRect, mapRect, normRect, sceneRect, pointInToken, rectContains, snapDragCenter, snapTokenCenter, snapToCellCenter, snapToCorner, zoomAt,
+  clamp, cornerTotals, distanceFt, fitCamera, pathFt, gridFromRect, mapFootprints, mapRect, normRect, sceneRect, pointInToken, rectContains, snapDragCenter, snapTokenCenter, snapToCellCenter, snapToCorner, zoomAt,
 } from '../core/geometry';
-import { FILL_LEVEL, STROKE_CELLS, beamWidthPx, dashSegments, fitPenPoints, handlesOf, hitDrawing, pointInPoly, isTemplate, joinPts, resizeDrawing, setLineMeasurer, footprintPx, snapTemplate, templateLabel, templateWidthPx, type HandleId, type TemplateSnapState } from '../core/draw';
+import { FILL_LEVEL, STROKE_CELLS, beamWidthPx, parsePts, dashSegments, fitPenPoints, handlesOf, hitDrawing, pointInPoly, isTemplate, joinPts, resizeDrawing, setLineMeasurer, footprintPx, snapTemplate, templateLabel, templateWidthPx, type HandleId, type TemplateSnapState } from '../core/draw';
 import { templateRoughDraws } from '../core/templaterough';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
@@ -147,7 +148,7 @@ export class Board {
   private liveSent = false;
   private seenDrawRev = -1;
   private seenLiveRev = -1;
-  private prevUi = { testMove: false, sharePlot: false, tool: 'select' as string, rulerColor: '', cover: true, heights: 'auto' as string, draft: null as unknown, sel: null as unknown };
+  private prevUi = { testMove: false, sharePlot: false, tool: 'select' as string, rulerColor: '', heights: 'auto' as string, draft: null as unknown, sel: null as unknown };
   private distText!: Text;
 
   private cam = { zoom: 1, tx: 0, ty: 0 };
@@ -521,7 +522,7 @@ export class Board {
       this.seenDrawRev = -1;
     }
     if (c.players.size !== this.seenPlayers) { this.seenPlayers = c.players.size; this.seenTokensRev = -1; }
-    if (previewNow !== this.seenPreview) { this.seenPreview = previewNow; this.seenTokensRev = -1; this.seenFogRev = -1; }
+    if (previewNow !== this.seenPreview) { this.seenPreview = previewNow; this.seenDrawRev=this.seenTokensRev = -1; this.seenFogRev = -1; }
 
     if (scene.drawRev !== this.seenZoneRev) {
       this.seenZoneRev = scene.drawRev;
@@ -536,6 +537,7 @@ export class Board {
       this.refreshRough();
       this.refreshDay();
     }
+    if (scene.drawRev!==this.seenDrawRev || scene.wallRev!==this.seenWallRev) this.seenTokensRev=-1;
     if (scene.tokensRev !== this.seenTokensRev) {
       this.seenTokensRev = scene.tokensRev;
       this.reconcileTokens();
@@ -547,7 +549,7 @@ export class Board {
     }
     if (scene.drawRev !== this.seenDrawRev) {
       this.seenDrawRev = scene.drawRev;
-      this.drawLayer.sync(this.drawingsShown(), c.grid, this.textRes, this.coverOn(), this.coverOn() ? this.wallsForSpells() : undefined);
+      this.drawLayer.sync(this.drawingsShown(), c.grid, this.textRes, this.coverOn(), this.wallsForSpells());
       const stale = [...this.ui.data.drawSel].filter((id) => !scene.draws.has(id));
       if (stale.length) this.ui.selectDrawings([...this.ui.data.drawSel].filter((id) => scene.draws.has(id)));
       this.dirty = true;
@@ -638,7 +640,10 @@ export class Board {
       this.mapSprite.position.set(meta.mapX, meta.mapY);
       this.mapSprite.scale.set(meta.mapScale * this.mapScaleToWorld);
     }
-    this.terrainMaps = [mapRect(meta), ...meta.maps.map(m => ({x:m.x,y:m.y,w:m.w*m.scale,h:m.h*m.scale}))].filter(r => r.w>0 && r.h>0);
+    const maps=mapFootprints(meta);
+    if(JSON.stringify(maps)!==JSON.stringify(this.terrainMaps)) {
+      this.terrainMaps=maps; this.segCache.scene=null; this.seenDrawRev=this.seenTokensRev=this.seenZoneRev=-1;
+    }
     this.terrainMask.clear();
     for (const r of this.terrainMaps) this.terrainMask.rect(r.x,r.y,r.w,r.h);
     if (this.terrainMaps.length) this.terrainMask.fill(0xffffff);
@@ -892,10 +897,28 @@ export class Board {
   }
 
   // ------------------------------------------------------------------ tokens
+  private spellCache?: {scene:TableClient['scene']; draw:number; wall:number; meta:number; preview:boolean;
+    entries:{color:string; volume:ReturnType<typeof spellVolume>}[]};
+  private activeSpells() {
+    const scene=this.client.scene;
+    if(!scene) return [];
+    const saved=this.spellCache,preview=this.ui.data.dmPreview;
+    if(saved && saved.scene===scene && saved.draw===scene.drawRev && saved.wall===scene.wallRev && saved.meta===scene.metaRev && saved.preview===preview) return saved.entries;
+    const entries=[];
+    for(const d of scene.draws.values()) {
+      if(!isTemplate(d.k) || (d.pv && d.uid!==this.client.uid && (!this.client.isDM || preview))) continue;
+      const [a,b]=parsePts(d.p);
+      if(b) entries.push({color:d.color,volume:spellVolume(d,a,b,this.client.grid,this.wallsForSpells())});
+    }
+    this.spellCache={scene,draw:scene.drawRev,wall:scene.wallRev,meta:scene.metaRev,preview,entries};
+    return entries;
+  }
+
   private tokenCtx(t: Token): TokenCtx {
     const c = this.client;
     return {
-      grid: c.gridAt({ x: t.x, y: t.y }),
+      grid: c.gridAt(t),
+      spells:this.spellColors(t),
       showLabel: t.label !== 'dm' || (c.isDM && !this.ui.data.dmPreview),
       textRes: this.textRes,
       health: this.healthFor(t),
@@ -903,6 +926,16 @@ export class Board {
     };
   }
 
+  private spellColors(t:Token) {
+    const spells=this.activeSpells();
+    if(!spells.length || isLightMark(t)) return [];
+    const foot=this.heightOf(t).alt,head=foot+5*t.size,points:Vec[]=[t];
+    const n=Math.ceil(t.size),cell=this.client.gridAt(t).cell;
+    if(n>1) for(let j=0;j<n;j++) for(let i=0;i<n;i++) points.push({
+      x:t.x+(i+.5-n/2)*cell*t.size/n,y:t.y+(j+.5-n/2)*cell*t.size/n
+    });
+    return spells.filter(s=>points.some(p=>s.volume.hits(p,foot,head))).map(s=>s.color);
+  }
   /** How high a token is (at `pos`, or where it is): flying, or standing on the ground there. */
   heightOf(t: Token, pos?: Vec): Altitude {
     return altitudeOf(t, standingGround(this.zones, pos ?? t));
@@ -994,7 +1027,7 @@ export class Board {
       }
     }
     for (const [key, w] of want) {
-      const ctx = { ...this.tokenCtx(w.token), showLabel: false, health: null };
+      const ctx = { ...this.tokenCtx({...w.token,...w.pos}), showLabel: false, health: null };
       let v = this.ghostViews.get(key);
       const fresh = !v;
       if (!v) {
@@ -1018,9 +1051,9 @@ export class Board {
     const scene = this.client.scene;
     if (!scene) return;
     const grid = this.client.grid;
-    const templates=[...scene.draws.values()].filter(d=>d.td && isTemplate(d.k));
+    const templates=[...scene.draws.values()].filter(d=>d.td && isTemplate(d.k) && (!d.pv || (this.client.isDM && !this.ui.data.dmPreview) || d.uid===this.client.uid));
     const w = templates.length ? this.wallsForSpells() : undefined;
-    const spell = w ? templateRoughDraws(templates, grid, w.segs, w.ground) : [];
+    const spell = w ? templateRoughDraws(templates, grid, w.segs, w.ground,w.maps) : [];
     const next = roughOf(spell.length ? [...scene.draws.values(), ...spell] : scene.draws.values(), grid);
     if (next.sig !== this.rough.sig) { this.rough = next; this.paintRough(); }
   }
@@ -1129,9 +1162,11 @@ export class Board {
   }
 
   /** What stops a spell, for the template painter. */
-  private wallsForSpells(): { segs: Seg[]; rev: string; ground: (p: Vec) => number } {
+  spellMaps() { return this.terrainMaps; }
+
+  private wallsForSpells() {
     // a spell also depends on how high the ground is where it starts (a wall lower than that does not stop it)
-    return { segs: this.wallSegs().sight, rev: `${this.client.scene?.wallRev ?? 0}:${this.zones.sig}`, ground: (p) => groundAt(this.zones, p) };
+    return { segs: this.wallSegs().sight, maps:this.terrainMaps, rev: `${this.client.scene?.wallRev ?? 0}:${this.zones.sig}:${JSON.stringify(this.terrainMaps)}`, ground: (p:Vec) => groundAt(this.zones, p) };
   }
 
   private onWallsChanged() {
@@ -1749,14 +1784,15 @@ export class Board {
     this.updateCursor();
     const u = this.ui.data;
     const prev = this.prevUi;
-    this.prevUi = { testMove: u.testMove, sharePlot: u.sharePlot, tool: u.tool, rulerColor: u.rulerColor, cover: u.tplCover, heights: u.heightView, draft: u.fxDraft, sel: u.drawSel };
+    this.prevUi = { testMove: u.testMove, sharePlot: u.sharePlot, tool: u.tool, rulerColor: u.rulerColor, heights: u.heightView, draft: u.fxDraft, sel: u.drawSel };
     if (u.drawSel !== prev.sel && this.client.scene) this.refreshDraws();
     if (u.fxDraft !== prev.draft && this.client.scene) this.reconcileTokens();
     if (prev.testMove && !u.testMove && this.testMoves.size) this.resetTestMoves();
     if (u.sharePlot !== prev.sharePlot) this.publishLive(true);
     if (u.rulerColor !== prev.rulerColor) { this.publishLive(); this.invalidate(); }
-    if (u.tplCover !== prev.cover || u.heightView !== prev.heights || (prev.tool === 'height') !== (u.tool === 'height')) this.refreshDraws();
+    if (u.heightView !== prev.heights || (prev.tool === 'height') !== (u.tool === 'height')) this.refreshDraws();
     if (prev.tool !== u.tool) {
+      if(u.tool==='template' && u.tplMode==='select' && !this.drawingsShown().some(d=>isTemplate(d.k))) this.ui.set({tplMode:'place'});
       this.cancelPress();
       this.invalidate();
       if (prev.tool === 'height' && this.selectedAreas().length) this.ui.selectDrawings([]);
@@ -2157,9 +2193,9 @@ export class Board {
         if (d.pts.length >= 2) this.plotLabel(li++, `${d.hz} ft`, (d.pts[0].x + d.pts[1].x) / 2, Math.min(d.pts[0].y, d.pts[1].y) - 8 / z, num(zc));
       } else paintShape(g, {
         k: d.dk, pts: d.pts, color: u.drawColor, w: isT ? Math.max(2, this.strokePx()) : this.strokePx(),
-        fill: !isT && (d.dk === 'rect' || d.dk === 'ellipse') ? FILL_LEVEL[u.drawFillMode] : 0, fc: u.drawFillColor, dash: !isT && u.drawDash, bw: u.tplWidth, of: d.of,
-      }, grid, 0.85, this.coverOn(), this.wallSegs().sight, (p) => groundAt(this.zones, p));
-      if (isT && d.pts.length >= 2) this.plotLabel(li++, templateLabel(d.dk, grid, d.pts[0], d.pts[1], u.tplWidth, footprintPx(grid, d.of ?? 0)), d.pts[1].x, d.pts[1].y - 12 / z, num(u.drawColor));
+        fill: !isT && (d.dk === 'rect' || d.dk === 'ellipse') ? FILL_LEVEL[u.drawFillMode] : 0, fc: u.drawFillColor, dash: !isT && u.drawDash, bw: u.tplWidth, of: d.of, spell:u.tplSettings,
+      }, grid, 0.85, this.coverOn(), this.wallSegs().sight, (p) => groundAt(this.zones, p),this.terrainMaps);
+      if (isT && d.pts.length >= 2) this.plotLabel(li++, templateLabel(d.dk, grid, d.pts[0], d.pts[1], u.tplWidth, footprintPx(grid, d.of ?? 0), spellVolume({k:d.dk,bw:u.tplWidth,of:d.of,spell:u.tplSettings},d.pts[0],d.pts[1],grid,{segs:[],ground:p=>this.groundAtPoint(p)}).feet), d.pts[1].x, d.pts[1].y - 12 / z, num(u.drawColor));
     }
 
     // the Heights brush: where it would paint, the stroke so far, and areas being carried to a new place
@@ -2470,8 +2506,11 @@ export class Board {
     // ground (boxes, circles and brush strokes with a height) is painted by the terrain layer, not here
     const c = this.client;
     // a template its maker kept private is for them and the DM only
-    const list = c.drawingsSorted().filter((d) => d.hz == null && d.k !== 'terrain' && !(d.pv && !c.isDM && d.uid !== c.uid));
+    const list = c.drawingsSorted().filter((d) => d.hz == null && d.k !== 'terrain' && !(d.pv && (!c.isDM || this.ui.data.dmPreview) && d.uid !== c.uid));
     const pv = this.drawPreview;
+    const move=this.drag;
+    if(move?.kind==='drawmove' && move.moved) return list.map(d=>move.ids.includes(d.id) && isTemplate(d.k)
+      ? {...d,p:joinPts(parsePts(d.p).map(p=>({x:p.x+move.dx,y:p.y+move.dy})))} : d);
     return pv ? list.map((d) => (d.id === pv.id ? { ...d, ...pv.patch } : d)) : list;
   }
 
@@ -2518,11 +2557,11 @@ export class Board {
 
   /** Are the squares a template covers lit up? Never on a gridless scene, where there are no squares to light. */
   private coverOn(): boolean {
-    return this.ui.data.tplCover && currentOverlay(this.client.grid) !== 'none';
+    return currentOverlay(this.client.grid) !== 'none';
   }
 
   private refreshDraws() {
-    this.drawLayer.sync(this.drawingsShown(), this.client.grid, this.textRes, this.coverOn(), this.coverOn() ? this.wallsForSpells() : undefined);
+    this.drawLayer.sync(this.drawingsShown(), this.client.grid, this.textRes, this.coverOn(), this.wallsForSpells());
     this.syncTerrain();
     this.invalidate();
   }
@@ -2932,16 +2971,14 @@ export class Board {
     const tol = 6 / this.cam.zoom;
     let hit: Drawing | null = null;
     for (let i = list.length - 1; i >= 0 && !hit; i--) {
-      if (this.client.canEditDrawing(list[i]) && hitDrawing(list[i], w, tol, this.client.grid, true)) hit = list[i];
+      const item=list[i], [a,b]=parsePts(item.p);
+      if (!this.client.canEditDrawing(item) || !b) continue;
+      const volume=spellVolume(item,a,b,this.client.grid,{segs:[],ground:p=>this.groundAtPoint(p),maps:this.terrainMaps});
+      if (volume.hits(w) || Math.hypot(w.x-a.x,w.y-a.y)<=tol) hit=item;
     }
     const only = (ids: Iterable<string>) => new Set([...ids].filter((id) => { const d = this.client.scene?.draws.get(id); return !!d && isTemplate(d.k); }));
-    if (!hit) { if (!e.shiftKey) this.ui.selectDrawings([]); return; }
+    if (!hit || !onMap(w,this.terrainMaps)) { this.ui.selectDrawings([]); return; }
     let sel = only(this.ui.data.drawSel);
-    if (e.shiftKey) {
-      if (sel.has(hit.id)) sel.delete(hit.id); else sel.add(hit.id);
-      this.ui.selectDrawings(sel);
-      return;
-    }
     if (!sel.has(hit.id)) sel = new Set([hit.id]);
     this.ui.selectDrawings(sel);
     this.drag = { kind: 'drawmove', ids: [...sel], start: w, dx: 0, dy: 0, moved: false, snap: true };
@@ -2949,6 +2986,7 @@ export class Board {
   }
 
   private startTemplate(w: Vec, e: PointerEvent) {
+    if(!onMap(w,this.terrainMaps)) return;
     if (!this.client.canDo('template')) { this.cb.onNotice('The DM has turned off spell templates for players.', 'error'); return; }
     // `start` stays where the pointer went down; where the template really starts depends on its kind and size (see snapTemplate)
     const kind = this.ui.data.tplKind;
@@ -2997,11 +3035,12 @@ export class Board {
     const grid = this.client.grid;
     const sphereAt = this.ui.data.tplSphereSnap;
     const free = kind === 'sphere' && sphereAt === 'off'; // a sphere that is told not to snap goes exactly where it is put
-    return snapTemplate(grid, start, w, {
-      origin: grid.snap && !e.altKey && !free, length: !e.altKey && !free, angleStep: e.shiftKey ? Math.PI / 12 : undefined,
+    const snap=snapTemplate(grid, start, mapPoint(w,this.terrainMaps), {
+      origin: grid.snap && !free, length: !free,
       kind, widthPx: kind === 'emanation' ? footprintPx(grid, d?.of ?? 0) : beamWidthPx(grid, this.ui.data.tplWidth), sphereAt,
       fixedOrigin: d?.fixedOrigin, prev: d?.snap,
     });
+    return {...snap,a:mapPoint(snap.a,this.terrainMaps),b:mapPoint(snap.b,this.terrainMaps)};
   }
 
   /** The token an emanation comes out of: the one under the pointer, or the one standing in the square it snapped to. */
@@ -3068,6 +3107,7 @@ export class Board {
       k, p: joinPts(pts), color: u.drawColor, w: isT ? Math.max(2, stroke) : stroke,
       fill: !isT && closed ? FILL_LEVEL[u.drawFillMode] : 0, fc: closed ? u.drawFillColor : '',
       dash: !isT && u.drawDash, txt: '', fs: 28, bw: u.tplWidth, of: k === 'emanation' && d.of ? d.of : undefined, pv: isT && !u.tplShare ? true : undefined,
+      spell:isT ? u.tplSettings : undefined,
       td: isT && u.tplRough ? true : undefined,
     }, { onId: (id) => { if (closed || k === 'line' || k === 'arrow' || k === 'pen') this.ui.selectDrawings([id]); } }).catch((err: Error) => this.cb.onNotice(err.message, 'error'));
   }
@@ -3194,7 +3234,9 @@ export class Board {
       case 'rect': d.cur = w; break;
       case 'shape': this.moveShape(d, w, e); break;
       case 'drawresize': {
-        d.patch = resizeDrawing(d.orig, d.handle, w, { shift: e.shiftKey, alt: e.altKey, grid: this.client.grid });
+        const spell=isTemplate(d.orig.k);
+        d.patch = resizeDrawing(d.orig,d.handle,spell ? mapPoint(w,this.terrainMaps) : w,{shift:!spell && e.shiftKey,alt:!spell && e.altKey,grid:this.client.grid});
+        if(spell && d.patch.p) d.patch.p=joinPts(parsePts(d.patch.p).map(p=>mapPoint(p,this.terrainMaps)));
         this.drawPreview = { id: d.id, patch: d.patch };
         this.refreshDraws();
         break;
@@ -3205,13 +3247,18 @@ export class Board {
         let dx = w.x - d.start.x;
         let dy = w.y - d.start.y;
         if (!d.moved && Math.hypot(dx, dy) * this.cam.zoom < 4) break;
-        if (d.snap && !e.altKey) {
+        const spells=d.ids.flatMap(id=>{const item=this.client.scene?.draws.get(id);return item && isTemplate(item.k) ? [item] : [];});
+        if (d.snap && (spells.length || !e.altKey)) {
           // ground made of whole cells goes a whole cell (or hex) at a time, so it stays on the grid
           const a = snapToCellCenter(this.client.grid, d.start), b = snapToCellCenter(this.client.grid, w);
           dx = b.x - a.x; dy = b.y - a.y;
         }
+        for(const spell of spells) for(const p of parsePts(spell.p)) {
+          const clipped=mapPoint({x:p.x+dx,y:p.y+dy},this.terrainMaps); dx=clipped.x-p.x; dy=clipped.y-p.y;
+        }
         d.moved = true; d.dx = dx; d.dy = dy;
-        if (!this.ui.data.heightPatches) this.drawLayer.setOffset(new Set(d.ids), dx, dy);
+        if(spells.length) this.refreshDraws();
+        if (!this.ui.data.heightPatches) this.drawLayer.setOffset(new Set(d.ids.filter(id=>!spells.some(s=>s.id===id))), dx, dy);
         break;
       }
       case 'terrain': this.paintTerrainAt(d, w); break;

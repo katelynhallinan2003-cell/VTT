@@ -1,3 +1,4 @@
+import { rectContains } from './geometry';
 import clip, { type MultiPolygon, type Pair, type Polygon } from 'polygon-clipping';
 import type { GridSettings, Rect, Vec } from '../types';
 import { snapToCellCenter } from './geometry';
@@ -280,7 +281,7 @@ export function patchStroke(polygon: Polygon, group: string, height: number | nu
 
 /** Sweep both sides of each contour line together. This splits a long edge wherever
  * a neighbouring terrace ends, even when the polygon on the opposite side has no vertex there. */
-export function terrainEdges(t: Terrain, levelJoins?: Seg[]): TerrainEdge[] {
+export function terrainEdges(t: Terrain, levelJoins?: Seg[], maps:Rect[]=[]): TerrainEdge[] {
   type Event = { s: number; left: number; right: number };
   const lines = new Map<string, { ux: number; uy: number; offset: number; events: Event[] }>();
   const {regions,surfaces} = heightRegions(t);
@@ -301,6 +302,12 @@ export function terrainEdges(t: Terrain, levelJoins?: Seg[]): TerrainEdge[] {
   }
   const out: TerrainEdge[] = [];
   for (const {ux,uy,offset,events} of lines.values()) {
+    const rim=maps.some(r=> (uy===0 && (Math.abs(offset-r.y)<1e-6 || Math.abs(offset-r.y-r.h)<1e-6)) ||
+      (ux===0 && (Math.abs(-offset-r.x)<1e-6 || Math.abs(-offset-r.x-r.w)<1e-6)));
+    if (rim) for(const r of maps) {
+      const from=ux===0 ? r.y : r.x, extent=ux===0 ? r.h : r.w;
+      events.push({s:from,left:0,right:0},{s:from+extent,left:0,right:0});
+    }
     events.sort((a,b) => a.s-b.s);
     let left = 0, right = 0;
     const at = (s: number, n = 0) => ({x: ux*s-uy*(offset+n), y: uy*s+ux*(offset+n)});
@@ -308,6 +315,10 @@ export function terrainEdges(t: Terrain, levelJoins?: Seg[]): TerrainEdge[] {
       left += events[i].left; right += events[i].right;
       const start = events[i].s, len = events[i+1].s-start;
       if (left === right || len < 1e-6) continue;
+      if(rim) {
+        const mid=start+len/2;
+        if(!maps.some(r=>rectContains(r,at(mid,1e-5))) || !maps.some(r=>rectContains(r,at(mid,-1e-5)))) continue;
+      }
       const ls = surfaces.get(left), rs = surfaces.get(right);
       const pieces = ls || rs ? Math.max(1,Math.ceil(len / (t.grid.cell / 2))) : 1;
       for (let j=0; j<pieces; j++) {

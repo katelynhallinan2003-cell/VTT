@@ -231,6 +231,14 @@ export type DrawKind = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 
 /** Something drawn on the map: freehand, a shape, text or a spell template. */
 export interface GradientControl { id: string; height: number; path: (Vec & { rise?: number })[]; boundary?: "height" | "path" | "both" | "hidden" }
 
+export interface SpellSettings {
+  walls?: boolean;
+  wrap?: boolean;
+  elevation?: boolean;
+  /** Absolute feet above the scene datum. Omitted endpoints follow local ground. */
+  start?: number;
+  end?: number;
+}
 export interface Drawing {
   gradient?: GradientControl[];
   gradientEnabled?: boolean;
@@ -285,6 +293,7 @@ export interface Drawing {
   dd?: boolean;
   /** a spell template: the ground it covers counts as difficult while it is on the map */
   td?: boolean;
+  spell?: SpellSettings;
   /** private: only the person who made it (and the DM) can see it */
   pv?: boolean;
   t: number;

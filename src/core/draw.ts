@@ -218,8 +218,8 @@ export function templateGeom(kind: DrawKind, a: Vec, b: Vec, widthPx: number, he
 export const beamWidthPx = (grid: GridSettings, bwFt: number) => (Math.max(1, bwFt) / grid.ft) * grid.cell;
 
 /** Text such as "20 ft sphere" for a template while it is being placed. */
-export function templateLabel(kind: DrawKind, grid: GridSettings, a: Vec, b: Vec, bwFt: number, footprint = grid.cell): string {
-  const ft = templateFt(grid, a, b, kind, footprint);
+export function templateLabel(kind: DrawKind, grid: GridSettings, a: Vec, b: Vec, bwFt: number, footprint = grid.cell, spatialFt?:number): string {
+  const ft = spatialFt===undefined ? templateFt(grid,a,b,kind,footprint) : Math.round(spatialFt*10)/10;
   if (kind === 'sphere') return `${ft} ft radius`;
   if (kind === 'beam') return `${ft} ft × ${bwFt} ft line`;
   return `${ft} ft ${kind}`;

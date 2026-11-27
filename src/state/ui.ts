@@ -1,7 +1,12 @@
+import { spellSettings } from '../core/model';
 import type { Unsub } from '../backend/types';
 import { FONT_KEYS, type FillMode, type SphereSnap } from '../core/draw';
 import type { Effect, Vec } from '../types';
 import type { Side, WallKind, WallSnap } from '../core/walls';
+
+function readSpellDefaults() {
+  try { return spellSettings(JSON.parse(localStorage.getItem('vtt-spell-defaults') ?? '{}')); } catch { return {}; }
+}
 
 export type Tool = 'select' | 'grid' | 'scale' | 'fog' | 'draw' | 'template' | 'ruler' | 'height' | 'wall' | 'light';
 export type DrawTool = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'erase';
@@ -57,8 +62,8 @@ export interface UiData {
   tplWidth: number;
   /** where a sphere's centre snaps: the middle of a square, a corner, or nowhere */
   tplSphereSnap: SphereSnap;
-  /** light up the squares a template covers */
-  tplCover: boolean;
+  /** Defaults copied onto each new spell. */
+  tplSettings: import('../types').SpellSettings;
   /** drawings that are selected (token selection is separate) */
   drawSel: Set<string>;
   /** try out token moves without committing them */
@@ -172,7 +177,7 @@ export class UiState {
     drawDash: readFlag('vtt-draw-dash', false),
     tplWidth: 5,
     tplSphereSnap: readStr('vtt-tpl-sphere', 'center', ['center', 'corner', 'off'] as const),
-    tplCover: readFlag('vtt-tpl-cover', true),
+    tplSettings: readSpellDefaults(),
     drawSel: new Set(), testMove: false, testCount: 0,
     sharePlot: readFlag('vtt-share-plot', false),
     tplShare: readFlag('vtt-tpl-share', true),
@@ -227,7 +232,7 @@ export class UiState {
       if (patch.drawTool !== undefined) localStorage.setItem('vtt-draw-tool', patch.drawTool);
       if (patch.tplKind !== undefined) localStorage.setItem('vtt-tpl-kind', patch.tplKind);
       if (patch.tplSphereSnap !== undefined) localStorage.setItem('vtt-tpl-sphere', patch.tplSphereSnap);
-      if (patch.tplCover !== undefined) localStorage.setItem('vtt-tpl-cover', patch.tplCover ? '1' : '0');
+      if (patch.tplSettings) localStorage.setItem('vtt-spell-defaults',JSON.stringify(patch.tplSettings));
       if (patch.drawColor !== undefined) localStorage.setItem('vtt-draw-color', patch.drawColor);
       if (patch.drawSize !== undefined) localStorage.setItem('vtt-draw-size', patch.drawSize);
       if (patch.drawFillMode !== undefined) localStorage.setItem('vtt-draw-fillmode', patch.drawFillMode);

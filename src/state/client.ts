@@ -15,7 +15,7 @@ import {
 import { lineOp, polyOp } from '../core/fog';
 import { addFx, fxToWire, tickFx } from '../core/effects';
 import { can, detectPreset, PRESETS, type Action } from '../core/permissions';
-import { sceneRect, snapTokenCenter } from '../core/geometry';
+import { mapFootprints, sceneRect, snapTokenCenter } from '../core/geometry';
 import { isHex } from '../core/hex';
 import { cleanFolderName, folderOf, normalizeFolder, uniqueFolderName } from '../core/folders';
 import { sameSaved, savedFields, tokenFromSaved, type SavedToken } from '../core/tokenlib';
@@ -63,7 +63,7 @@ export interface SceneState {
 
 /** A drawing as the caller describes it; the text styling and the fill colour are optional. */
 export type NewDrawing = Omit<Drawing, 'id' | 'uid' | 't' | 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc' | 'dt' | 'dl' | 'dd'> & Partial<Pick<Drawing, 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc' | 'dt' | 'dl' | 'dd'>>;
-export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'hg' | 'ha' | 'he' | 'hc' | 'gradientEnabled' | 'gradientFixed' | 'gradient' | 'td'>>;
+export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'hg' | 'ha' | 'he' | 'hc' | 'gradientEnabled' | 'gradientFixed' | 'gradient' | 'td' | 'spell'>>;
 
 export type ScenePatch = Partial<Omit<SceneMeta, 'grid' | 'fog' | 'light'>> & {
   grid?: Partial<GridSettings>;
@@ -612,11 +612,12 @@ export class TableClient {
   private wallCache?: {edges:TerrainEdge[]; rev:number; plan:ReturnType<typeof resolveWalls>};
   wallGeometry() {
     const scene=this.scene, grid=this.grid;
-    const key=[grid.cell,grid.ft,grid.ox,grid.oy,grid.shape].join('|');
+    const maps=scene?.meta ? mapFootprints(scene.meta) : [];
+    const key=[grid.cell,grid.ft,grid.ox,grid.oy,grid.shape,JSON.stringify(maps)].join('|');
     let c=this.contourCache;
     if (!c || c.scene!==scene || c.rev!==(scene?.drawRev ?? -1) || c.grid!==key) {
       const joins:Seg[]=[];
-      const edges=scene ? terrainEdges(zonesOf(scene.draws.values(),grid),joins) : [];
+      const edges=scene ? terrainEdges(zonesOf(scene.draws.values(),grid),joins,maps) : [];
       this.contourCache=c={scene,rev:scene?.drawRev ?? -1,grid:key,edges,joins};
     }
     const rev=scene?.wallRev ?? -1;

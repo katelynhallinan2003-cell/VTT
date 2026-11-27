@@ -289,7 +289,7 @@ check('and one Ctrl+Z brings every wall back', (await walls()).length === before
 
 // ---- a spell is stopped by the walls (look at it)
 await dm.keyboard.press('v');
-await dm.evaluate(() => window.__vtt.ui.set({ tplCover: true, tool: 'template', tplKind: 'sphere' }));
+await dm.evaluate(() => window.__vtt.ui.set({ tool: 'template', tplKind: 'sphere' }));
 await sleep(200);
 await drag([gx(12), gy(12)], [gx(12) + cell * 4, gy(12)]);
 await dm.keyboard.press('v');

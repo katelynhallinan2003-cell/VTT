@@ -1,7 +1,11 @@
+import clip, {type MultiPolygon, type Polygon, type Pair} from 'polygon-clipping';
+import { spellVolume } from '../core/spellVolume';
+import { rectContains } from '../core/geometry';
+import type { Rect } from '../types';
 import { Container, Graphics, Text } from 'pixi.js';
 import { LINE_H, beamWidthPx, templateWidthPx, footprintPoly, boundsOf, dashSegments, drawingBounds, fontStack, isTemplate, parsePts, templateGeom, textMetrics } from '../core/draw';
-import { cellPoly, coveredCells } from '../core/cells';
-import { reachableCells, type Seg } from '../core/walls';
+import { cellPoly } from '../core/cells';
+import { type Seg } from '../core/walls';
 import { isHex } from '../core/hex';
 import type { DrawKind, Drawing, GridSettings, Vec } from '../types';
 
@@ -18,11 +22,12 @@ export interface Shape {
   fc?: string;
   dash: boolean;
   bw: number;
+  spell?: Drawing['spell'];
   /** width of the creature an emanation comes out of, in feet */
   of?: number;
 }
 
-export const shapeOf = (d: Drawing): Shape => ({ k: d.k, pts: parsePts(d.p), color: d.color, w: d.w, fill: d.fill, fc: d.fc, dash: d.dash, bw: d.bw, of: d.of });
+export const shapeOf = (d: Drawing): Shape => ({ k: d.k, pts: parsePts(d.p), color: d.color, w: d.w, fill: d.fill, fc: d.fc, dash: d.dash, bw: d.bw, of: d.of, spell:d.spell });
 
 /** Default opacity of a spell template's area. */
 export const TEMPLATE_FILL = 0.28;
@@ -44,7 +49,7 @@ function ellipsePts(cx: number, cy: number, rx: number, ry: number): Vec[] {
 }
 
 /** Paint a shape onto a Graphics object. Text is handled separately by DrawLayer. `sight` holds the walls that stop a spell. */
-export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1, cover = false, sight?: Seg[], groundAt?: (p: Vec) => number) {
+export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1, cover = false, sight?: Seg[], groundAt?: (p: Vec) => number, maps:Rect[] = []) {
   const pts = s.pts;
   if (!pts.length) return;
   const col = hex(s.color);
@@ -55,22 +60,55 @@ export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1,
     if (pts.length < 2) return;
     const hexShape = grid.shape === 'square' ? undefined : grid.shape;
     const widthPx = templateWidthPx(grid, { k: s.k, bw: s.bw, of: s.of });
-    const geom = templateGeom(s.k, pts[0], pts[1], widthPx, hexShape);
-    const fillA = (s.fill > 0 ? s.fill : TEMPLATE_FILL) * alpha;
-    if (cover) {
-      // light up the squares the area covers (the area itself is left unfilled so the squares read clearly)
-      for (const c of reachableCells(coveredCells(grid, s.k, pts[0], pts[1], widthPx), pts[0], sight, groundAt?.(pts[0]))) g.poly(cellPoly(grid, c).flatMap((p) => [p.x, p.y])).fill({ color: fcol, alpha: Math.max(0.5, fillA) * alpha });
+    const volume=spellVolume(s,pts[0],pts[1],grid,{segs:sight ?? [],ground:groundAt,maps});
+    const geom=volume.geom, fillA=(s.fill || TEMPLATE_FILL)*alpha;
+    // Only clip geometry that straddles the edge of a map.
+    let playable:MultiPolygon|undefined;
+    const paint=(poly:Vec[],fill:number|null,line=0,hole?:Vec[])=>{
+      const ring=(points:Vec[])=>points.map(({x,y}):Pair=>[x,y]);
+      const subject:Polygon=[ring(poly)];
+      if(hole) subject.push(ring(hole));
+      let pieces:MultiPolygon=[subject];
+      if(maps.length && !maps.some(r=>poly.every(p=>rectContains(r,p)))) {
+        if(!playable) {
+          const cuts=maps.map(({x,y,w,h}):Polygon=>[[[x,y],[x+w,y],[x+w,y+h],[x,y+h]]]);
+          playable=clip.union(cuts[0],...cuts.slice(1));
+        }
+        pieces=clip.intersection(subject,playable);
+      }
+      for(const piece of pieces) for(let i=0;i<piece.length;i++) {
+        g.poly(piece[i].flat(),true);
+        if(line) g.stroke({...stroke,width:line});
+        else if(i) g.cut();
+        else if(fill!=null) g.fill({color:fcol,alpha:fill});
+      }
+    };
+    const outline=geom.type==='circle' ? ellipsePts(geom.c.x,geom.c.y,geom.r,geom.r) : geom.pts;
+    if(cover || volume.hasWalls) {
+      // Without a visible grid, sample finely enough to show wall shadows without square outlines.
+      const sampling=cover ? grid : {...grid,shape:'square' as const,cell:Math.max(grid.cell/10,Math.max(volume.bounds.w,volume.bounds.h)/140)};
+      const lit=cover ? Math.max(.5,fillA)*alpha : fillA;
+      const cells=volume.cells(sampling);
+      if(isHex(sampling)) {
+        for(const c of cells) paint(cellPoly(sampling,c),lit);
+      } else {
+        // One rectangle per continuous row also prevents seams between filled pixels.
+        cells.sort((a,b)=>a.y-b.y || a.x-b.x);
+        const h=sampling.cell/2;
+        for(let i=0;i<cells.length;) {
+          const first=cells[i++];
+          let right=first.x+h;
+          while(i<cells.length && cells[i].y===first.y && cells[i].x-h<=right+1e-6) right=cells[i++].x+h;
+          const left=first.x-h, top=first.y-h, bottom=first.y+h;
+          paint([{x:left,y:top},{x:right,y:top},{x:right,y:bottom},{x:left,y:bottom}],lit);
+        }
+      }
     } else {
-      if (geom.type === 'circle') g.circle(geom.c.x, geom.c.y, Math.max(0.5, geom.r)).fill({ color: fcol, alpha: fillA });
-      else g.poly(geom.pts.flatMap((p) => [p.x, p.y])).fill({ color: fcol, alpha: fillA });
-      // an emanation does not include the space of the creature it comes out of
-      if (s.k === 'emanation') g.poly(footprintPoly(pts[0], widthPx, hexShape).flatMap((p) => [p.x, p.y])).cut();
+      paint(outline,fillA,0,s.k==='emanation' ? footprintPoly(pts[0],widthPx,hexShape) : undefined);
     }
-    if (geom.type === 'circle') g.circle(geom.c.x, geom.c.y, Math.max(0.5, geom.r)).stroke({ ...stroke, width: Math.max(2, s.w) });
-    else g.poly(geom.pts.flatMap((p) => [p.x, p.y]), true).stroke({ ...stroke, width: Math.max(2, s.w) });
-    // a dot on the point the template starts from (an emanation shows its square instead)
-    if (s.k === 'emanation') g.poly(footprintPoly(pts[0], widthPx, hexShape).flatMap((p) => [p.x, p.y]), true).stroke({ ...stroke, width: Math.max(1.5, s.w * 0.6) });
-    else g.circle(pts[0].x, pts[0].y, Math.max(3, s.w * 1.2)).fill({ color: col, alpha });
+    paint(outline,null,Math.max(2,s.w));
+    if(s.k==='emanation') paint(footprintPoly(pts[0],widthPx,hexShape),null,Math.max(1.5,s.w*.6));
+    else paint(ellipsePts(pts[0].x,pts[0].y,Math.max(3,s.w*1.2),Math.max(3,s.w*1.2)),alpha);
     return;
   }
 
@@ -138,14 +176,14 @@ export class DrawLayer {
   private items = new Map<string, Item>();
   private grid = '';
 
-  sync(list: Drawing[], grid: GridSettings, textRes: number, cover = false, walls?: { segs: Seg[]; rev: string; ground?: (p: Vec) => number }) {
-    const gridSig = `${grid.shape}|${grid.cell}|${grid.ft}|${grid.ox}|${grid.oy}|${cover}|${cover ? walls?.rev ?? 0 : 0}`;
+  sync(list: Drawing[], grid: GridSettings, textRes: number, cover = false, walls?: { segs: Seg[]; rev: string; ground?: (p: Vec) => number; maps?:Rect[] }) {
+    const gridSig = `${grid.shape}|${grid.cell}|${grid.ft}|${grid.ox}|${grid.oy}|${cover}|${walls?.rev ?? 0}`;
     const gridChanged = gridSig !== this.grid;
     this.grid = gridSig;
     const seen = new Set<string>();
     list.forEach((d, i) => {
       seen.add(d.id);
-      const sig = `${d.k}|${d.p}|${d.color}|${d.w}|${d.fill}|${d.fc}|${d.dash}|${d.txt}|${d.fs}|${d.font}|${d.b}|${d.i}|${d.u}|${d.ho}|${d.bw}|${d.hz}|${textRes}`;
+      const sig = `${d.k}|${d.p}|${d.color}|${d.w}|${d.fill}|${d.fc}|${d.dash}|${d.txt}|${d.fs}|${d.font}|${d.b}|${d.i}|${d.u}|${d.ho}|${d.bw}|${d.hz}|${d.of}|${JSON.stringify(d.spell)}|${textRes}`;
       let it = this.items.get(d.id);
       if (!it) {
         it = { root: new Container(), g: new Graphics(), text: null, sig: '' };
@@ -158,7 +196,7 @@ export class DrawLayer {
         it.sig = sig;
         it.g.clear();
         if (d.k === 'text') this.paintText(it, d, textRes);
-        else { paintShape(it.g, shapeOf(d), grid, 1, cover, walls?.segs, walls?.ground); this.paintZoneLabel(it, d, grid, textRes); }
+        else { paintShape(it.g, shapeOf(d), grid, 1, cover, walls?.segs, walls?.ground,walls?.maps); this.paintZoneLabel(it, d, grid, textRes); }
       }
       if (it.text && it.text.resolution !== textRes) it.text.resolution = textRes;
     });

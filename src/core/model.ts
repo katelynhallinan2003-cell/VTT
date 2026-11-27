@@ -230,6 +230,15 @@ function readGradient(raw: unknown): Drawing['gradient'] {
   return controls.length ? controls : undefined;
 }
 
+export function spellSettings(raw: unknown): import('../types').SpellSettings {
+  const out: import('../types').SpellSettings={};
+  if (!raw || typeof raw!=='object') return out;
+  const v=raw as Record<string,unknown>;
+  for (const key of ['walls','wrap','elevation'] as const) if (typeof v[key]==='boolean') out[key]=v[key];
+  for (const key of ['start','end'] as const) if (typeof v[key]==='number' && Number.isFinite(v[key])) out[key]=v[key];
+  return out;
+}
+
 export function normalizeDrawing(id: string, raw: any): Drawing | null {
   if (!raw || typeof raw.p !== 'string' || !DRAW_KINDS.includes(raw.k)) return null;
   return {
@@ -253,6 +262,7 @@ export function normalizeDrawing(id: string, raw: any): Drawing | null {
     of: Math.min(400, Math.max(0, num(raw.of, 0))),
     hz: typeof raw.hz === 'number' && Number.isFinite(raw.hz) && (raw.k === 'rect' || raw.k === 'ellipse' || raw.k === 'terrain') ? Math.min(5000, Math.max(-1000, Math.round(raw.hz))) : null,
     ...(raw.pv === true ? { pv: true } : {}),
+    ...(raw.spell && isTemplate(raw.k) ? {spell:spellSettings(raw.spell)} : {}),
     ...(raw.td === true && isTemplate(raw.k) ? { td: true } : {}),
     ...(raw.gradientFixed === true ? {gradientFixed:true} : {}),
     ...(raw.gradientEnabled === true ? {gradientEnabled:true} : {}),

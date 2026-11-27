@@ -92,7 +92,7 @@ await dm.locator('.flyout .seg button', { hasText: 'Middle of a square' }).click
 check('the choice is remembered', (await dm.evaluate(() => localStorage.getItem('vtt-tpl-sphere'))) === 'center');
 
 // ---------------------------------------------------------------- covered squares
-check('showing the squares is on by default', (await dm.evaluate(() => window.__vtt.ui.data.tplCover)) === true);
+check('showing the squares is on by default', (await dm.evaluate(() => window.__vtt.board.coverOn())) === true);
 await dm.evaluate(() => window.__vtt.client.clearDrawings(() => true, 'x'));
 await sleep(200);
 await dm.locator('.flyout .seg button', { hasText: 'Cone' }).click();
@@ -103,10 +103,6 @@ await dragSphere(worldPt(11.05, 8.5), worldPt(14.0, 8.5));
 await dm.keyboard.press('v');
 await sleep(300);
 await dm.screenshot({ path: '/tmp/shots/100-covered-squares.png' });
-await dm.evaluate(() => window.__vtt.ui.set({ tplCover: false }));
-await sleep(300);
-await dm.screenshot({ path: '/tmp/shots/101-uncovered.png' });
-await dm.evaluate(() => window.__vtt.ui.set({ tplCover: true }));
 await dm.evaluate(() => window.__vtt.client.clearDrawings(() => true, 'x'));
 
 // ---------------------------------------------------------------- fog follows the real path

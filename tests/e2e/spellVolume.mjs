@@ -1,0 +1,62 @@
+// Focused browser check for placement defaults, per-spell overrides, and token altitude.
+import assert from 'node:assert/strict';
+import { launch } from './lib.mjs';
+const { browser,context }=await launch();
+try {
+  const dm=await context.newPage();
+  const errors=[];
+  dm.on('pageerror',e=>errors.push(e.message));
+  await dm.goto((process.env.BASE || 'http://127.0.0.1:4174/')+'?demo');
+  await dm.getByRole('button',{name:/Start as the DM/}).click();
+  await dm.getByPlaceholder('New table name').fill('Spell volume test');
+  await dm.getByRole('button',{name:'Create table'}).click();
+  await dm.getByRole('button',{name:'+ New scene'}).first().click();
+  await dm.getByRole('button',{name:'Use sample dungeon'}).click();
+  await dm.locator('.modal .muted',{hasText:'Sample dungeon.png'}).waitFor();
+  await dm.getByRole('button',{name:'Create scene'}).click();
+  await dm.waitForFunction(()=>window.__vtt?.board?.mapSprite);
+  await dm.evaluate(()=>window.__vtt.ui.set({tool:'select',tplMode:'select'}));
+  await dm.getByRole('button',{name:'Spell templates',exact:true}).click();
+  const menu=dm.locator('.flyout');
+  await menu.getByRole('button',{name:'Sphere',exact:true}).click();
+  await menu.locator('summary',{hasText:'Advanced'}).click();
+  assert(await menu.getByLabel('Consider walls',{exact:true}).isChecked());
+  await menu.getByLabel('Consider walls',{exact:true}).uncheck();
+  assert.equal(await menu.getByText('Wrap around corners',{exact:true}).count(),0);
+  await menu.getByLabel('Consider walls',{exact:true}).check();
+  assert.equal(await menu.getByLabel('Ending elevation (ft)').count(),0);
+  const start=menu.getByLabel('Starting elevation (ft)');
+  await start.fill('120');await start.press('Enter');
+  const {a,b,token}=await dm.evaluate(async()=>{
+    const {client,board}=window.__vtt, m=client.scene.meta, g=client.grid;
+    const p={x:m.mapX+m.mapW*m.mapScale*.56,y:m.mapY+m.mapH*m.mapScale*.43};
+    const token=await client.addToken({...p,name:'Target',size:1});
+    return {a:board.worldToScreen(p),b:board.worldToScreen({x:p.x+g.cell*3,y:p.y}),token};
+  });
+  const place=async()=>{
+    await dm.mouse.move(a.x,a.y);await dm.mouse.down();await dm.mouse.move(b.x,b.y,{steps:5});await dm.mouse.up();
+  };
+  await place();
+  await dm.waitForFunction(()=>[...window.__vtt.client.scene.draws.values()].some(d=>d.k==='sphere' && d.spell?.start===120));
+  const colors=()=>dm.evaluate(id=>window.__vtt.board.spellColors(window.__vtt.client.scene.tokens.get(id)),token);
+  assert.equal((await colors()).length,0);
+  await start.fill('0');await start.press('Enter');
+  await place();
+  await dm.waitForFunction(()=>[...window.__vtt.client.scene.draws.values()].filter(d=>d.k==='sphere').length===2);
+  assert.equal((await colors()).length,1);
+  await menu.getByRole('button',{name:'Select',exact:true}).click();
+  await dm.mouse.click(a.x,a.y);
+  const selected=dm.locator('.drawtag');
+  await selected.locator('summary',{hasText:'Advanced'}).click();
+  const own=selected.getByLabel('Starting elevation (ft)');
+  await own.fill('120');await own.press('Enter');
+  await dm.waitForFunction(()=>[...window.__vtt.client.scene.draws.values()].every(d=>d.k!=='sphere'||d.spell?.start===120));
+  assert.equal((await colors()).length,0);
+  await dm.evaluate(id=>window.__vtt.client.updateTokens([id],{fly:true,elev:120}),token);
+  await dm.waitForFunction(id=>window.__vtt.board.spellColors(window.__vtt.client.scene.tokens.get(id)).length===2,token);
+  await dm.reload();
+  await dm.waitForFunction(()=>window.__vtt?.client?.scene?.draws?.size>=2);
+  assert.equal((await colors()).length,2);
+  assert.deepEqual(errors,[]);
+  console.log('Passed placement, visibility controls, per-spell elevation, overlapping effects, and reload.');
+} finally { await browser.close(); }

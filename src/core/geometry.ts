@@ -169,10 +169,14 @@ export function zoomAt(cam: { zoom: number; tx: number; ty: number }, sx: number
 }
 
 /** The room the scene takes up: the main map and every extra map, at their current places and sizes (null when there is no map at all). */
-export function sceneRect(meta: { mapX: number; mapY: number; mapW: number; mapH: number; mapScale: number; maps?: { x: number; y: number; w: number; h: number; scale: number }[] }): Rect | null {
+export function mapFootprints(meta: { mapX: number; mapY: number; mapW: number; mapH: number; mapScale: number; maps?: { x: number; y: number; w: number; h: number; scale: number }[] }): Rect[] {
   const rects: Rect[] = [];
   if (meta.mapW > 0) rects.push(mapRect(meta));
   for (const m of meta.maps ?? []) rects.push({ x: m.x, y: m.y, w: m.w * m.scale, h: m.h * m.scale });
+  return rects.filter(r=>r.w>0 && r.h>0);
+}
+export function sceneRect(meta: { mapX: number; mapY: number; mapW: number; mapH: number; mapScale: number; maps?: { x: number; y: number; w: number; h: number; scale: number }[] }): Rect | null {
+  const rects=mapFootprints(meta);
   if (!rects.length) return null;
   const x0 = Math.min(...rects.map((r) => r.x)), y0 = Math.min(...rects.map((r) => r.y));
   const x1 = Math.max(...rects.map((r) => r.x + r.w)), y1 = Math.max(...rects.map((r) => r.y + r.h));

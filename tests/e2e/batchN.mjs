@@ -257,6 +257,7 @@ check('a new additive stroke can be started above an old box', await dm.locator(
 await dm.screenshot({ path: '/tmp/shots/n3-final.png' });
 
 // ---- clear all
+if (!await dm.locator('.terrain-menu details').evaluate(el => el.open)) await dm.locator('.terrain-menu summary').click();
 await dm.locator('.flyout .btn', { hasText: 'Clear all heights' }).click();
 await sleep(500);
 check('Clear all heights removes brush and box ground', (await areas()).length === 0 && (await terrain()).length === 0);

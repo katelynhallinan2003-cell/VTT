@@ -236,7 +236,6 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
         <span class="field-label">Brush diameter ({gridless ? 'ft' : cellWord+'s'})</span>
         <div class="chips terrain-presets">{BRUSH_SIZES.map(x => <button key={x} class={`chip ${d.heightBrush===x ? 'on' : ''}`} onClick={()=>ui.set({heightBrush:x})}>{x==='fine' ? (gridless ? '2' : '2 ft') : gridless ? x*grid.ft : x}</button>)}</div>
       </>}
-      {rough && roughN > 0 && <button class="btn small danger" onClick={()=>void client.clearDrawings(x=>!!x.dt,'Clear difficult terrain')}>Clear difficult terrain</button>}
       {!rough && (mode === 'paint' || (mode === 'move' && selectionCount > 0)) && <div class="ht-card">
         <div class="row">
           <strong>{mode === 'move' ? 'Set Height' : selectionCount > 1 ? `${selectionCount} areas selected` : editing ? 'Selected ground' : 'Next ground you paint'}</strong>
@@ -273,13 +272,14 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
         </p>
       )}
       {rough && <p class="hint">{mode === 'paint' ? 'Paint or drag across the map.' : 'Erases difficult terrain wherever you drag.'}</p>}
-      {!rough && n>0 && <button class="btn small danger" onClick={async () => { await client.clearDrawings(x=>!x.dt && !x.dl && (x.hz!=null || x.k==='terrain'),'Clear all heights'); ui.selectDrawings([]); }}>Clear all heights</button>}
       <details>
         <summary>Advanced</summary>
         <Toggle label="Always show terrain" checked={d.heightView==='always'} onChange={v=>ui.set({heightView:v ? 'always' : 'auto'})} />
         <Toggle label="Always show terrain to players" checked={!!client.scene?.meta?.showPlayerTerrain}
           onChange={v=>void client.updateScene({showPlayerTerrain:v}).catch(e=>toast(e.message,'error'))} />
         {!rough && props.onFromColor && <button class="btn small" onClick={props.onFromColor}>Paint height from a colour...</button>}
+        {rough && roughN > 0 && <button class="btn small danger" onClick={()=>void client.clearDrawings(x=>!!x.dt,'Clear all difficult terrain')}>Clear all difficult terrain</button>}
+        {!rough && n>0 && <button class="btn small danger" onClick={async () => { await client.clearDrawings(x=>!x.dt && !x.dl && (x.hz!=null || x.k==='terrain'),'Clear all heights'); ui.selectDrawings([]); }}>Clear all heights</button>}
       </details>
     </div>
   );

@@ -254,6 +254,7 @@ await sleep(400);
 check('"Clear all" drawings does not wipe the terrain', (await zones(dm)).length === 2);
 await dm.keyboard.press('h');
 await dm.locator('.flyout .hint', { hasText: /2 height areas/ }).waitFor();
+if (!await dm.locator('.terrain-menu details').evaluate(el => el.open)) await dm.locator('.terrain-menu summary').click();
 await dm.getByRole('button', { name: 'Clear all heights' }).click();
 await sleep(400);
 check('"Clear all heights" does', (await zones(dm)).length === 0);

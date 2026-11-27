@@ -256,3 +256,4 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
 - [x] **#146 Height controls follow the terrain tool mode** (added 2026-11-26, completed 2026-11-26). Hide the box for Erase and empty Select. Label a selected area's controls Set Height.
 - [x] **#147 Difficult terrain wording** (added 2026-11-26, completed 2026-11-26). Use difficult terrain throughout the controls and movement readout.
 - [x] **#148 Stripe difficult terrain** (added 2026-11-26, completed 2026-11-26). Use black diagonal stripes with transparent gaps for difficult terrain.
+- [x] **#149 Keep terrain clear buttons under Advanced** (added 2026-11-26, completed 2026-11-26). Protect both map-wide clear actions from accidental clicks. Verified both tabs in the browser.

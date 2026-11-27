@@ -349,6 +349,7 @@ await dm.locator('.flyout-title', { hasText: /^Elevation$/ }).waitFor();
 await dm.evaluate(() => window.__vtt.ui.set({ heightSnap: true, heightBrush: 3 }));
 await drag([gx(15.5), gy(2.5)], [gx(17.5), gy(2.5)]);
 check('a height area can be painted next to it', await dm.evaluate(() => window.__vtt.board.zones.areas.length === 1));
+if (!await dm.locator('.terrain-menu details').evaluate(el => el.open)) await dm.locator('.terrain-menu summary').click();
 await dm.getByRole('button', { name: 'Clear all heights' }).click();
 await sleep(400);
 check('"Clear all heights" leaves the painted light', (await draws()).filter((d) => d.dl).length >= 2 && ((await shadeAt(...A)) ?? 1) < 0.05);

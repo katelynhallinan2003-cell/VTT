@@ -133,12 +133,21 @@ await dm.evaluate(()=>window.__vtt.client.history.redo());
 await dm.waitForFunction(()=>document.querySelectorAll('.gradient-box').length===2);
 await dm.getByRole('button',{name:'Delete height point'}).nth(1).click();
 await dm.waitForFunction(() => document.querySelectorAll('.gradient-box').length===1);
+const advanced = dm.locator('.terrain-menu details');
+const clearHeights = advanced.getByRole('button',{name:'Clear all heights',includeHidden:true});
+assert.equal(await clearHeights.count(),1);
+assert.equal(await clearHeights.isVisible(),false);
+await advanced.locator('summary').click();
+assert.equal(await clearHeights.isVisible(),true);
+await advanced.locator('summary').click();
 await dm.getByRole('button',{name:'Diff Terrain',exact:true}).click();
 await dm.getByText('Difficult terrain',{exact:true}).waitFor();
-assert.equal(await dm.getByRole('button',{name:'Clear difficult terrain'}).count(),0);
+assert.equal(await dm.getByRole('button',{name:'Clear all difficult terrain'}).count(),0);
 await dm.evaluate(async()=>{const {board}=window.__vtt; await board.chooseGridOverlay('none');});
 await dm.mouse.move(630,390); await dm.mouse.down(); await dm.mouse.move(740,430,{steps:4}); await dm.mouse.up();
-await dm.getByRole('button',{name:'Clear difficult terrain'}).waitFor();
+const clearRough = advanced.getByRole('button',{name:'Clear all difficult terrain',includeHidden:true});
+await clearRough.waitFor({state:'attached'});
+assert.equal(await clearRough.isVisible(),false);
 assert.ok(await dm.evaluate(()=>[...window.__vtt.client.scene.draws.values()].some(d=>d.dt && !d.hc)));
 await dm.waitForFunction(() => {
   const {board} = window.__vtt;
@@ -155,6 +164,8 @@ await dm.waitForFunction(() => {
   return stripes >= 2;
 });
 await dm.locator('.terrain-menu summary',{hasText:'Advanced'}).click();
+await clearRough.click();
+await clearRough.waitFor({state:'detached'});
 await dm.getByRole('checkbox',{name:'Always show terrain',exact:true}).check();
 assert.equal(await dm.evaluate(()=>window.__vtt.ui.data.heightView),'always');
 // Sample the actual overlay across a flat 0 ft / 0–5 ft slope / flat 5 ft join, with nothing selected.

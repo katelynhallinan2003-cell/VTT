@@ -156,12 +156,67 @@ function parseStroke(d: Drawing, grid: GridSettings): TStroke | null {
   return s;
 }
 
+// Big strokes are tested only against the edges near the point. Each index
+// keeps every edge that could change the answer, so the answer is the same.
+const ringBands = new WeakMap<Vec[], { y0: number; y1: number; bh: number; bands: number[][] }>();
+function ringCovers(p: Vec, ring: Vec[]): boolean {
+  if (ring.length < 24) return pointInPoly(p, ring);
+  let idx = ringBands.get(ring);
+  if (!idx) {
+    let y0 = Infinity, y1 = -Infinity;
+    for (const q of ring) { if (q.y < y0) y0 = q.y; if (q.y > y1) y1 = q.y; }
+    const n = Math.min(512, Math.ceil(ring.length / 3)), bh = (y1 - y0) / n || 1;
+    const bands: number[][] = Array.from({ length: n }, () => []);
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const lo = Math.min(ring[i].y, ring[j].y), hi = Math.max(ring[i].y, ring[j].y);
+      const k0 = Math.max(0, Math.min(n - 1, Math.floor((lo - y0) / bh))), k1 = Math.max(0, Math.min(n - 1, Math.floor((hi - y0) / bh)));
+      for (let k = k0; k <= k1; k++) bands[k].push(i);
+    }
+    ringBands.set(ring, idx = { y0, y1, bh, bands });
+  }
+  if (p.y < idx.y0 || p.y > idx.y1) return false;
+  const band = idx.bands[Math.max(0, Math.min(idx.bands.length - 1, Math.floor((p.y - idx.y0) / idx.bh)))];
+  let inside = false;
+  for (const i of band) {
+    const a = ring[i], b = ring[i === 0 ? ring.length - 1 : i - 1];
+    if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
+const brushCells = new WeakMap<TStroke, { cs: number; nx: number; ny: number; cells: number[][] }>();
+function brushCovers(s: TStroke, p: Vec): boolean {
+  const pts = s.pts;
+  if (pts.length < 24) {
+    for (let i = 1; i < pts.length; i++) if (distToSegment(p, pts[i - 1], pts[i]) <= s.r) return true;
+    return false;
+  }
+  let idx = brushCells.get(s);
+  const b = s.b;
+  if (!idx) {
+    const cs = Math.max(s.r * 2, b.w / 64, b.h / 64, 1);
+    const nx = Math.max(1, Math.ceil(b.w / cs) + 1), ny = Math.max(1, Math.ceil(b.h / cs) + 1);
+    const cells: number[][] = Array.from({ length: nx * ny }, () => []);
+    const cx = (x: number) => Math.max(0, Math.min(nx - 1, Math.floor((x - b.x) / cs)));
+    const cy = (y: number) => Math.max(0, Math.min(ny - 1, Math.floor((y - b.y) / cs)));
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], c = pts[i];
+      const x0 = cx(Math.min(a.x, c.x) - s.r), x1 = cx(Math.max(a.x, c.x) + s.r), y0 = cy(Math.min(a.y, c.y) - s.r), y1 = cy(Math.max(a.y, c.y) + s.r);
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) cells[y * nx + x].push(i);
+    }
+    brushCells.set(s, idx = { cs, nx, ny, cells });
+  }
+  const x = Math.max(0, Math.min(idx.nx - 1, Math.floor((p.x - b.x) / idx.cs))), y = Math.max(0, Math.min(idx.ny - 1, Math.floor((p.y - b.y) / idx.cs)));
+  for (const i of idx.cells[y * idx.nx + x]) if (distToSegment(p, pts[i - 1], pts[i]) <= s.r) return true;
+  return false;
+}
+
 /** Does this stroke cover the point? */
 export function strokeCovers(s: TStroke, p: Vec, grid: GridSettings, key?: string): boolean {
   const b = s.b;
   if (p.x < b.x || p.x > b.x + b.w || p.y < b.y || p.y > b.y + b.h) return false;
   switch (s.kind) {
-    case 'polygon': return s.rings!.reduce((inside, ring) => pointInPoly(p, ring) !== inside, false);
+    case 'polygon': return s.rings!.reduce((inside, ring) => ringCovers(p, ring) !== inside, false);
     case 'rect': return true;
     case 'ellipse': {
       const rx = Math.max(1e-6, b.w / 2), ry = Math.max(1e-6, b.h / 2);
@@ -170,8 +225,7 @@ export function strokeCovers(s: TStroke, p: Vec, grid: GridSettings, key?: strin
     case 'cells': return !!s.cells?.has(key ?? cellKey(grid, p));
     default: {
       if (s.pts.length === 1) return Math.hypot(p.x - s.pts[0].x, p.y - s.pts[0].y) <= s.r;
-      for (let i = 1; i < s.pts.length; i++) if (distToSegment(p, s.pts[i - 1], s.pts[i]) <= s.r) return true;
-      return false;
+      return brushCovers(s, p);
     }
   }
 }
@@ -290,8 +344,20 @@ export function surfaceHeight(a: Pick<Area, "gradient" | "h">, p: Vec): number {
 }
 
 export function groundAtTerrain(t: Terrain, p: Vec): number {
+  // Only the highest area that sets the ground, and the raised areas above it,
+  // decide the height. Find them from the top, then add up from the bottom as
+  // painting order would, so the sum is the same to the last bit.
+  const areas = t.areas;
+  let i = areas.length - 1, raised = 0;
+  for (; i >= 0; i--) {
+    const a = areas[i];
+    if (!areaHas(a, p, t.grid)) continue;
+    if ((a.gradient && a.gradient.length >= 2) || !a.add) break;
+    raised++;
+  }
   let h = 0;
-  for (const a of t.areas) if (areaHas(a, p, t.grid)) h = a.gradient && a.gradient.length >= 2 ? surfaceHeight(a,p) : a.add ? h + a.h : a.h;
+  if (i >= 0) { const a = areas[i]; h = a.gradient && a.gradient.length >= 2 ? surfaceHeight(a, p) : a.h; }
+  if (raised) for (let k = i + 1; k < areas.length; k++) if (areas[k].add && !(areas[k].gradient && areas[k].gradient!.length >= 2) && areaHas(areas[k], p, t.grid)) h = h + areas[k].h;
   return h;
 }
 

@@ -291,3 +291,20 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
 - [x] **#181 Optional gradient occlusion** (added 2026-11-27, completed 2026-11-27). Advanced fog settings save gradient blocking per scene. Existing and new scenes default to off.
 - [x] **#182 Downhill sight and four-map motion audit** (added 2026-11-27, completed 2026-11-27). Checked 12 positions on each saved map in both modes, including the reported shrine hillside. Verified 1,536 sightlines against independent terrain and wall measurements.
 - [x] **#183 Terrain shadow readability at playing zoom** (added 2026-11-27, completed 2026-11-27). Follow the local height of sloping rims, soften the edge while preserving the visible rock face and compose sight within the map bitmap so zooming cannot allocate a map-sized GPU mask. Checked the player view at fit and playing zoom.
+- [x] **#184 Random bright line in the fog** (added 2026-11-27, completed 2026-11-27): a keyhole between two terrain corners showed a
+  second token a 0.4 ft strip 2,000 px away. Ground patches not joined to the viewer's own ground and under about a foot across
+  are dropped and fade back in by 2.5 ft (`openNarrowFaces`). Checked on the coast jungle view from the screenshot.
+- [x] **#185 Small dark streaks across open ground** (added 2026-11-27, completed 2026-11-27): hairline unpainted cracks between
+  painted regions (147 on the coast, all under 0.1 ft) counted as 0 ft fins of rock. Enclosed cracks under half a foot wide are
+  seams for sight, with one step between the ground on either side; downhill steps under a foot no longer cast shadows (blended
+  to exact by 2 ft, `softStep`). Painted strips stay as painted. Checked on the coast beach view from the screenshot.
+- [x] **#186 Fog of war lag** (added 2026-11-27, completed 2026-11-27): sight is solved in a worker (`sight.worker.ts`), traced only
+  as far as the screen and a margin, with a tiled height cache and tile skipping (bit-identical to fine marching). The fog, the dark,
+  the glow of lights and the dark-sight mask are drawn on the GPU (`FogView`, `LightLayer`) at screen resolution. Dragging a scout
+  on the coast went from p90 216 ms per frame to 7 ms (144 Hz); a dark scene from 6 fps to 142 fps.
+- [x] **#187 Fewer, whole terrain walls on Elevation test 2** (added 2026-11-27, completed 2026-11-27): contour pieces are joined
+  into runs (`wallChains`): the coast shows 296 walls instead of 3,963 pieces; a click selects a whole run, handles only at its
+  ends, one height label per run. Sight and movement still use the exact pieces.
+- [x] **#188 Drawing spell templates lags** (added 2026-11-27, completed 2026-11-27): ground height lookups use indexed strokes and
+  stop at the top layer that sets the ground (bit-identical on 200,000 points); spells remember ground per point while drawn;
+  placing a non-ground drawing no longer rebuilds the terrain contours. Sphere p99 125 to 14 ms, emanation 167 to 21 ms.

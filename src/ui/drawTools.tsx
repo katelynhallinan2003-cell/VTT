@@ -300,7 +300,10 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
   useClient(client);
   const meta = client.scene?.meta;
   const walls = client.wallsList();
+  // Counted the way the DM sees them: one terrain contour run is one wall.
+  const { runs, runOf } = client.wallRuns();
   const sel = [...d.wallSel].map((id) => client.wallGeometry().walls.get(id)).filter((w): w is NonNullable<typeof w> => !!w);
+  const selRuns = new Set(sel.map((w) => runOf.get(w.id) ?? w.id)).size;
   const ids = sel.map((w) => w.id);
   const doors = sel.filter((w) => w.k !== 'wall');
   const openWord = doors.length && doors.every((w) => w.k === 'window') ? 'window' : doors.every((w) => w.k === 'door') ? 'door' : 'door or window';
@@ -368,7 +371,7 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
       ) : (
         <div class="ht-card">
           <div class="row">
-            <strong>{sel.length ? (sel.length === 1 ? `Selected ${WALL_NAME[sel[0].k].toLowerCase()}` : `${sel.length} walls selected`) : 'Nothing selected'}</strong>
+            <strong>{sel.length ? (selRuns === 1 ? `Selected ${WALL_NAME[sel[0].k].toLowerCase()}` : `${selRuns} walls selected`) : 'Nothing selected'}</strong>
             <span class="grow" />
             {walls.length > sel.length && <button class="btn small" onClick={() => ui.set({ wallSel: new Set(walls.map((w) => w.id)) })}>Select all</button>}
           </div>
@@ -397,7 +400,7 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
                 </div>
               )}
               <div class="row wrap">
-                <button class="btn small danger" onClick={() => { void client.removeWalls(ids); ui.set({ wallSel: new Set() }); }}>Delete {sel.length > 1 ? 'walls' : WALL_NAME[sel[0].k].toLowerCase()}</button>
+                <button class="btn small danger" onClick={() => { void client.removeWalls(ids); ui.set({ wallSel: new Set() }); }}>Delete {selRuns > 1 ? 'walls' : WALL_NAME[sel[0].k].toLowerCase()}</button>
               </div>
             </>
           ) : <p class="hint">Select a wall to edit its corners or height.</p>}
@@ -421,7 +424,7 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
         )}
       </div>
       <div class="row wrap">
-        <span class="hint">{walls.length ? `${walls.length} wall${walls.length > 1 ? 's' : ''}` : 'No walls yet'}</span>
+        <span class="hint">{runs.size ? `${runs.size} wall${runs.size > 1 ? 's' : ''}` : 'No walls yet'}</span>
         <span class="grow" />
         {walls.length > 0 && <button class="btn small danger" onClick={async () => { await client.removeWalls(walls.map((w) => w.id)); ui.set({ wallSel: new Set() }); toast('Cleared all the walls (Ctrl+Z brings them back)', 'info', 2200); }}>Clear all walls</button>}
       </div>

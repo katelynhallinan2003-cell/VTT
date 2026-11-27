@@ -17,6 +17,8 @@ export interface WallDrawOpts {
   selected: Set<string>;
   /** the wall under the pointer in the Walls tool */
   hover: string | null;
+  /** everything highlighted with it (the whole run of a terrain contour) */
+  hoverIds?: Set<string>;
   /** show the end handles even for walls that are not selected (the Walls tool's edit mode) */
   handles: boolean;
 }
@@ -40,17 +42,20 @@ export class WallLayer {
   readonly container = new Container();
   private g = new Graphics();
   private key = '';
+  private selected: Set<string> | null = null;
 
   constructor() { this.container.addChild(this.g); }
 
-  clear() { this.g.clear(); this.key = ''; }
+  clear() { this.g.clear(); this.key = ''; this.selected = null; }
 
   sync(walls: Wall[], o: WallDrawOpts, rev: number | string, show: boolean) {
     this.container.visible = show;
     if (!show) return;
-    const key = `${rev}|${o.z.toFixed(3)}|${o.cell}|${o.showAll ? 1 : 0}|${o.handles ? 1 : 0}|${[...o.selected].sort().join(',')}|${o.hover ?? ''}`;
-    if (key === this.key) return;
+    // The selection is a new set whenever it changes, so its identity is enough.
+    const key = `${rev}|${o.z.toFixed(3)}|${o.cell}|${o.showAll ? 1 : 0}|${o.handles ? 1 : 0}|${o.hover ?? ''}`;
+    if (key === this.key && o.selected === this.selected) return;
     this.key = key;
+    this.selected = o.selected;
     this.build(walls, o);
   }
 
@@ -108,16 +113,21 @@ export class WallLayer {
     // selection and hover
     for (const s of all) {
       const sel = o.selected.has(s.id);
-      const hov = o.hover === s.id;
+      const hov = o.hoverIds ? o.hoverIds.has(s.id) : o.hover === s.id;
       if (!sel && !hov) continue;
       g.moveTo(s.a.x, s.a.y).lineTo(s.b.x, s.b.y);
       g.stroke({ width: w + 5 * px, color: sel ? SELECT : HOVER, alpha: sel ? 0.55 : 0.3, cap: 'round' });
     }
     if (o.handles) {
+      // A selected terrain run shows handles only where it ends, not at every corner of its contour.
+      const ends = new Map<string, number>();
+      const key = (p: Vec) => `${Math.round(p.x * 50)},${Math.round(p.y * 50)}`;
+      for (const s of all) if (s.face && o.selected.has(s.id)) for (const p of [s.a, s.b]) ends.set(key(p), (ends.get(key(p)) ?? 0) + 1);
       for (const s of all) {
         if (s.face && !o.selected.has(s.id)) continue;
         const sel = o.selected.has(s.id);
         for (const p of [s.a, s.b]) {
+          if (s.face && ends.get(key(p))! > 1) continue;
           g.circle(p.x, p.y, (sel ? 5 : 3.5) * px);
           g.fill({ color: sel ? 0xffffff : 0x1b1f27, alpha: sel ? 1 : 0.85 });
           g.stroke({ width: 1.5 * px, color: sel ? SELECT : 0xffffff, alpha: 0.95 });

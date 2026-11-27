@@ -6,7 +6,7 @@
 // stops what is on one side of it and lets what is on the other side through) and can have a HEIGHT (what is higher than the top of it
 // sees and moves over it). All geometry here is plain numbers, so it can be tested without a browser.
 
-import type { GridSettings, Vec } from '../types';
+import type { GridSettings, Rect, Vec } from '../types';
 import { hexEdgeMid, isHex } from './hex';
 import { snapToCorner } from './geometry';
 import { nearbySurface, terrainSight, type SightSegments } from './terrainSight';
@@ -40,6 +40,8 @@ export interface Seg {
   terrainPxPerFt?: number;
   /** Live terrain only: height of a sloping rim where the sightline actually crosses. */
   sightCrest?: (p:Vec)=>number | undefined;
+  /** Live terrain only: height of the lower side of that rim at the same point. */
+  sightLow?: (p:Vec)=>number | undefined;
   low?: number;
   climbable?: boolean;
   /** Height above the local ground for an authored wall. Cliffs carry only an absolute top. */
@@ -199,6 +201,18 @@ export interface Visibility {
   faces: Vec[][];
   /** nothing was in the way: it is a plain circle */
   free: boolean;
+  /** The same ground as triangles (x,y pairs), unsimplified, for drawing on the GPU. */
+  fill?: Float32Array;
+}
+
+/** A fan of triangles from `o` over a ring of points around it. */
+export function fanTriangles(o: Vec, pts: Vec[]): Float32Array {
+  const n = pts.length, out = new Float32Array(n * 6);
+  for (let i = 0, k = 0; i < n; i++) {
+    const a = pts[i], b = pts[(i + 1) % n];
+    out[k++] = o.x; out[k++] = o.y; out[k++] = a.x; out[k++] = a.y; out[k++] = b.x; out[k++] = b.y;
+  }
+  return out;
 }
 
 /** Close angular gaps in the combined shadow at each distance. Neighbours still in
@@ -224,9 +238,11 @@ export function closeNarrowShadows(angles: number[], reach: number[]): void {
   }
 }
 
-function nearSightEdges(o: Vec, r: number, segs: Seg[], alt?: number) {
+function nearSightEdges(o: Vec, r: number, segs: Seg[], alt?: number, box?: Rect) {
   const near: { seg: Seg; inset: number; groundAfter?: number }[] = [];
   for (const seg of segs) {
+    if (box && (Math.max(seg.a.x, seg.b.x) < box.x || Math.max(seg.a.y, seg.b.y) < box.y ||
+      Math.min(seg.a.x, seg.b.x) > box.x + box.w || Math.min(seg.a.y, seg.b.y) > box.y + box.h)) continue;
     if (distToSeg(o, seg) >= r) continue;
     const side = seg.one ? sideOf(seg, o) : 0;
     const back = side !== 0 && side !== seg.one;
@@ -248,12 +264,21 @@ function nearSightEdges(o: Vec, r: number, segs: Seg[], alt?: number) {
  * What a viewer at `o` can see out to distance `r`: a ring around them, cut back wherever a wall gets in the way.
  * Rays are cast at both sides of every wall end in range (so the outline hugs corners exactly) and at regular steps (so open ground stays round).
  */
-export function visibilityPolygon(o: Vec, r: number, segs: SightSegments, steps = 64, alt?: number): Visibility {
-  const near = nearSightEdges(o,r,segs,alt);
+export function visibilityPolygon(o: Vec, r: number, segs: SightSegments, steps = 64, alt?: number, clip?: Rect): Visibility {
+  // Only what lies inside `clip` is wanted (the screen, with a margin). Every
+  // sightline from the viewer to that ground stays inside the box around both.
+  let box: Rect | undefined;
+  if (clip) {
+    const x0 = Math.min(clip.x, o.x), y0 = Math.min(clip.y, o.y);
+    const x1 = Math.max(clip.x + clip.w, o.x), y1 = Math.max(clip.y + clip.h, o.y);
+    box = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    if (o.x - r >= x0 && o.y - r >= y0 && o.x + r <= x1 && o.y + r <= y1) box = undefined;
+  }
+  const near = nearSightEdges(o,r,segs,alt,box);
   const ring = (n: number): Vec[] => Array.from({ length: n }, (_, i) => ({ x: o.x + Math.cos((i / n) * Math.PI * 2) * r, y: o.y + Math.sin((i / n) * Math.PI * 2) * r }));
-  const surface=nearbySurface(segs.surface,o,r);
+  const surface=nearbySurface(segs.surface,o,r,box);
   if (surface?.gradientVision || near.some(n => surface || n.seg.terrainPxPerFt !== undefined)) {
-    return terrainSight(o,r,near,alt ?? 0,steps,surface);
+    return terrainSight(o,r,near,alt ?? 0,steps,surface,box);
   }
   if (!near.length) return { poly: ring(steps), faces: [], free: true };
   const angles: number[] = [];
@@ -274,7 +299,8 @@ export function visibilityPolygon(o: Vec, r: number, segs: SightSegments, steps 
   });
   closeNarrowShadows(bearings,reach);
   if (reach.every(d => d === r)) return {poly:ring(steps),faces:[],free:true};
-  return {poly:directions.map((v,i) => ({x:o.x+v.x*reach[i],y:o.y+v.y*reach[i]})), faces:[], free:false};
+  const poly = directions.map((v,i) => ({x:o.x+v.x*reach[i],y:o.y+v.y*reach[i]}));
+  return {poly, faces:[], free:false, fill:fanTriangles(o,poly)};
 }
 
 /** Drop points that do not change the outline by more than `tol` pixels (Douglas-Peucker, around the closed shape). */

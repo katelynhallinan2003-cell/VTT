@@ -99,22 +99,10 @@ export class FogMask {
     this.ctx = this.canvas.getContext('2d', { willReadFrequently: false })!;
   }
 
-  private sightCanvas: HTMLCanvasElement | null = null;
-  private sightRevision = 0;
   hasCover = false;
-
-  setSight(canvas:HTMLCanvasElement | null, revision:number):boolean {
-    if (this.sightCanvas===canvas && this.sightRevision===revision) return false;
-    this.sightCanvas=canvas;
-    this.sightRevision=revision;
-    this.compose();
-    return true;
-  }
 
   clear() {
     this.key = '';
-    this.sightCanvas=null;
-    this.sightRevision=0;
     this.hasCover = false;
   }
 
@@ -189,7 +177,6 @@ export class FogMask {
       ctx.drawImage(this.seenCanvas, 0, 0);
       ctx.globalAlpha = 1;
     }
-    if (this.sightCanvas) ctx.drawImage(this.sightCanvas,0,0);
     ctx.globalCompositeOperation = 'source-over';
   }
 

@@ -1,5 +1,5 @@
 import { initialBoundaryControls } from '../core/gradientBoundaries';
-import { brushWall, resolveWalls } from '../core/wallBrush';
+import { brushWall, resolveWalls, wallChains } from '../core/wallBrush';
 import { reuseStrokeGeometry, standingSurface } from '../core/terrain';
 import type { Backend, Unsub } from '../backend/types';
 import { SERVER_TS } from '../backend/types';
@@ -626,7 +626,7 @@ export class TableClient {
   }
 
   /** Every wall, door and window in the open scene. */
-  private contourCache?: {scene: SceneState | null; rev:number; grid:string; edges:TerrainEdge[]; joins:Seg[]};
+  private contourCache?: {scene: SceneState | null; rev:number; grid:string; sig:string; edges:TerrainEdge[]; joins:Seg[]};
   private wallCache?: {edges:TerrainEdge[]; rev:number; plan:ReturnType<typeof resolveWalls>};
   wallGeometry() {
     const scene=this.scene, grid=this.grid;
@@ -634,9 +634,15 @@ export class TableClient {
     const key=[grid.cell,grid.ft,grid.ox,grid.oy,grid.shape,JSON.stringify(maps)].join('|');
     let c=this.contourCache;
     if (!c || c.scene!==scene || c.rev!==(scene?.drawRev ?? -1) || c.grid!==key) {
-      const joins:Seg[]=[];
-      const edges=scene ? terrainEdges(zonesOf(scene.draws.values(),grid),joins,maps) : [];
-      this.contourCache=c={scene,rev:scene?.drawRev ?? -1,grid:key,edges,joins};
+      // A drawing that is not ground (a spell, a note) leaves the contours as they were.
+      const zones=scene ? zonesOf(scene.draws.values(),grid) : null;
+      if (c && c.scene===scene && c.grid===key && zones && zones.sig===c.sig) c={...c,rev:scene!.drawRev};
+      else {
+        const joins:Seg[]=[];
+        const edges=zones ? terrainEdges(zones,joins,maps) : [];
+        c={scene,rev:scene?.drawRev ?? -1,grid:key,sig:zones?.sig ?? '',edges,joins};
+      }
+      this.contourCache=c;
     }
     const rev=scene?.wallRev ?? -1;
     if (this.wallCache?.edges!==c.edges || this.wallCache.rev!==rev) {
@@ -645,6 +651,29 @@ export class TableClient {
     return {...this.wallCache.plan,levelJoins:c.joins};
   }
   wallsList(): Wall[] { return [...this.wallGeometry().walls.values()]; }
+
+  private runCache?: { walls: Map<string, Wall>; runs: Map<string, string[]>; runOf: Map<string, string> };
+  /**
+   * The walls as the DM sees them: terrain contours joined into runs (one cliff edge is one wall, not a piece per
+   * corner of its outline), authored walls one each. Keyed by the first piece's id.
+   */
+  wallRuns(): { runs: Map<string, string[]>; runOf: Map<string, string> } {
+    const walls = this.wallGeometry().walls;
+    if (this.runCache?.walls !== walls) {
+      const runs = wallChains(walls.values());
+      const runOf = new Map<string, string>();
+      for (const [head, ids] of runs) for (const id of ids) runOf.set(id, head);
+      this.runCache = { walls, runs, runOf };
+    }
+    return this.runCache;
+  }
+  /** Every piece of the runs these walls belong to. */
+  wholeRuns(ids: Iterable<string>): string[] {
+    const { runs, runOf } = this.wallRuns();
+    const out = new Set<string>();
+    for (const id of ids) for (const x of runs.get(runOf.get(id) ?? id) ?? [id]) out.add(x);
+    return [...out];
+  }
 
   private coverCache: {meta: SceneState['meta']; ops: Map<string,FogOp>; rev: number; cover: boolean} | null = null;
 

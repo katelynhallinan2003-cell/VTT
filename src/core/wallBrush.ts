@@ -89,3 +89,52 @@ export function resolveWalls(edges: TerrainEdge[], stored: Iterable<Wall>) {
   }
   return {walls,terrain,openings};
 }
+
+/**
+ * Terrain walls come from the painted contours in short pieces (a new piece at every corner of the outline and every
+ * half square along a slope). Join pieces that meet end to end into runs, broken where three or more meet or the
+ * kind of step changes direction (a run is one cliff edge as the DM sees it). Returns each run's piece ids in order,
+ * keyed by the id of its first piece; authored walls are runs of one.
+ */
+export function wallChains(walls: Iterable<Wall>): Map<string, string[]> {
+  const list = [...walls];
+  const key = (p: Vec) => `${Math.round(p.x * 64)},${Math.round(p.y * 64)}`;
+  const at = new Map<string, Wall[]>();
+  for (const w of list) {
+    if (!w.face) continue;
+    for (const p of [w.a, w.b]) { const k = key(p); const l = at.get(k); if (l) l.push(w); else at.set(k, [w]); }
+  }
+  const joins = (w: Wall, p: Vec): Wall | undefined => {
+    const here = at.get(key(p));
+    if (!here || here.length !== 2) return undefined;
+    const other = here[0] === w ? here[1] : here[0];
+    // A run keeps one side up: the higher ground stays on the same side as it goes on.
+    const sameWay = (other.a === p || key(other.a) === key(p)) === (w.b === p || key(w.b) === key(p));
+    return sameWay === (other.face!.one === w.face!.one) ? other : undefined;
+  };
+  const out = new Map<string, string[]>();
+  const done = new Set<Wall>();
+  for (const w of list) {
+    if (done.has(w)) continue;
+    if (!w.face) { out.set(w.id, [w.id]); done.add(w); continue; }
+    // Walk back to the start of the run (or round a closed loop once), then forward.
+    let first = w, end: Vec = w.a;
+    for (let guard = 0; guard < list.length; guard++) {
+      const prev = joins(first, end);
+      if (!prev || prev === w || done.has(prev)) break;
+      end = key(prev.a) === key(end) ? prev.b : prev.a;
+      first = prev;
+    }
+    const run: string[] = [];
+    let cur: Wall | undefined = first, from = end;
+    while (cur && !done.has(cur)) {
+      done.add(cur);
+      run.push(cur.id);
+      const next: Vec = key(cur.a) === key(from) ? cur.b : cur.a;
+      cur = joins(cur, next);
+      from = next;
+    }
+    out.set(run[0], run);
+  }
+  return out;
+}

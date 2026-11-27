@@ -5,7 +5,7 @@ import type { GridSettings, Rect, Vec } from '../types';
 import { snapToCellCenter } from './geometry';
 import { cellPoly } from './cells';
 import { areaAt, newAreaId, groundAtTerrain, surfaceHeight, type Area, type Terrain, type TStroke } from './terrain';
-import type { SightRegion, SightSegments } from './terrainSight';
+import { HeightField, type SightRegion, type SightSegments } from './terrainSight';
 import { simplifyPoly, type Seg } from './walls';
 
 export interface TerrainEdge extends Seg { low: number; top: number; one: 1 | -1 }
@@ -168,42 +168,53 @@ export function withSightTerrain(segs: Seg[], t: Terrain, openings: Seg[], gradi
   const scale = t.grid.cell/t.grid.ft;
   if (!regions) {
     regions = [];
+    const all: Polygon[] = [];
     const plan = heightRegions(t);
     for (const [key,shape] of plan.regions) {
       const surface = plan.surfaces.get(key);
       let height: SightRegion['height'] = key;
+      let field: HeightField | undefined;
       if (surface) {
         const {area,offset} = surface;
         // At most 512 steps across a region, even on very large maps.
         const step = Math.max(.5*scale,area.b.w/512,area.b.h/512);
-        const stride = Math.ceil(area.b.w/step)+3;
-        const samples = new Map<number,number>();
-        const sample = (ix:number,iy:number) => {
-          const k = iy*stride+ix;
-          let h = samples.get(k);
-          if (h === undefined) {
-            h = surfaceHeight(area,{x:area.b.x+ix*step,y:area.b.y+iy*step})+offset;
-            samples.set(k,h);
-          }
-          return h;
-        };
-        height = (x,y) => {
-          const u=(x-area.b.x)/step, v=(y-area.b.y)/step;
-          const ix=Math.floor(u), iy=Math.floor(v), fx=u-ix, fy=v-iy;
-          return (1-fy)*((1-fx)*sample(ix,iy)+fx*sample(ix+1,iy))
-            + fy*((1-fx)*sample(ix,iy+1)+fx*sample(ix+1,iy+1));
-        };
+        const nx = Math.ceil(area.b.w/step)+3, ny = Math.ceil(area.b.h/step)+3;
+        field = new HeightField(area.b.x,area.b.y,step,nx,ny,(x,y)=>surfaceHeight(area,{x,y})+offset);
+        const f = field;
+        height = (x,y) => f.at(x,y);
       }
       for (const poly of shape) {
         const rings=poly.map(r=>r.map(([x,y])=>({x,y})));
         const corners=rings.flatMap(ring=>simplifyPoly(ring.slice(0,-1),scale*.2));
-        regions.push({height,rings,corners,bounds:boundsOf(rings[0])});
+        regions.push({height,field,rings,corners,bounds:boundsOf(rings[0])});
       }
+      all.push(...shape);
+    }
+    // Unpainted cracks enclosed by painted ground are holes in the union of every region.
+    if (all.length) for (const poly of clip.union(all)) for (const hole of poly.slice(1)) {
+      if (!thin([hole],scale)) continue;
+      const rings=[hole.map(([x,y])=>({x,y}))];
+      regions.push({height:0,rings,corners:simplifyPoly(rings[0].slice(0,-1),scale*.2),bounds:boundsOf(rings[0]),sliver:true});
     }
     sightRegions.set(t,regions);
   }
   const terraced=regions.every(region=>typeof region.height==='number');
   return Object.assign(segs,{surface:{regions,scale,openings,gradientVision,terraced}});
+}
+
+/** Less than half a foot wide on average (twice the area over the perimeter). */
+function thin(poly: Polygon, scale: number): boolean {
+  let area = 0, length = 0;
+  poly.forEach((ring, k) => {
+    let a = 0;
+    for (let i = 0; i < ring.length; i++) {
+      const [x, y] = ring[i], [xx, yy] = ring[(i + 1) % ring.length];
+      a += x * yy - xx * y;
+      length += Math.hypot(xx - x, yy - y);
+    }
+    area += (k ? -1 : 1) * Math.abs(a) / 2;
+  });
+  return length > 0 && 2 * area / length < scale * .5;
 }
 
 // Cache by paint geometry so dragging a height control does not repeat polygon clipping.
@@ -383,11 +394,18 @@ export function terrainEdges(t: Terrain, levelJoins?: Seg[], maps:Rect[]=[]): Te
         return samples[index]=[ls ? surfaceHeight(ls.area,p)+ls.offset : leftHeight,
           rs ? surfaceHeight(rs.area,p)+rs.offset : rightHeight];
       };
-      const slopeCrest=ls || rs ? (p:Vec)=>{
+      const sides=(p:Vec):[number,number]=>{
         const u=Math.max(0,Math.min(count,(ux*p.x+uy*p.y-start)*count/len));
         const i=Math.min(count-1,Math.floor(u)), f=u-i, a=sample(i), b=sample(i+1);
-        const lh=a[0]+(b[0]-a[0])*f, rh=a[1]+(b[1]-a[1])*f;
+        return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f];
+      };
+      const slopeCrest=ls || rs ? (p:Vec)=>{
+        const [lh,rh]=sides(p);
         return Math.abs(lh-rh)>.05 ? Math.max(lh,rh) : undefined;
+      } : undefined;
+      const slopeLow=ls || rs ? (p:Vec)=>{
+        const [lh,rh]=sides(p);
+        return Math.min(lh,rh);
       } : undefined;
       const pieces = ls || rs ? Math.max(1,Math.ceil(len / (t.grid.cell / 2))) : 1;
       for (let j=0; j<pieces; j++) {
@@ -399,7 +417,7 @@ export function terrainEdges(t: Terrain, levelJoins?: Seg[], maps:Rect[]=[]): Te
           continue;
         }
         out.push({a:at(start+len*j/pieces), b:at(start+len*(j+1)/pieces),
-          ...(slopeCrest ? {sightCrest:slopeCrest} : {}),
+          ...(slopeCrest ? {sightCrest:slopeCrest,sightLow:slopeLow} : {}),
           low:Math.min(lh,rh), top:Math.max(lh,rh), one:lh<rh ? 1 : -1, terrainPxPerFt:t.grid.cell/t.grid.ft});
       }
     }

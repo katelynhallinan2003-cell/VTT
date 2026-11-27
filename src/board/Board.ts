@@ -1,5 +1,8 @@
 import { spellAxis, spellVolume, snapSpellFeet, mapPoint, onMap, type Spell } from '../core/spellVolume';
-import { Application, Container, FillPattern, Graphics, Matrix, Sprite, Text, Texture } from 'pixi.js';
+import { Application, Container, FillPattern, Graphics, Matrix, Sprite, Text, Texture, type Renderer } from 'pixi.js';
+import { FogView } from './FogView';
+import { SightSolver, type SightResult } from './SightSolver';
+import { isGroundDrawing, type SightSceneData } from '../core/sightScene';
 import {
   clamp, cornerTotals, distanceFt, fitCamera, pathFt, gridFromRect, mapFootprints, mapRect, normRect, sceneRect, pointInToken, rectContains, snapDragCenter, snapTokenCenter, snapToCellCenter, snapToCorner, zoomAt,
 } from '../core/geometry';
@@ -190,14 +193,17 @@ export class Board {
 
   private views = new Map<string, TokenView>();
   private fogMask = new FogMask();
-  private fogSprite: Sprite | null = null;
-  private fogTexSize = '';
+  private fogView: FogView | null = null;
+  /** The fog as drawn (browser tests look at whether it is shown). */
+  get fogSprite() { return this.fogView?.mesh ?? null; }
   /** circles around tokens that can see, cut out of the fog */
-  private visionG = new Graphics();
-  private brightVision: {segs: Seg[]; key: string; contains: (p: Vec) => boolean} | null = null;
-  private lightLayer = new LightLayer();
+  /** The sight now cut out of the fog: for which scene and viewers, how far it was traced, and a test for a spot inside it. */
+  private brightVision: {scene: string; key: string; clip?: Rect; contains: (p: Vec) => boolean} | null = null;
+  /** The sight last asked of the solver (it may still be working on it). */
+  private sightAsked: {scene: string; key: string; clip?: Rect} | null = null;
+  private sightSolver = new SightSolver((r) => this.onSight(r), () => this.wallSegs().sight);
+  private lightLayer = new LightLayer(() => this.app.renderer as Renderer);
   /** which kind of hole-cutter the fog has now: none, the circles and shapes of what tokens see, or the lit shape used in the dark */
-  private fogMaskKind: '' | 'g' | 's' = '';
   private seenInitRev = -1;
 
   private drag: Drag | null = null;
@@ -324,6 +330,8 @@ export class Board {
     this.client.pictures.liveOriginal = undefined;
     setTextureFailHandler(null);
     cancelAnimationFrame(this.raf);
+    this.sightSolver.destroy();
+    this.fogView?.destroy();
     this.resizeObs?.disconnect();
     for (const u of this.unsubs) u();
     for (const f of this.cleanupInput) f();
@@ -624,7 +632,8 @@ export class Board {
     this.day = EMPTY_TERRAIN(this.client.grid);
     this.dim = EMPTY_TERRAIN(this.client.grid);
     this.seenGridKey = '';
-    if (this.fogSprite) this.fogSprite.visible = false;
+    if (this.fogView) { this.fogView.mesh.visible = false; this.fogView.clearSight(); }
+    this.brightVision = this.sightAsked = this.sightResult = null;
     this.fitPending = true;
     this.dirty = true;
   }
@@ -1206,11 +1215,36 @@ export class Board {
     return {start:Math.round(axis.start),end:Math.round(axis.end)};
   }
 
+  private groundMemo: { zones: Terrain; at: (p: Vec) => number } | null = null;
   private wallsForSpells() {
     // a spell also depends on how high the ground is where it starts (a wall lower than that does not stop it)
     const {sight,openings}=this.wallSegs();
     const steppedGround=!openings.length && !this.zones.areas.some(a=>(a.gradient?.length ?? 0)>=2);
-    return { segs:sight, steppedGround, maps:this.terrainMaps, rev: `${this.client.scene?.wallRev ?? 0}:${this.zones.sig}:${JSON.stringify(this.terrainMaps)}`, ground: this.zones.areas.length ? (p:Vec) => groundAt(this.zones, p) : undefined };
+    return { segs:sight, steppedGround, maps:this.terrainMaps, rev: `${this.client.scene?.wallRev ?? 0}:${this.zones.sig}:${JSON.stringify(this.terrainMaps)}`, ground: this.zones.areas.length ? this.spellGround() : undefined };
+  }
+
+  /**
+   * Ground heights for spells, remembered per exact point until the ground changes. A spell being dragged samples
+   * the same lattice from the same origin on every frame.
+   */
+  private spellGround(): (p: Vec) => number {
+    const zones = this.zones;
+    if (this.groundMemo?.zones !== zones) {
+      const memo = new Map<number, Map<number, number>>();
+      let size = 0;
+      const at = (p: Vec) => {
+        let row = memo.get(p.x);
+        if (!row) {
+          if (size > 250000) { memo.clear(); size = 0; }
+          memo.set(p.x, row = new Map());
+        }
+        let h = row.get(p.y);
+        if (h === undefined) { h = groundAt(zones, p); row.set(p.y, h); size++; }
+        return h;
+      };
+      this.groundMemo = { zones, at };
+    }
+    return this.groundMemo.at;
   }
 
   private onWallsChanged() {
@@ -1220,6 +1254,31 @@ export class Board {
     if (sel.size && [...sel].some((id) => !this.client.wallGeometry().walls.has(id))) this.ui.set({ wallSel: new Set([...sel].filter((id) => this.client.wallGeometry().walls.has(id))) });
     this.refreshDraws(); // spells stop at walls
     this.dirty = true;
+  }
+
+  private hoverRunCache: { id: string; runs: unknown; ids: Set<string> } | null = null;
+  private hoverRun(id: string): Set<string> {
+    const runs = this.client.wallRuns().runs;
+    if (this.hoverRunCache?.id !== id || this.hoverRunCache.runs !== runs) this.hoverRunCache = { id, runs, ids: new Set(this.client.wholeRuns([id])) };
+    return this.hoverRunCache.ids;
+  }
+
+  /** Which end of a terrain piece ends its run ('both' for a run of one; null in the middle of a run). */
+  private runEnd(w: Wall): 'a' | 'b' | 'both' | null {
+    const { runs, runOf } = this.client.wallRuns();
+    const ids = runs.get(runOf.get(w.id) ?? w.id);
+    if (!ids || ids.length === 1) return 'both';
+    const walls = this.client.wallGeometry().walls;
+    const i = ids.indexOf(w.id);
+    if (i !== 0 && i !== ids.length - 1) return null;
+    const other = walls.get(ids[i === 0 ? 1 : ids.length - 2]);
+    if (!other) return null;
+    const near = (p: Vec, q: Vec) => Math.abs(p.x - q.x) < .02 && Math.abs(p.y - q.y) < .02;
+    const shared = near(w.a, other.a) || near(w.a, other.b) ? 'a' : 'b';
+    // A closed loop has no ends.
+    const firstW = walls.get(ids[0])!, lastW = walls.get(ids[ids.length - 1])!;
+    if ([firstW.a, firstW.b].some((p) => near(p, lastW.a) || near(p, lastW.b))) return null;
+    return shared === 'a' ? 'b' : 'a';
   }
 
   private wallsShown(): Wall[] {
@@ -1238,7 +1297,8 @@ export class Board {
     const edit = editing && u.wallMode === 'edit';
     this.wallLayer.sync(this.wallsShown(), {
       z: this.cam.zoom, cell: this.client.grid.cell, showAll: dm && !u.dmPreview,
-      selected: editing ? u.wallSel : NO_IDS, hover: edit ? this.wallHover : null, handles: edit,
+      selected: editing ? u.wallSel : NO_IDS, hover: edit && this.wallHover ? this.wallHover : null, handles: edit,
+      hoverIds: edit && this.wallHover ? this.hoverRun(this.wallHover) : undefined,
     }, `${scene.wallRev}:${this.wallPrevSeq}:${this.zones.sig}`, editing || u.showWalls);
   }
 
@@ -1433,8 +1493,10 @@ export class Board {
     const u = this.ui.data;
     const z = this.cam.zoom;
     const list = this.client.wallsList();
-    const en = endNear(list, w, 9 / z);
-    if (en) {
+    // Terrain runs can be bent only at their two ends, and only once picked.
+    const grab = list.filter((x) => !x.face || (u.wallSel.has(x.id) && this.runEnd(x)));
+    const en = endNear(grab, w, 9 / z);
+    if (en && (!en.wall.face || this.runEnd(en.wall) === en.end || this.runEnd(en.wall) === 'both')) {
       // every wall end on that spot comes along, so a corner stays closed
       const at = en.wall[en.end];
       const moves: { id: string; end: 'a' | 'b' }[] = [];
@@ -1446,12 +1508,13 @@ export class Board {
     const hit = wallNear(list, w, 8 / z);
     if (hit) {
       let sel = new Set(u.wallSel);
+      const run = this.client.wholeRuns([hit.wall.id]);
       if (e.shiftKey) {
-        if (sel.has(hit.wall.id)) sel.delete(hit.wall.id); else sel.add(hit.wall.id);
+        if (sel.has(hit.wall.id)) for (const id of run) sel.delete(id); else for (const id of run) sel.add(id);
         this.ui.set({ wallSel: sel });
         return;
       }
-      if (!sel.has(hit.wall.id)) sel = new Set([hit.wall.id]);
+      if (!sel.has(hit.wall.id)) sel = new Set(run);
       this.ui.set({ wallSel: sel });
       const first = this.client.wallGeometry().walls.get([...sel][0]);
       this.drag = { kind: 'wallmove', ids: [...sel], start: w, anchor: first ? { ...first.a } : w, dx: 0, dy: 0, moved: false };
@@ -1611,9 +1674,12 @@ export class Board {
     }
     if (u.wallMode === 'edit') {
       // how tall the selected (or hovered) walls are
-      const ids = new Set([...u.wallSel, ...(this.wallHover ? [this.wallHover] : [])]);
-      for (const id of ids) {
-        const wl = this.client.wallGeometry().walls.get(id);
+      // one label per run, on its middle piece
+      const { runs, runOf } = this.client.wallRuns();
+      const heads = new Set([...u.wallSel, ...(this.wallHover ? [this.wallHover] : [])].map((id) => runOf.get(id) ?? id));
+      for (const head of heads) {
+        const ids = runs.get(head) ?? [head];
+        const wl = this.client.wallGeometry().walls.get(ids[ids.length >> 1]);
         if (wl && wl.h > 0 && li < 12) { const m = wallMid(wl); this.plotLabel(li++, `${Math.round(wl.h)} ft tall`, m.x, m.y - 10 / z, WALL_COLOR[wl.k]); }
       }
     }
@@ -1635,7 +1701,7 @@ export class Board {
   }
 
   /** What shines and who sees, for a scene that is not in full daylight (null in daylight). Positions are where the tokens are drawn now. */
-  private lighting(): { ambient: Ambient; lights: LightSrc[]; viewers: Viewer[]; painted: PaintedLight | null; key: string } | null {
+  private lighting(): { ambient: Ambient; lights: LightSrc[]; viewers: Viewer[]; painted: PaintedLight | null; key: string; paintedKey: string } | null {
     const scene = this.client.scene;
     const meta = scene?.meta;
     if (!scene || !meta) return null;
@@ -1665,15 +1731,7 @@ export class Board {
     const r = (n: number) => Math.round(n * 2) / 2;
     const painted = this.paintedLight();
     const key = `${scene.id}|${ambient}|${scene.wallRev}:${this.zones.sig}:${meta.fog.gradientVision}|${painted ? `${painted.day?.sig ?? ''}~${painted.dim?.sig ?? ''}~${Math.round(painted.edge)}` : ''}|${lights.map((l) => `${r(l.x)},${r(l.y)},${r(l.b)},${r(l.r)},${l.c},${l.alt ?? ''}`).join(';')}|${viewers.map((w) => `${r(w.x)},${r(w.y)},${r(w.r)},${r(w.dv)},${r(w.touch)},${w.alt ?? ''}`).join(';')}`;
-    return { ambient, lights, viewers, painted, key };
-  }
-
-  /** The dark wash and the glow of the lights over the map. */
-  private drawDark(L: ReturnType<Board['lighting']>) {
-    const meta = this.client.scene?.meta;
-    if (!L || !meta) { this.lightLayer.hide(); return; }
-    const rect = sceneRect(meta) ?? { x: 0, y: 0, w: 2000, h: 1500 };
-    this.lightLayer.paint({ ambient: L.ambient, rect, lights: L.lights, viewers: L.viewers, segs: this.wallSegs().sight, painted: L.painted, dm: this.client.isDM && !this.ui.data.dmPreview, key: L.key });
+    return { ambient, lights, viewers, painted, key, paintedKey: painted ? `${painted.day?.sig ?? ''}~${painted.dim?.sig ?? ''}~${Math.round(painted.edge)}` : '' };
   }
 
   /** Tokens standing on remembered (grey) ground that nobody can see right now: out of sight for the players until someone looks again. */
@@ -1688,7 +1746,7 @@ export class Board {
     const meta = this.client.scene?.meta;
     const want = new Set<string>();
     const dmView = this.client.isDM && !this.ui.data.dmPreview;
-    if (!dmView && test && meta?.fog.enabled && meta.fog.vision && meta.fog.explore && meta.fog.dim && this.fogSprite?.visible) {
+    if (!dmView && test && meta?.fog.enabled && meta.fog.vision && meta.fog.explore && meta.fog.dim && this.fogView?.mesh.visible) {
       for (const v of this.views.values()) {
         const t = v.token;
         // the party always sees itself, and a light stays where it was seen
@@ -1704,83 +1762,169 @@ export class Board {
     this.invalidate();
   }
 
-  private useFogMask(sprite:Sprite, kind:'' | 'g' | 's') {
-    // Compose terrain sight into the bounded map bitmap. A sprite mask would
-    // allocate a full zoomed-map framebuffer even for the part off screen.
-    const light=this.lightLayer;
-    if (this.fogMask.setSight(kind==='s' ? light.sightCanvas : null,kind==='s' ? light.sightRevision : 0))
-      sprite.texture.source.update();
-    if (this.fogMaskKind===kind) return;
-    if (this.fogMaskKind==='g') sprite.setMask({mask:null});
-    if (kind==='g') sprite.setMask({mask:this.visionG,inverse:true});
-    this.fogMaskKind=kind;
-  }
-
-  /** Cut the fog open where the tokens can see; returns a test for "can this spot be seen right now" (null when there is no fog). */
-  private drawVisionShape(): ((p: Vec) => boolean) | null {
-    const L = this.lighting();
-    this.drawDark(L);
-    const sprite = this.fogSprite;
-    if (!sprite?.visible) return null;
-    const meta = this.client.scene?.meta;
+  /** How far the fog's soft edge reaches, in map pixels. */
+  private sightFeather(): number {
     // Terrain silhouettes spread over the artwork; doors and drawn walls
     // keep a tighter contact edge on maps without painted heights.
     const terrainFeather=this.zones.areas.length ? .85 : .25;
-    const feather=Math.max(.75,Math.min(9,terrainFeather*this.client.grid.cell/this.client.grid.ft*this.fogMask.scale));
+    const s=this.fogMask.scale;
+    return Math.max(.75,Math.min(9,terrainFeather*this.client.grid.cell/this.client.grid.ft*s))/s;
+  }
+
+  /**
+   * Cut the fog open where the tokens can see, and lay the dark and the glow of the lights over the map; returns a test for
+   * "can this spot be seen right now" (null when there is no fog). The shapes come from the sight worker, traced only as
+   * far as the screen (and a margin) needs; until it answers, the last answer stays up.
+   */
+  private drawVisionShape(): ((p: Vec) => boolean) | null {
+    const L = this.lighting();
+    const scene = this.client.scene, meta = scene?.meta;
+    const view = this.fogView;
+    const fog = !!view?.mesh.visible;
+    if (!L || !meta) this.lightLayer.hide();
+    if (!meta || (!fog && !L)) { this.brightVision = this.sightAsked = this.sightResult = null; return null; }
+    const feather = this.sightFeather();
     // in the dark, a token only sees what is lit (or what its darkvision reaches): the fog is cut open in that shape
-    if (L && L.ambient === 'dark' && sprite.visible && meta?.fog.enabled && meta.fog.vision) {
-      this.brightVision = null;
-      this.visionG.clear();
-      if (!L.viewers.length) {
-        this.useFogMask(sprite,'');
-        return () => false;
-      }
-      const m = this.fogMask;
-      this.lightLayer.paintSeen({ origin: m.origin, scale: m.scale, w: m.canvas.width, h: m.canvas.height }, L.lights, L.viewers, this.wallSegs().sight, L.painted, L.key, feather);
-      this.useFogMask(sprite,'s');
-      return (p) => this.lightLayer.seenAt(p);
+    const dark = !!L && L.ambient === 'dark' && fog && meta.fog.enabled && meta.fog.vision;
+    if (L) this.lightLayer.setPainted(L.painted, L.ambient, sceneRect(meta) ?? { x: 0, y: 0, w: 2000, h: 1500 }, this.wallSegs().sight, `${L.paintedKey}|${scene!.wallRev}|${this.zones.sig}`);
+    const circles = fog && !dark ? this.visionNow() : [];
+    const viewers: Viewer[] = L?.ambient === 'dark' ? L.viewers : [];
+    const lights: LightSrc[] = L ? L.lights : [];
+    if (!L && !circles.length) {
+      this.brightVision = this.sightAsked = this.sightResult = null;
+      view?.clearSight();
+      return () => false;
     }
-    const g = this.visionG;
-    const circles = this.visionNow();
-    if (!circles.length) {
-      this.brightVision = null;
-      g.clear();
-      this.useFogMask(sprite,'');
-      return sprite.visible ? () => false : null;
+    const sceneKey = this.sightSceneKey();
+    this.sightSolver.setScene(sceneKey, () => this.sightSceneData());
+    const dm = this.client.isDM && !this.ui.data.dmPreview;
+    const key = [L?.key ?? '', dm, fog, dark, feather, ...circles.flatMap(c => [c.x, c.y, c.r, c.alt])].join(',');
+    const pad = feather * 3 + 2;
+    const screen = this.visibleRect();
+    const need = { x: screen.x - pad, y: screen.y - pad, w: screen.w + 2 * pad, h: screen.h + 2 * pad };
+    const covers = (clip?: Rect) => !clip || (clip.x <= need.x && clip.y <= need.y && clip.x + clip.w >= need.x + need.w && clip.y + clip.h >= need.y + need.h);
+    const have = this.brightVision, asked = this.sightAsked;
+    const current = !!have && have.scene === sceneKey && have.key === key && covers(have.clip);
+    if (!current && !(asked && asked.scene === sceneKey && asked.key === key && covers(asked.clip))) {
+      const margin = Math.max(screen.w, screen.h) * .35 + pad;
+      const clip = { x: screen.x - margin, y: screen.y - margin, w: screen.w + 2 * margin, h: screen.h + 2 * margin };
+      this.sightAsked = { scene: sceneKey, key, clip };
+      const looking = viewers.length ? viewers.map(v => ({ x: v.x, y: v.y, r: v.r, alt: v.alt })) : circles.map(c => ({ x: c.x, y: c.y, r: c.r, alt: c.alt }));
+      const ctx: SightCtx = { ambient: L?.ambient ?? 'bright', dark, fog, dm, feather, lights, viewers };
+      this.sightSolver.request({ viewers: looking, clip, tag: `${feather}|${key}`, ctx, lights: L ? lights.map(l => ({ x: l.x, y: l.y, r: l.r, alt: l.alt })) : undefined });
     }
-    // a wall cuts the circle back to what the token could really see from where it stands
-    const sight = this.wallSegs().sight;
-    const {origin,scale,canvas}=this.fogMask;
-    const key = [origin.x,origin.y,scale,canvas.width,canvas.height,...circles.flatMap(c => [c.x,c.y,c.r,c.alt])].join(',');
-    if (this.fogMaskKind && this.brightVision?.segs === sight && this.brightVision.key === key) {
-      // The fog can be cleared and re-covered without moving any viewer.
-      this.useFogMask(sprite,this.fogMaskKind);
-      return this.brightVision.contains;
+    if (have && have.scene === sceneKey) { this.renderSight(); return fog ? have.contains : null; }
+    return fog ? () => false : null;
+  }
+
+  /** Everything the sight solver needs to know about the scene, in one key. */
+  private sightSceneKey(): string {
+    const scene = this.client.scene;
+    if (!scene?.meta) return '';
+    const c = this.sightKeyCache;
+    if (c && c.scene === scene && c.walls === scene.wallRev && c.zones === this.zones && c.meta === scene.meta) return c.key;
+    const g = this.client.grid;
+    const key = `${scene.id}|${scene.wallRev}|${++this.sightKeySeq}|${!!scene.meta.fog.gradientVision}|${g.cell},${g.ft},${g.ox},${g.oy},${g.shape}|${JSON.stringify(mapFootprints(scene.meta))}`;
+    // A new key only when something the solver reads has changed.
+    const same = c && c.scene === scene && c.walls === scene.wallRev && c.zones === this.zones && c.key.split('|').slice(3).join('|') === key.split('|').slice(3).join('|');
+    this.sightKeyCache = { scene, walls: scene.wallRev, zones: this.zones, meta: scene.meta, key: same ? c!.key : key };
+    return this.sightKeyCache.key;
+  }
+  private sightKeyCache: { scene: unknown; walls: number; zones: Terrain; meta: unknown; key: string } | null = null;
+  private sightKeySeq = 0;
+  /** How long the sight solver has taken (count, total and slowest, in ms). */
+  readonly sightStats = { count: 0, total: 0, max: 0 };
+
+  private sightSceneData(): SightSceneData {
+    const scene = this.client.scene!;
+    return {
+      draws: [...scene.draws.values()].filter(isGroundDrawing),
+      walls: [...scene.walls.values()],
+      grid: this.client.grid,
+      maps: mapFootprints(scene.meta!),
+      gradient: !!scene.meta!.fog.gradientVision,
+    };
+  }
+
+  /** The solver has answered: cut that out of the fog and lay the dark over the map. */
+  private onSight(r: SightResult) {
+    if (r.scene !== this.sightSceneKey()) return;
+    this.sightStats.count++; this.sightStats.total += r.ms; this.sightStats.max = Math.max(this.sightStats.max, r.ms);
+    this.sightResult = r;
+    this.renderSight(true);
+    const ctx = r.ctx as SightCtx;
+    const inside = (p: Vec, c: { x: number; y: number; r: number }, rings: Float32Array[] | null | undefined) =>
+      Math.hypot(p.x - c.x, p.y - c.y) <= c.r && (!rings || rings.some(ring => inRing(p, ring)));
+    let contains: (p: Vec) => boolean;
+    if (ctx.dark) {
+      // seen: inside a viewer's sight where a light (or the painted light) reaches, or within its darkvision or touch
+      const lightRings = r.sources?.lightShapes ?? [];
+      const lit = (p: Vec) => ctx.lights.some((l, i) => inside(p, l, lightRings[i])) || this.lightLayer.paintedLit(p);
+      contains = (p: Vec) => ctx.viewers.some((v, i) => inside(p, v, r.shapes[i]) && (Math.hypot(p.x - v.x, p.y - v.y) <= Math.max(v.dv, v.touch) || lit(p)));
+    } else contains = (p: Vec) => r.viewers.some((c, i) => inside(p, c, r.shapes[i]));
+    this.brightVision = { scene: r.scene, key: r.tag.slice(r.tag.indexOf('|') + 1), clip: r.clip, contains };
+    this.dirty = true;
+  }
+
+  private sightResult: SightResult | null = null;
+
+  /**
+   * Draw the latest answer for the part of the map on screen, at about the screen's own resolution: the fog's cut and the
+   * dark. Panning or zooming redraws it (on the GPU, without asking the solver) once the drawn part no longer fits.
+   */
+  private renderSight(force = false) {
+    const r = this.sightResult;
+    if (!r) return;
+    const ctx = r.ctx as SightCtx;
+    const view = ctx.fog ? this.fogView : null;
+    const lit = ctx.ambient !== 'bright';
+    const feather = ctx.feather;
+    const screen = this.visibleRect();
+    const pad = feather * 3 + 2;
+    const want = Math.min(2, this.cam.zoom * (window.devicePixelRatio || 1));
+    const ok = (f: { x: number; y: number; scale: number; w: number; h: number } | null) => {
+      if (!f) return false;
+      const x1 = f.x + f.w / f.scale, y1 = f.y + f.h / f.scale;
+      const fits = f.x <= screen.x - pad && f.y <= screen.y - pad && x1 >= screen.x + screen.w + pad && y1 >= screen.y + screen.h + pad;
+      // Redraw for a sharper or a cheaper texture once the zoom has moved well away from the one it was drawn at.
+      const sharp = f.scale >= want * .7 || f.w >= 2040 || f.h >= 2040;
+      return fits && sharp && f.scale <= want * 1.6;
+    };
+    if (!force && (!view || ok(view.frame)) && (!lit || ok(this.lightLayer.frame))) return;
+    const margin = Math.max(screen.w, screen.h) * .25 + pad;
+    let x0 = screen.x - margin, y0 = screen.y - margin, x1 = screen.x + screen.w + margin, y1 = screen.y + screen.h + margin;
+    if (r.clip) {
+      x0 = Math.max(x0, r.clip.x); y0 = Math.max(y0, r.clip.y);
+      x1 = Math.min(x1, r.clip.x + r.clip.w); y1 = Math.min(y1, r.clip.y + r.clip.h);
     }
-    g.clear();
-    const shapes: { x: number; y: number; r: number; poly: Vec[] | null }[] = [];
-    for (const c of circles) {
-      if (sight.length || sight.surface) {
-        const v = visibilityPolygon({ x: c.x, y: c.y }, c.r, sight, 64, c.alt);
-        if (!v.free) {
-          for (const poly of [v.poly, ...v.faces]) {
-            shapes.push({ ...c, poly });
-          }
-          continue;
+    const sources = r.sources;
+    const shapes = { lights: ctx.lights, lightFills: sources?.lights ?? [], viewers: ctx.viewers, viewerFills: sources?.viewers ?? [] };
+    // the dark covers the whole screen; its frame is snapped to its own pixels so a moving light never shimmers
+    const scale = Math.min(want, 2048 / Math.max(1, x1 - x0), 2048 / Math.max(1, y1 - y0));
+    const fx = Math.floor(x0 * scale) / scale, fy = Math.floor(y0 * scale) / scale;
+    const frame = { x: fx, y: fy, scale, w: Math.min(2048, Math.ceil((x1 - fx) * scale) + 1), h: Math.min(2048, Math.ceil((y1 - fy) * scale) + 1) };
+    if (lit && x1 > x0 && y1 > y0) this.lightLayer.draw(ctx.ambient, shapes, frame, ctx.dm);
+    if (view) {
+      if (ctx.dark) {
+        if (ctx.viewers.length && x1 > x0 && y1 > y0) view.drawSightTexture(this.lightLayer.seen(shapes, frame), frame, feather);
+        else view.clearSight();
+      } else {
+        let vx0 = Infinity, vy0 = Infinity, vx1 = -Infinity, vy1 = -Infinity;
+        for (const c of r.viewers) {
+          vx0 = Math.min(vx0, c.x - c.r); vy0 = Math.min(vy0, c.y - c.r);
+          vx1 = Math.max(vx1, c.x + c.r); vy1 = Math.max(vy1, c.y + c.r);
         }
+        const bx0 = Math.max(x0, vx0), by0 = Math.max(y0, vy0), bx1 = Math.min(x1, vx1), by1 = Math.min(y1, vy1);
+        if (r.viewers.length && bx1 > bx0 && by1 > by0) view.drawSight(r.fill, { x: bx0, y: by0, w: bx1 - bx0, h: by1 - by0 }, feather, want);
+        else view.clearSight();
       }
-      shapes.push({ ...c, poly: null });
     }
-    const masked=shapes.some(s=>s.poly);
-    if (masked) this.lightLayer.paintBrightSeen({origin,scale,w:canvas.width,h:canvas.height},shapes,feather);
-    else {
-      for (const c of circles) g.circle(c.x,c.y,c.r);
-      g.fill(0xffffff);
-    }
-    this.useFogMask(sprite,masked ? 's' : 'g');
-    const contains = (p: Vec) => shapes.some(c => c.poly ? pointInPoly(p,c.poly) : Math.hypot(p.x-c.x,p.y-c.y) <= c.r);
-    this.brightVision = {segs:sight,key,contains};
-    return contains;
+    this.dirty = true;
+  }
+
+  /** Is the fog showing what the tokens see now (the solver has nothing left to do)? For tests. */
+  sightSettled(): boolean {
+    return this.sightSolver.idle && (!this.sightAsked || (this.brightVision?.key === this.sightAsked.key && this.brightVision.scene === this.sightAsked.scene));
   }
 
   /** Whose turn is it, as far as this viewer is allowed to know? */
@@ -2028,7 +2172,7 @@ export class Board {
     const meta = this.client.scene?.meta;
     if (!meta || !this.client.fogHasCover()) {
       this.fogMask.clear();
-      if (this.fogSprite) this.fogSprite.visible = false;
+      if (this.fogView) this.fogView.mesh.visible = false;
       this.dirty = true;
       return;
     }
@@ -2036,28 +2180,19 @@ export class Board {
     const changed = this.fogMask.sync(this.client.fogOpsSorted(), meta.fog, rect);
     if (!this.fogMask.hasCover) {
       this.client.noteFogClear();
-      if (this.fogSprite) this.fogSprite.visible = false;
+      if (this.fogView) this.fogView.mesh.visible = false;
       this.dirty = true;
       return;
     }
-    const sizeKey = `${this.fogMask.canvas.width}x${this.fogMask.canvas.height}`;
-    if (!this.fogSprite) {
-      this.fogSprite = new Sprite(Texture.EMPTY);
-      this.fogLayer.addChild(this.fogSprite, this.visionG);
-    }
-    if (sizeKey !== this.fogTexSize || this.fogSprite.texture === Texture.EMPTY) {
-      const old = this.fogSprite.texture;
-      this.fogSprite.texture = canvasTexture(this.fogMask.canvas);
-      if (old !== Texture.EMPTY) old.destroy(true);
-      this.fogTexSize = sizeKey;
-    } else if (changed) {
-      this.fogSprite.texture.source.update();
+    if (!this.fogView) {
+      this.fogView = new FogView(() => this.app.renderer as Renderer);
+      this.fogLayer.addChild(this.fogView.mesh);
     }
     const m = this.fogMask;
-    this.fogSprite.position.set(m.origin.x, m.origin.y);
-    this.fogSprite.scale.set(1 / m.scale);
-    this.fogSprite.alpha = this.client.isDM && !this.ui.data.dmPreview ? 0.5 : 1;
-    this.fogSprite.visible = true;
+    this.fogView.setFog(m.canvas, { x: m.origin.x, y: m.origin.y, w: m.canvas.width / m.scale, h: m.canvas.height / m.scale });
+    if (changed) this.fogView.fogChanged();
+    this.fogView.alpha = this.client.isDM && !this.ui.data.dmPreview ? 0.5 : 1;
+    this.fogView.mesh.visible = true;
     this.dirty = true;
   }
 
@@ -3794,3 +3929,17 @@ export class Board {
     this.polyPts = ui.data.tool === 'fog' ? this.polyPts : [];
   }
 }
+
+/** Is `p` inside the closed ring of x,y pairs? (even-odd) */
+function inRing(p: Vec, ring: Float32Array): boolean {
+  let inside = false;
+  const n = ring.length / 2;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const ax = ring[2 * i], ay = ring[2 * i + 1], bx = ring[2 * j], by = ring[2 * j + 1];
+    if (ay > p.y !== by > p.y && p.x < ((bx - ax) * (p.y - ay)) / (by - ay) + ax) inside = !inside;
+  }
+  return inside;
+}
+
+/** What a sight request was made for, handed back with its answer. */
+interface SightCtx { ambient: Ambient; dark: boolean; fog: boolean; dm: boolean; feather: number; lights: LightSrc[]; viewers: Viewer[] }

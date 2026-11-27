@@ -103,10 +103,11 @@ ar = await areas();
 check('a stroke after Esc is a new area of 20 ft', ar.length === 2 && ar[1].h === 20, JSON.stringify(ar));
 check('the first area did not change', ar[0].h === 10 && (await ground(cx(10), cy(11))) === 10);
 
-// ---- Ctrl-click selects an area and the card edits it
-await click([cx(11), cy(11)], { ctrl: true });
+// ---- Select picks connected ground and the card edits it
+await dm.locator('.flyout .seg button', { hasText: /^Select$/ }).click();
+await click([cx(11), cy(11)]);
 ar = await areas();
-check('Ctrl-click on the first area selects it', (await sel()).length === 2 && (await sel()).every((id) => ar[0].ids.includes(id)));
+check('Clicking the first area selects it', (await sel()).length === 2 && (await sel()).every((id) => ar[0].ids.includes(id)));
 check('the card shows its height (10)', (await dm.locator('.ht-card .numf input').inputValue()) === '10');
 await dm.locator('.ht-card .numf input').fill('25');
 await dm.locator('.ht-card .numf input').blur();
@@ -116,6 +117,7 @@ check('changing the height changes every stroke of the area', ts.filter((t) => t
 check('the other area is untouched', (await ground(cx(13), cy(13))) === 20);
 
 // ---- switching from a selected base to the additive brush leaves the base intact
+await dm.locator('.flyout .seg button', { hasText: /^Paint$/ }).click();
 await dm.locator('.ht-card .seg button', { hasText: 'Added on top' }).click();
 await dm.locator('.ht-card .numf input').fill('5');
 await dm.locator('.ht-card .numf input').blur();
@@ -130,19 +132,15 @@ await dm.keyboard.press('Control+z');
 await sleep(300);
 check('undo removes only the last addition', await ground(cx(12), cy(13)) === 25);
 
-// Select mode can still edit an individual additive brush group.
-await dm.locator('.flyout .seg button', { hasText: /^Select$/ }).click();
-await click([cx(12), cy(12)]);
-await dm.locator('.ht-card .seg button', { hasText: 'Exact height' }).click();
+// Undo the remaining additive stroke before erasing the base.
+await dm.keyboard.press('Control+z');
 await sleep(300);
-check('Sets height: that ground is exactly 5 ft, whatever is under it', (await ground(cx(12), cy(13))) === 5 && (await ground(cx(12), cy(12))) === 5);
-await dm.locator('.ht-card .btn', { hasText: /^Delete area/ }).click();
-await sleep(400);
-check('Delete takes that area away and the ground under it comes back', (await ground(cx(12), cy(13))) === 20 && (await ground(cx(12), cy(12))) === 25);
+check('undo restores both base heights', (await ground(cx(12),cy(13)))===20 && (await ground(cx(12),cy(12)))===25);
 
 // ---- erase
+await dm.locator('.flyout .seg button', { hasText: /^Select$/ }).click();
+await click([cx(11),cy(11)]);
 await dm.locator('.flyout .seg button', { hasText: /^Erase$/ }).click();
-await click([cx(11), cy(11)], { ctrl: true });
 ar = await areas();
 await drag([cx(11), cy(11)], [cx(11), cy(12)]);
 ts = await terrain();
@@ -161,6 +159,10 @@ await dm.keyboard.press('Control+z');
 await sleep(400);
 check('Ctrl+Z brings the rubbed-out square back', (await ground(cx(14), cy(13))) === 20);
 
+// Restore the cut across the base before testing a whole-area drag.
+await dm.keyboard.press('Control+z');
+await sleep(300);
+
 // ---- move an area a whole square at a time
 await dm.locator('.flyout .seg button', { hasText: /^Select$/ }).click();
 const before = (await terrain()).find((t) => t.hg === ar[0].id && !t.he);
@@ -175,7 +177,7 @@ await dm.keyboard.press('Control+z');
 await sleep(400);
 check('undo moves it back', (await ground(cx(10), cy(12))) === 25);
 
-// ---- Select mode merges whole authored groups, including any detached strokes.
+// ---- Merge two selected connected areas.
 await dm.locator('.flyout .seg button', { hasText: /^Select$/ }).click();
 await dm.keyboard.press('Escape');
 await dm.locator('.flyout .seg button', { hasText: /^Select$/ }).click();
@@ -198,7 +200,7 @@ await sleep(400);
 check('Delete removes every stroke of the area', (await terrain()).length === 0 && (await areas()).length === 0);
 
 // ---- a free brush
-await dm.evaluate(() => window.__vtt.ui.set({ heightSnap: false, heightBrush: 2, heightFt: 15 }));
+await dm.evaluate(() => window.__vtt.ui.set({ heightSnap: false, heightBrush: 2, heightFt: 15, heightAdds:false }));
 await sleep(150);
 await drag([cx(10), cy(11)], [cx(13) + 20, cy(12)]);
 ts = await terrain();
@@ -220,7 +222,8 @@ check('first Esc only lets go', (await dm.evaluate(() => window.__vtt.ui.data.to
 await dm.keyboard.press('Escape');
 check('second Esc leaves the tool', (await dm.evaluate(() => window.__vtt.ui.data.tool)) === 'select');
 await dm.keyboard.press('h');
-await click([cx(11), cy(11)], { ctrl: true });
+await dm.locator('.flyout .seg button', { hasText: /^Select$/ }).click();
+await click([cx(11), cy(11)]);
 check('ground is selected in the Heights tool', (await sel()).length > 0);
 await dm.keyboard.press('v');
 await sleep(200);
@@ -241,13 +244,15 @@ await dm.evaluate(([x0, y0, x1, y1]) => window.__vtt.client.addDrawing({ k: 'rec
 await sleep(500);
 check('an old-style box with a height still counts', (await ground(cx(11), cy(4))) === 40);
 await dm.keyboard.press('h');
-await click([cx(11), cy(4)], { ctrl: true });
+await dm.locator('.flyout .seg button', { hasText: /^Select$/ }).click();
+await click([cx(11),cy(4)]);
 ar = await areas();
 check('and can be selected, with its height in the card', (await dm.locator('.ht-card .numf input').inputValue()) === '40');
 await dm.locator('.ht-card .numf input').fill('30');
 await dm.locator('.ht-card .numf input').blur();
 await sleep(350);
 check('its height can be changed', (await ground(cx(11), cy(4))) === 30);
+await dm.locator('.flyout .seg button', { hasText: /^Paint$/ }).click();
 check('a new additive stroke can be started above an old box', await dm.locator('.ht-card .seg button', { hasText: 'Added on top' }).isEnabled());
 await dm.screenshot({ path: '/tmp/shots/n3-final.png' });
 

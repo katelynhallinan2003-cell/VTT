@@ -18,7 +18,7 @@ export function terrainBrushMode(u: UiData): UiData['heightMode'] {
 
 export interface UiData {
   gradientArea?: string;
-  gradientLine?: string;
+  gradientFocus?: string;
   heightPatches?: import('../core/terrainEdges').HeightPatch[];
   tool: Tool;
   scaleStart: Vec | null;
@@ -268,7 +268,7 @@ export class UiState {
     } catch { /* ignore */ }
     if (patch.tool !== undefined || patch.drawSel || patch.heightMode || patch.groundKind) {
       if (!('gradientArea' in patch)) patch.gradientArea = undefined;
-      patch.gradientLine = undefined;
+      patch.gradientFocus = undefined;
     }
     if (patch.drawSel && !patch.heightPatches) patch.heightPatches = undefined;
     this.data = { ...this.data, ...patch };

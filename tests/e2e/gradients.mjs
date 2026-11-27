@@ -28,17 +28,22 @@ await dm.evaluate(async () => {
 });
 await dm.getByRole('button',{name:'Make Gradient',exact:true}).click();
 const fields = dm.getByRole('spinbutton',{name:'Gradient height'});
-await dm.mouse.click(502,360);
+await dm.mouse.click(502,600);
 await fields.nth(0).waitFor();
 await fields.nth(0).fill('5');
 await fields.nth(0).press('Enter');
 await dm.mouse.click(920,465);
 await fields.nth(1).waitFor();
-await fields.nth(1).fill('25');
-await fields.nth(1).press('Enter');
+await dm.waitForFunction(()=>document.activeElement===document.querySelectorAll('.gradient-box input')[1]);
+await dm.keyboard.type('25');
+await dm.keyboard.press('Enter');
 await dm.getByRole('button',{name:'To line',exact:true}).first().click({timeout:2500});
-await dm.mouse.click(500,600);
-await dm.getByRole('button',{name:'Move line end'}).waitFor();
+const end=dm.getByRole('button',{name:'Move line end'});
+await end.waitFor();
+const endBox=await end.boundingBox();
+assert.ok(endBox);
+await dm.mouse.move(endBox.x+endBox.width/2,endBox.y+endBox.height/2);
+await dm.mouse.down(); await dm.mouse.move(501,360,{steps:5}); await dm.mouse.up();
 await dm.waitForFunction(() => {
   const {board}=window.__vtt;
   const h=board.groundAtPoint(board.screenToWorld(710,465));
@@ -52,6 +57,23 @@ await dm.waitForFunction(() => {
   const {board}=window.__vtt;
   return Math.abs(board.groundAtPoint(board.screenToWorld(850,465))-25)<0.1;
 });
+await dot.click();
+assert.ok(await fields.nth(1).evaluate(el=>el===document.activeElement));
+await dm.keyboard.type('30'); await dm.keyboard.press('Enter');
+await dm.waitForFunction(()=>Math.abs(window.__vtt.board.groundAtPoint(window.__vtt.board.screenToWorld(850,465))-30)<0.1);
+
+const shelf=await dm.evaluate(async()=>{
+  const {client,board}=window.__vtt;
+  const a=board.screenToWorld(960,250), b=board.screenToWorld(1060,660);
+  return client.addDrawing({k:'terrain',hg:'shelf',hz:18,hr:'5',p:[a.x,a.y,b.x,a.y,b.x,b.y,a.x,b.y,a.x,a.y].join(','),
+    color:'#fff',w:1,fill:0,dash:false,txt:'',fs:28,bw:5});
+});
+await dm.waitForFunction(()=>document.querySelectorAll('.gradient-box').length===3);
+assert.equal(await fields.first().inputValue(),'18');
+await fields.first().fill('22'); await fields.first().press('Enter');
+await dm.waitForFunction(()=>window.__vtt.board.gradientControls(window.__vtt.ui.data.gradientArea)[0].height===22);
+await dm.evaluate(shelf=>window.__vtt.client.removeDrawings([shelf]),shelf);
+await dm.waitForFunction(()=>window.__vtt.board.groundAtPoint(window.__vtt.board.screenToWorld(995,450))===0);
 await dm.getByRole('button',{name:'Done',exact:true}).click();
 await dm.getByRole('button',{name:'Edit Gradient',exact:true}).click();
 assert.equal(await fields.count(),2);

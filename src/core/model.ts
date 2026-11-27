@@ -224,7 +224,7 @@ function readGradient(raw: unknown): Drawing['gradient'] {
     if (!c || typeof c.id !== 'string' || !Number.isFinite(c.height)) return [];
     const path = values(c.path);
     if (!path.length || !path.every(p => p && Number.isFinite(p.x) && Number.isFinite(p.y))) return [];
-    return [{id:c.id,height:Math.max(-1000,Math.min(5000,c.height)),path}];
+    return [{...( ['height','path','both','hidden'].includes(c.boundary) ? {boundary:c.boundary} : {}),id:c.id,height:Math.max(-1000,Math.min(5000,c.height)),path}];
   });
   return controls.length ? controls : undefined;
 }
@@ -253,6 +253,7 @@ export function normalizeDrawing(id: string, raw: any): Drawing | null {
     hz: typeof raw.hz === 'number' && Number.isFinite(raw.hz) && (raw.k === 'rect' || raw.k === 'ellipse' || raw.k === 'terrain') ? Math.min(5000, Math.max(-1000, Math.round(raw.hz))) : null,
     ...(raw.pv === true ? { pv: true } : {}),
     ...(raw.td === true && isTemplate(raw.k) ? { td: true } : {}),
+    ...(raw.gradientEnabled === true ? {gradientEnabled:true} : {}),
     ...(raw.gradient && ['terrain','rect','ellipse'].includes(raw.k) ? {gradient:readGradient(raw.gradient)} : {}),
     ...(raw.k === 'terrain' ? { hg: typeof raw.hg === 'string' ? raw.hg.slice(0, 24) : '', ha: bool(raw.ha, false), he: bool(raw.he, false), hc: bool(raw.hc, false), ...(typeof raw.hr === 'string' && raw.hr ? { hr: raw.hr } : {}), ...(raw.dt === true ? { dt: true } : {}), ...(raw.dl === true ? { dl: true } : {}), ...(raw.dl === true && raw.dd === true ? { dd: true } : {}) } : {}),
     t: num(raw.t, 0),

@@ -1,3 +1,4 @@
+import { gradientCutsForPaint } from '../core/gradientBoundaries';
 import { standingGround } from '../core/terrain';
 import type { Backend, Unsub } from '../backend/types';
 import { SERVER_TS } from '../backend/types';
@@ -61,7 +62,7 @@ export interface SceneState {
 
 /** A drawing as the caller describes it; the text styling and the fill colour are optional. */
 export type NewDrawing = Omit<Drawing, 'id' | 'uid' | 't' | 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc' | 'dt' | 'dl' | 'dd'> & Partial<Pick<Drawing, 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc' | 'dt' | 'dl' | 'dd'>>;
-export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'hg' | 'ha' | 'he' | 'hc' | 'gradient' | 'td'>>;
+export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'hg' | 'ha' | 'he' | 'hc' | 'gradientEnabled' | 'gradient' | 'td'>>;
 
 export type ScenePatch = Partial<Omit<SceneMeta, 'grid' | 'fog' | 'light'>> & {
   grid?: Partial<GridSettings>;
@@ -906,10 +907,11 @@ export class TableClient {
     if (!this.canDo(isTemplate(d.k) ? 'template' : 'draw')) throw new Error(isTemplate(d.k) ? 'The DM has turned off spell templates for players.' : 'The DM has turned off drawing for players.');
     const id = this.backend.newKey();
     const full: Drawing = { fc: '', font: '', b: false, i: false, u: false, ho: false, hz: null, ...d, id, uid: this.uid, t: this.backend.now() };
-    const wrote = this.backend.set(this.drawPath(id), drawingToWire(full));
+    const all = this.withGradientCuts([full]);
+    const wrote = all.length===1 ? this.backend.set(this.drawPath(id), drawingToWire(full)) : this.restoreDrawings(all);
     opts.onId?.(id);
     await wrote;
-    if (opts.record !== false) this.recordDrawn([full], opts.label ?? (isTemplate(d.k) ? 'Place template' : 'Draw'));
+    if (opts.record !== false) this.recordDrawn(all, opts.label ?? (isTemplate(d.k) ? 'Place template' : 'Draw'));
     return id;
   }
 
@@ -920,9 +922,17 @@ export class TableClient {
     if (list.some((d) => !this.canDo(isTemplate(d.k) ? 'template' : 'draw'))) throw new Error('The DM has turned off drawing for players.');
     const t = this.backend.now();
     const full: Drawing[] = list.map((d) => ({ fc: '', font: '', b: false, i: false, u: false, ho: false, hz: null, ...d, id: this.backend.newKey(), uid: this.uid, t }));
-    await this.restoreDrawings(full);
-    this.recordDrawn(full, label);
+    const all = this.withGradientCuts(full);
+    await this.restoreDrawings(all);
+    this.recordDrawn(all, label);
     return full.map((d) => d.id);
+  }
+
+  private withGradientCuts(full:Drawing[]) {
+    if (!this.isDM || !this.scene || !full.some(d=>d.hz!=null && !d.he && !d.dt && !d.dl)) return full;
+    const cuts=gradientCutsForPaint([...this.scene.draws.values()],full,this.grid);
+    return [...full,...cuts.map(c=>({...full[0],...c,gradient:undefined,gradientEnabled:undefined,ha:false,hc:false,dt:false,dl:false,
+      id:this.backend.newKey()}))];
   }
 
   private async restoreDrawings(list: Drawing[]) {

@@ -228,10 +228,11 @@ export interface Aura {
 export type DrawKind = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'cone' | 'cube' | 'sphere' | 'emanation' | 'beam' | 'terrain';
 
 /** Something drawn on the map: freehand, a shape, text or a spell template. */
-export interface GradientControl { id: string; height: number; path: Vec[] }
+export interface GradientControl { id: string; height: number; path: Vec[]; boundary?: "height" | "path" | "both" | "hidden" }
 
 export interface Drawing {
   gradient?: GradientControl[];
+  gradientEnabled?: boolean;
   id: string;
   /** who made it */
   uid: string;

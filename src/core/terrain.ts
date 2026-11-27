@@ -8,6 +8,7 @@
 // Where areas overlap, they are folded from the bottom up. An area either SETS the height there ("this ground is at 20 ft")
 // or ADDS to whatever is below it ("5 ft more than the ground under me"), so a 5 ft ramp on a 20 ft hill is 25 ft high
 // and a 20 ft ledge painted over it is simply 20 ft.
+import { resolveGradientBoundaries } from './gradientBoundaries';
 import type { Drawing, GridSettings, Rect, Vec } from '../types';
 import { cellPoly } from './cells';
 import { boundsOf, distToSegment, parsePts, pointInPoly } from './draw';
@@ -39,6 +40,8 @@ export interface Area {
   id: string;
   legacy: boolean;
   gradient?: Drawing['gradient'];
+  gradientEnabled?: boolean;
+  boundaryDefaults?: Drawing['gradient'];
   /** the height in feet */
   h: number;
   /** adds to the ground below instead of setting it */
@@ -161,6 +164,8 @@ const unionRect = (rs: Rect[]): Rect => {
   return Number.isFinite(x0) ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : { x: 0, y: 0, w: 0, h: 0 };
 };
 
+let lastGradientTerrain: Terrain | undefined;
+
 /** Everything about the ground in one place. Old-style boxes and circles come first (smallest on top), then painted areas in the order they were started. */
 export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings, layer: 'ground' | 'rough' | 'day' | 'dim' = 'ground'): Terrain {
   const legacy: Area[] = [];
@@ -171,7 +176,7 @@ export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings, layer: '
     if (d.hz == null && d.k !== 'terrain') continue;
     // difficult ground and daylight are painted with the same brush but are layers of their own: they never change how high anything is
     if ((d.dt ? 'rough' : d.dl ? (d.dd ? 'dim' : 'day') : 'ground') !== layer) continue;
-    sigParts.push(`${d.id}|${d.k}|${d.p}|${d.w}|${d.hz}|${d.hg ?? ''}|${d.ha ? 1 : 0}|${d.he ? 1 : 0}|${d.hc ? 1 : 0}|${d.hr ?? ''}|${JSON.stringify(d.gradient ?? [])}|${d.t}`);
+    sigParts.push(`${d.id}|${d.k}|${d.p}|${d.w}|${d.hz}|${d.hg ?? ''}|${d.ha ? 1 : 0}|${d.he ? 1 : 0}|${d.hc ? 1 : 0}|${d.hr ?? ''}|${d.gradientEnabled ? 1 : 0}|${JSON.stringify(d.gradient ?? [])}|${d.t}`);
     if (d.k === 'terrain') {
       if (d.he) { erasers.push(d); continue; }
       if (d.hz == null) continue;
@@ -181,7 +186,7 @@ export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings, layer: '
     } else if ((d.k === 'rect' || d.k === 'ellipse') && d.hz != null) {
       const s = strokeOf(d, grid);
       if (!s) continue;
-      legacy.push({ id: d.id, legacy: true, gradient: d.gradient, h: d.hz, add: false, order: 0, strokes: [s], paint: [s], ids: [d.id], b: s.b });
+      legacy.push({ id: d.id, legacy: true, gradient: d.gradient, gradientEnabled: !!(d.gradientEnabled || d.gradient?.length), h: d.hz, add: false, order: 0, strokes: [s], paint: [s], ids: [d.id], b: s.b });
     }
   }
   // old-style: bigger ones go below, so a nest drawn inside a cliff counts as the nest
@@ -200,12 +205,18 @@ export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings, layer: '
     const all = [...paint, ...mine, ...eras.filter((e) => e.hg === '')].sort((a, b) => a.t - b.t || (a.id < b.id ? -1 : 1));
     // the area's height and mode are those of its first stroke (editing an area rewrites all of them together)
     const first = [...g.paint].sort((a, b) => a.t - b.t || a.id.localeCompare(b.id))[0];
-    painted.push({ id, legacy: false, gradient: first.gradient, h: first.hz ?? g.hz, add: !!first.ha, order: 0, strokes: all, paint, ids: [...paint, ...mine].map((s) => s.id), b: unionRect(paint.map((s) => s.b)) });
+    painted.push({ id, legacy: false, gradient: first.gradient, gradientEnabled: !!(first.gradientEnabled || first.gradient?.length), h: first.hz ?? g.hz, add: !!first.ha, order: 0, strokes: all, paint, ids: [...paint, ...mine].map((s) => s.id), b: unionRect(paint.map((s) => s.b)) });
   }
   painted.sort((a, b) => Math.min(...a.paint.map((s) => s.t)) - Math.min(...b.paint.map((s) => s.t)) || (a.id < b.id ? -1 : 1));
   const areas = [...legacy, ...painted];
   areas.forEach((a, i) => { a.order = i; });
-  return { areas, grid, sig: `${layer}|${grid.visible}|${grid.snap}|${grid.shape}|${grid.ft}|${grid.cell}|${grid.ox}|${grid.oy}#${sigParts.join(';')}` };
+  const terrain = { areas, grid, sig: `${layer}|${grid.visible}|${grid.snap}|${grid.shape}|${grid.ft}|${grid.cell}|${grid.ox}|${grid.oy}#${sigParts.join(';')}` };
+  if (areas.some(a => a.gradientEnabled)) {
+    if (lastGradientTerrain?.sig === terrain.sig && lastGradientTerrain.grid === grid) return lastGradientTerrain;
+    resolveGradientBoundaries(terrain);
+    lastGradientTerrain = terrain;
+  }
+  return terrain;
 }
 
 /** The box around everything painted (null when nothing is). */

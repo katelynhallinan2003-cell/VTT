@@ -197,12 +197,17 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
   const gradient = !!d.gradientArea;
   async function editGradient() {
     let area = one;
-    if (picks?.length === 1 && (!picks[0].whole || !one)) {
+    if (!one?.gradientEnabled && picks?.length === 1 && (!picks[0].whole || !one)) {
       const ids = await client.editHeightPatches(picks.map(p => ({...p,whole:false})),{height:picks[0].height});
       const terrain = zonesOf(client.drawingsSorted(),grid);
       area = areasSelected(terrain,new Set(ids))[0] ?? null;
     }
-    if (area) ui.set({drawSel:new Set(area.ids),gradientArea:area.id});
+    if (!area) return;
+    if (!area.gradientEnabled) {
+      const anchor = [...area.paint].sort((a,b)=>a.t-b.t || a.id.localeCompare(b.id))[0];
+      await client.updateDrawings([anchor.id],{gradientEnabled:true},'Make gradient');
+    }
+    ui.set({drawSel:new Set(area.ids),gradientArea:area.id});
   }
   return (
     <div class="flyout terrain-menu">
@@ -212,7 +217,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
           <button key={k} class={d.groundKind===k ? 'on' : ''} onClick={()=>ui.set({groundKind:k})}>{label}</button>)}
       </div>
       <div class="seg">
-        {modes.map(([k,label]) => <button key={k} class={!gradient && mode===k ? 'on' : ''} onClick={()=>ui.set({heightMode:k})}>{label}</button>)}
+        {modes.map(([k,label]) => <button key={k} class={!gradient && mode===k ? 'on' : ''} onClick={()=>{if(k==='paint' && one?.gradientEnabled) ui.selectDrawings([]); ui.set({heightMode:k});}}>{label}</button>)}
       </div>
       {mode !== 'move' && !gradient && <>
         {!gridless && <Toggle checked={d.heightSnap} onChange={v=>ui.set({heightSnap:v})} label={`Fill whole ${cellWord}s`} hint="Hold Alt to flip this for one stroke." />}
@@ -226,7 +231,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
           <span class="grow" />
           {editing && <button class="btn small" title="Let go of this ground so the next stroke starts a new one (Esc)" onClick={() => ui.selectDrawings([])}>New area</button>}
         </div>
-        {!gradient && !one?.gradient?.length && <>
+        {!gradient && !one?.gradientEnabled && <>
         <NumField label={shownAdd ? 'Raise by' : 'Height'} value={shownH} min={-1000} max={5000} step={5} unit="ft" title={shownAdd ? 'How much higher this makes the ground it sits on. Negative digs it down.' : 'How high this ground is. Negative is a pit.'} onCommit={setH} />
         <div class="chips terrain-presets">
           {ZONE_PRESETS.map((h) => (
@@ -241,15 +246,14 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
         {editing ? (
           <div class="row wrap">
             {(!picks || picks.every(p => p.whole)) && paintable.length > 1 && <button class="btn small" title="Make these one area" onClick={() => { ui.selectDrawings(paintable.flatMap(a => a.ids)); void client.mergeAreas(paintable); }}>Merge</button>}
-            {(one || picks?.length === 1) && <button class="btn small" onClick={() => gradient ? ui.set({gradientArea:undefined,gradientLine:undefined}) : void editGradient().catch(e=>toast(e.message,'error'))}>{gradient ? 'Done' : one?.gradient?.length ? 'Edit Gradient' : 'Make Gradient'}</button>}
+            {(one || picks?.length === 1) && <button class="btn small" onClick={() => gradient ? ui.set({gradientArea:undefined,gradientFocus:undefined}) : void editGradient().catch(e=>toast(e.message,'error'))}>{gradient ? 'Done' : one?.gradientEnabled ? 'Edit Gradient' : 'Make Gradient'}</button>}
             <button class="btn small danger" onClick={() => { if (picks) void client.editHeightPatches(picks,'delete'); else void client.removeDrawings(mine.flatMap((a) => a.ids), 'Delete ground'); ui.selectDrawings([]); }}>Delete {one || picks?.length === 1 ? 'area' : 'areas'}</button>
           </div>
         ) : null}
-        {gradient && <p class="hint">{d.gradientLine ? 'Click the other end of the line.' : 'Click to add height points. Two points start the gradient. Drag a dot to move it.'}</p>}
+        {gradient && <p class="hint">Click to add a height. Drag either end to extend a line.</p>}
       </div>}
-      {!rough && !gradient && (
+      {!rough && !gradient && mode !== 'paint' && (
         <p class="hint">
-          {mode === 'paint' && 'Paint or drag across the map. Ctrl-click to select connected ground at the same height.'}
           {mode === 'erase' && (editing ? 'Erases from the selected area only.' : 'Select an area to erase only that area.')}
           {mode === 'move' && (gridless ? 'Select ground to change its height or drag it.' : `Click an area to select it and change its height. Drag to move it.`)}
         </p>

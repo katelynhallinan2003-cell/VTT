@@ -55,11 +55,30 @@ function footprint(s: Pick<TStroke,'kind'|'pts'|'r'|'b'|'rings'>, grid: GridSett
 
 /** Fold the paint in drawing order, retaining the boundaries of each finished elevation. */
 interface Plan { surfaces: Map<number, { area: Area; offset: number }>; regions: Map<number, MultiPolygon>; layers: { area: Area; shape: MultiPolygon }[] }
+const layerCache = new WeakMap<Terrain, Plan['layers']>();
+export function terrainLayers(t: Terrain) {
+  const cached = layerCache.get(t);
+  if (cached) return cached;
+  const layers: Plan['layers'] = [];
+  const footprints = new Map<TStroke, MultiPolygon>();
+  for (const area of t.areas) {
+    let mask: MultiPolygon = [];
+    for (const s of area.strokes) {
+      let shape = footprints.get(s);
+      if (!shape) { shape = footprint(s, t.grid); footprints.set(s, shape); }
+      mask = s.erase ? clip.difference(mask, shape) : clip.union(mask, shape);
+    }
+    if (!mask.length) continue;
+    layers.push({area, shape: mask});
+  }
+  layerCache.set(t,layers);
+  return layers;
+}
 const plans = new WeakMap<Terrain, Plan>();
 function heightRegions(t: Terrain): Plan {
   const cached = plans.get(t);
   if (cached) return cached;
-  const layers: Plan['layers'] = [];
+  const layers = terrainLayers(t);
   const surfaces: Plan['surfaces'] = new Map();
   const keys = new Map<string, number>();
   // Negative sentinel keys keep different continuous surfaces distinct in the polygon overlay.
@@ -74,16 +93,7 @@ function heightRegions(t: Terrain): Plan {
     return key;
   };
   let regions = new Map<number, MultiPolygon>();
-  const footprints = new Map<TStroke, MultiPolygon>();
-  for (const area of t.areas) {
-    let mask: MultiPolygon = [];
-    for (const s of area.strokes) {
-      let shape = footprints.get(s);
-      if (!shape) { shape = footprint(s, t.grid); footprints.set(s, shape); }
-      mask = s.erase ? clip.difference(mask, shape) : clip.union(mask, shape);
-    }
-    if (!mask.length) continue;
-    layers.push({area, shape: mask});
+  for (const {area,shape:mask} of layers) {
     const next = new Map<number, MultiPolygon>();
     const add = (z: number, shape: MultiPolygon) => {
       if (!shape.length) return;
@@ -109,7 +119,7 @@ function heightRegions(t: Terrain): Plan {
 }
 
 export function areaShape(t: Terrain, id: string): MultiPolygon {
-  return heightRegions(t).layers.find(layer => layer.area.id === id)?.shape ?? [];
+  return terrainLayers(t).find(layer => layer.area.id === id)?.shape ?? [];
 }
 
 export interface HeightPatch {
@@ -127,7 +137,7 @@ export function connectedHeight(t: Terrain, point: Vec): HeightPatch | null {
   if (!picked) return null;
   const { regions, layers } = heightRegions(t);
   const height = groundAtTerrain(t,point);
-  if ((picked.gradient?.length ?? 0)>0 || !regions.has(height)) {
+  if (picked.gradientEnabled || !regions.has(height)) {
     const shape = areaShape(t,picked.id);
     const polygon = shape.find(p => inRegion(p,point));
     if (!polygon) return null;

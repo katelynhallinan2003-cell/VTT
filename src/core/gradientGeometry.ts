@@ -5,7 +5,7 @@ import { inRegion } from './terrainEdges';
 const distance = (a: Vec,b: Vec) => Math.hypot(a.x-b.x,a.y-b.y);
 const point = ([x,y]: Pair): Vec => ({x,y});
 
-function locate(shape: MultiPolygon, p: Vec, tolerance: number) {
+export function locate(shape: MultiPolygon, p: Vec, tolerance: number) {
   let best = tolerance;
   let edge: { ring: Pair[]; index: number; at: Vec } | null = null;
   for (const polygon of shape) for (const ring of polygon) {
@@ -17,6 +17,81 @@ function locate(shape: MultiPolygon, p: Vec, tolerance: number) {
     }
   }
   return edge ? {at:edge.at,edge} : shape.some(poly => inRegion(poly,p)) ? {at:p,edge:null} : null;
+}
+
+type Edge = NonNullable<NonNullable<ReturnType<typeof locate>>['edge']>;
+
+function contour(ring: Pair[]) {
+  const offsets = [0];
+  for (let i=1;i<ring.length;i++) offsets.push(offsets[i-1]+distance(point(ring[i-1]),point(ring[i])));
+  const length = offsets[offsets.length-1];
+  const wrap = (s:number) => ((s%length)+length)%length;
+  const station = (edge:Edge) => offsets[edge.index]+distance(point(ring[edge.index]),edge.at);
+  const at = (s:number) => {
+    const t = wrap(s);
+    let i=0;
+    while (i+2<ring.length && offsets[i+1]<=t) i++;
+    const f=(t-offsets[i])/(offsets[i+1]-offsets[i] || 1);
+    return {x:ring[i][0]+f*(ring[i+1][0]-ring[i][0]),y:ring[i][1]+f*(ring[i+1][1]-ring[i][1])};
+  };
+  const arc = (start:number,span:number): Vec[] => {
+    if (span<0) return arc(start+span,-span).reverse();
+    const vertices = offsets.slice(0,-1).map((s,i)=>({d:wrap(s-start),p:point(ring[i])}))
+      .filter(v=>v.d>1e-6 && v.d<span-1e-6).sort((a,b)=>a.d-b.d);
+    return [at(start),...vertices.map(v=>v.p),at(start+span)];
+  };
+  return {length,station,wrap,arc};
+}
+
+export function initialGradientLine(shape:MultiPolygon, p:Vec, reach:number):Vec[] | null {
+  const anchor=locate(shape,p,1e-4);
+  if (!anchor) return null;
+  if (anchor.edge) {
+    const c=contour(anchor.edge.ring);
+    return c.arc(c.station(anchor.edge),Math.min(reach,c.length/5));
+  }
+  for (let r=reach;r>1e-5;r/=2) for (let i=0;i<8;i++) {
+    const angle=i*Math.PI/4;
+    const path=gradientPath(shape,p,{x:p.x+r*Math.cos(angle),y:p.y+r*Math.sin(angle)},0);
+    if (path) return path;
+  }
+  return null;
+}
+
+/** Preserve the direction around a ring, even after the dragged end passes the halfway mark. */
+export function dragGradient(shape:MultiPolygon,path:Vec[],part:'start'|'end'|'line',from:Vec,to:Vec,snap:number):Vec[] | null {
+  if (path.length===1) return gradientPath(shape,to,undefined,snap);
+  const start=path[0], end=path[path.length-1];
+  const a=locate(shape,start,1e-4)?.edge, b=locate(shape,end,1e-4)?.edge;
+  if (a && b && a.ring===b.ring) {
+    const c=contour(a.ring), s=c.station(a), e=c.station(b);
+    const forward=c.wrap(e-s);
+    const length=path.reduce((sum,p,i)=>sum+(i ? distance(p,path[i-1]) : 0),0);
+    const forwardPath=c.arc(s,forward);
+    // Comparing the first segment also distinguishes the two equal half-perimeters.
+    const first=path.find(p=>distance(p,start)>1e-5) ?? end;
+    const next=forwardPath[1];
+    const sameDirection=(next.x-start.x)*(first.x-start.x)+(next.y-start.y)*(first.y-start.y)>0;
+    const span=length>=c.length-1e-5 ? c.length : sameDirection ? forward : forward-c.length;
+    const ringShape:MultiPolygon=[[a.ring]];
+    const target=locate(ringShape,to,Infinity)!.edge!;
+    const t=c.station(target);
+    if (part==='line') {
+      const old=c.station(locate(ringShape,from,Infinity)!.edge!);
+      return c.arc(s+t-old,length>=c.length-1e-5 ? c.length : span);
+    }
+    const fixed=part==='end' ? s : t, last=part==='end' ? t : e;
+    const travel=c.wrap(last-fixed);
+    if (travel<1e-5 || c.length-travel<1e-5) return null;
+    // Unwrap around the previous span. Crossing the fixed handle reverses the short
+    // segment naturally; passing the far side continues a long perimeter line.
+    return c.arc(fixed,Math.abs(travel-span)<=Math.abs(travel-c.length-span) ? travel : travel-c.length);
+  }
+  if (part==='line') {
+    const shift=(p:Vec)=>({x:p.x+to.x-from.x,y:p.y+to.y-from.y});
+    return gradientPath(shape,shift(start),shift(end),0);
+  }
+  return part==='end' ? gradientPath(shape,start,to,snap) : gradientPath(shape,to,end,snap,false);
 }
 
 /** Snap either endpoint independently. Two endpoints on the same contour follow its shorter arc. */

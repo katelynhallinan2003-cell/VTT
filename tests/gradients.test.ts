@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_GRID, drawingToWire, normalizeDrawing } from '../src/core/model';
-import { gradientPath } from '../src/core/gradientGeometry';
+import { gradientCutsForPaint, storedControls } from '../src/core/gradientBoundaries';
+import { dragGradient, gradientPath, initialGradientLine } from '../src/core/gradientGeometry';
 import { groundAtTerrain, slopeAt, standingGround, terrainOf } from '../src/core/terrain';
 import { areaShape, terrainEdges } from '../src/core/terrainEdges';
 import { movementCost } from '../src/core/movementCost';
@@ -47,6 +48,44 @@ describe('editable gradients',()=>{
     const t=terrainOf([area([line(0,0),line(8,6)])],{...grid,shape:'pointy',visible:true});
     expect(groundAtTerrain(t,at(2,3))).toBeLessThan(groundAtTerrain(t,at(3,3)));
     expect(standingGround(t,at(2,3))).toBe(standingGround(t,at(3,3)));
+  });
+  it('immediately makes an edge segment and extends it beyond half the perimeter',()=>{
+    const shape=areaShape(terrainOf([area([])],grid),'hill');
+    const path=initialGradientLine(shape,at(0,0),3)!;
+    expect(path).toHaveLength(2);
+    let long=path;
+    for(const target of [at(0,-9),at(6,-10),at(8,0),at(8,9),at(0,10),at(-1,5)])
+      long=dragGradient(shape,long,'end',long.at(-1)!,target,2)!;
+    expect(long.length).toBeGreaterThan(4);
+    expect(long.at(-1)).toEqual(at(0,5));
+  });
+  it('cuts the actual gradient and follows a neighboring flat height until overridden',()=>{
+    const hill=area([line(0,0),line(8,6)]);
+    const flat=normalizeDrawing('shelf',{k:'terrain',hg:'shelf',hz:20,hr:'5',p:'6,-10,12,-10,12,10,6,10,6,-10',t:2})!;
+    const cuts=gradientCutsForPaint([hill],[flat],grid).map((d,i)=>normalizeDrawing('cut'+i,{...d,t:3})!);
+    expect(cuts.length).toBe(1);
+    const edited=terrainOf([hill,flat,...cuts],grid);
+    const slope=edited.areas.find(a=>a.id==='hill')!;
+    const seam=slope.boundaryDefaults![0];
+    expect(seam.height).toBe(20);
+    expect(seam.path.every(p=>p.x===6)).toBe(true);
+    expect(slope.gradient!.some(c=>c.id==='8')).toBe(false);
+    const seamWalls=(t:typeof edited)=>terrainEdges(t).filter(e=>Math.abs(e.a.x-6)<1e-6 && Math.abs(e.b.x-6)<1e-6);
+    expect(seamWalls(edited)).toHaveLength(0);
+    const raised={...flat,hz:25};
+    expect(terrainOf([hill,raised,...cuts],grid).areas[0].boundaryDefaults![0].height).toBe(25);
+    const gradient=storedControls([seam],slope.gradient!.map(c=>c===seam || c.id===seam.id ? {...c,height:15} : c),hill.gradient!);
+    const changed=terrainOf([{...hill,gradient},raised,...cuts],grid);
+    expect(seamWalls(changed).every(e=>e.low===15 && e.top===25)).toBe(true);
+    expect(seamWalls(changed).length).toBeGreaterThan(0);
+    expect(groundAtTerrain(terrainOf([hill,...cuts],grid),at(7))).toBe(0);
+    expect(groundAtTerrain(terrainOf([hill],grid),at(7))).toBeGreaterThan(0);
+  });
+  it('only matches the touching stretch on either side of a corner',()=>{
+    const hill=area([line(0,0),line(8,6)]);
+    const shelf=normalizeDrawing('shelf',{k:'rect',hz:20,p:'8,-3,12,5'})!;
+    const seam=terrainOf([hill,shelf],grid).areas.find(a=>a.id==='hill')!.boundaryDefaults![0];
+    expect(seam.path.map(p=>p.y).sort((a,b)=>a-b)).toEqual([-3,5]);
   });
   it('reads controls from both array and keyed database snapshots',()=>{
     const d=area([line(0,0),line(8,6)]), wire=drawingToWire(d);

@@ -711,10 +711,12 @@ textarea:not(.text-editor):focus { border-color: var(--accent); }
 .gradient-editor { position:fixed; inset:0; pointer-events:none; z-index:4; color:var(--text); }
 .gradient-line { position:absolute; inset:0; width:100%; height:100%; }
 .gradient-line polyline { stroke:#4da3ff; stroke-width:3; fill:none; }
-.gradient-dot { position:absolute; pointer-events:auto; touch-action:none; cursor:grab; transform:translate(-50%,-50%); border:2px solid white; border-radius:50%; background:#4da3ff; width:15px; height:15px; padding:0; }
+.gradient-line .gradient-hit { stroke:transparent; stroke-width:22; pointer-events:stroke; touch-action:none; cursor:grab; }
+.gradient-dot { position:absolute; pointer-events:auto; touch-action:none; cursor:grab; transform:translate(-50%,-50%); background:transparent; border:0; border-radius:50%; width:30px; height:30px; padding:0; z-index:4; }
+.gradient-dot::after { content:''; display:block; margin:auto; width:13px; height:13px; border:2px solid white; border-radius:50%; background:#4da3ff; }
 .gradient-dot:active { cursor:grabbing; }
-.gradient-box { position:absolute; pointer-events:auto; transform:translate(-50%,calc(-100% - 10px)); border:1px solid #4da3ff; border-radius:6px; padding:4px 20px 3px 5px; background:var(--panel); font-size:11px; }
-.gradient-box:focus-within,.gradient-box:hover { z-index:1; }
+.gradient-box { position:absolute; z-index:2; pointer-events:auto; transform:translate(-50%,calc(-100% - 18px)); border:1px solid #4da3ff; border-radius:6px; padding:4px 20px 3px 5px; background:var(--panel); font-size:11px; }
+.gradient-box:focus-within,.gradient-box:hover { z-index:3; }
 .gradient-box input { width:52px; padding:2px; }
 .gradient-delete,.gradient-convert { cursor:pointer; color:inherit; background:transparent; border:0; }
 .gradient-delete { position:absolute; top:0; right:0; font-size:16px; }

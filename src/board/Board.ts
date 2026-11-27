@@ -7,10 +7,11 @@ import { templateRoughDraws } from '../core/templaterough';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
 import { altitudeOf, dayOf, dimOf, groundAt, heightNote, isRough, roughOf, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
-import { gradientPath } from '../core/gradientGeometry';
-import { areaShape, brushCuts, connectedHeight, inRegion, terrainEdges, type TerrainEdge } from '../core/terrainEdges';
+import { storedControls } from '../core/gradientBoundaries';
+import { dragGradient, gradientPath, initialGradientLine } from '../core/gradientGeometry';
+import { areaShape, brushCuts, connectedHeight, terrainEdges, type TerrainEdge } from '../core/terrainEdges';
 import { movementCost } from '../core/movementCost';
-import { EMPTY_TERRAIN, MAX_STROKE_CELLS, slopeAt, surfaceHeight, standingGround, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
+import { EMPTY_TERRAIN, MAX_STROKE_CELLS, slopeAt, surfaceHeight, standingGround, groundAtTerrain, areaLabelAt, areasSelected, cellKey, cellsAlong, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
 import { scaleCut, type GridCut, type PixelImage } from '../core/gridcut';
 import { AUTO_GRID_STRENGTH, detectPrintedGrid, impliedGrid } from '../core/mapgrid';
@@ -2307,7 +2308,7 @@ export class Board {
       }
       return;
     }
-    if (tool === 'select' || (tool === 'height' && !this.ui.data.gradientArea && !e.ctrlKey && !e.metaKey) || (tool === 'draw' && this.ui.data.drawTool !== 'erase') || (tool === 'template' && this.ui.data.tplMode === 'select')) {
+    if (tool === 'select' || (tool === 'draw' && this.ui.data.drawTool !== 'erase') || (tool === 'template' && this.ui.data.tplMode === 'select')) {
       const hh = this.handleAt(w);
       if (hh) { this.drag = { kind: 'drawresize', id: hh.d.id, handle: hh.h.id, orig: hh.d, patch: null }; return; }
     }
@@ -2625,16 +2626,31 @@ export class Board {
     return this.client.scene?.draws.get(first.id);
   }
 
-  gradientControls(id: string) { return this.gradientAnchor(id)?.gradient ?? []; }
+  private gradientTerrain() {
+    const scene=this.client.scene;
+    return scene && scene.drawRev===this.seenZoneRev && this.zones.grid===this.client.grid ? this.zones : zonesOf(scene?.draws.values() ?? [],this.client.grid);
+  }
+
+  gradientControls(id: string) { return this.gradientTerrain().areas.find(a=>a.id===id)?.gradient ?? []; }
+
+  makeGradientLine(id:string,p:Vec) {
+    return initialGradientLine(areaShape(this.zones,id),p,64/this.cam.zoom);
+  }
+
+  dragGradientHandle(id:string,path:Vec[],part:'start'|'end'|'line',from:Vec,to:Vec) {
+    return dragGradient(areaShape(this.zones,id),path,part,from,to,16/this.cam.zoom);
+  }
 
   gradientPlacement(id: string, a: Vec, b?: Vec, movingEnd=true) {
-    return gradientPath(areaShape(this.zones,id),a,b,10/this.cam.zoom,movingEnd);
+    return gradientPath(areaShape(this.zones,id),a,b,16/this.cam.zoom,movingEnd);
   }
 
   saveGradient(id: string, controls: NonNullable<Area['gradient']>) {
     const anchor = this.gradientAnchor(id);
     if (!anchor || !this.client.isDM) return;
-    void this.client.updateDrawings([anchor.id],{gradient:controls},'Edit gradient')
+    const area=this.gradientTerrain().areas.find(a=>a.id===id);
+    const gradient=storedControls(area?.boundaryDefaults ?? [],controls,anchor.gradient ?? []);
+    void this.client.updateDrawings([anchor.id],{gradientEnabled:true,gradient},'Edit gradient')
       .catch((err: Error) => this.cb.onNotice(err.message,'error'));
   }
 
@@ -2647,7 +2663,7 @@ export class Board {
 
   /**
    * The Heights tool. Paint lays down ground (in the selected area, or a new one), Erase takes it away, Select picks whole areas to edit or slide.
-   * Ctrl/Cmd-click picks the area under the pointer in any of them; Shift adds it to the selection.
+   * Select picks the connected surface at its finished height. Shift adds it to the selection.
    */
   private startHeight(w: Vec, e: PointerEvent) {
     const u = this.ui.data;
@@ -2655,52 +2671,31 @@ export class Board {
     const gridless = currentOverlay(this.client.grid) === 'none';
     const mode = terrainBrushMode(u);
     if (u.gradientArea && !rough) {
+      e.preventDefault();
       const area = this.zones.areas.find(a => a.id === u.gradientArea);
       if (!area) return;
       const controls = this.gradientControls(area.id);
-      const line = controls.find(c => c.id === u.gradientLine);
-      const path = this.gradientPlacement(area.id,line?.path[0] ?? w,line ? w : undefined);
+      const path = this.gradientPlacement(area.id,w);
       if (!path) return;
-      if (line) {
-        this.saveGradient(area.id,controls.map(c => c===line ? {...c,path} : c));
-        this.ui.set({gradientLine:undefined});
-      } else {
-        const height = Math.round((controls.length >= 2 ? surfaceHeight(area,w) : groundAt(this.zones,w))*10)/10;
-        this.saveGradient(area.id,[...controls,{id:newAreaId(),height,path}]);
-      }
+      const height = Math.round((controls.length >= 2 ? surfaceHeight(area,w) : groundAt(this.zones,w))*10)/10;
+      const id = newAreaId();
+      this.saveGradient(area.id,[...controls,{id,height,path}]);
+      this.ui.set({gradientFocus:id});
       return;
     }
-    if (!rough && (e.ctrlKey || e.metaKey || (mode === 'move' && u.heightPatches?.some(p => inRegion(p.polygon,w))))) {
+    if (!rough && mode === 'move') {
       const hit = connectedHeight(this.zones,w);
       if (!hit) { if (!e.shiftKey) this.ui.selectDrawings([]); return; }
       const current = u.heightPatches ?? [];
       const on = current.some(p => p.polygon === hit.polygon);
       const patches = e.shiftKey ? (on ? current.filter(p => p.polygon !== hit.polygon) : [...current,hit])
-        : mode === 'move' && on && !e.ctrlKey && !e.metaKey ? current : [hit];
+        : on ? current : [hit];
       const ids = new Set(patches.flatMap(p => p.ids));
       this.ui.set({ drawSel:ids,heightPatches:patches.length ? patches : undefined,selection:new Set(),mapSelected:false,extraSel:null });
-      if (mode === 'move' && patches.length && !(e.shiftKey && on)) {
+      if (patches.length && !(e.shiftKey && on)) {
         const snap = !gridless && !e.altKey && this.selectedAreas().some(a => a.paint.some(s => s.kind === 'cells'));
         this.drag = { kind:'drawmove',ids:[...ids],start:w,dx:0,dy:0,moved:false,snap };
       }
-      return;
-    }
-    if (!rough && mode === 'move') {
-      const a = areaAt(this.zones, w);
-      if (!a) { if (!e.shiftKey) this.ui.selectDrawings([]); return; }
-      const sel = new Set(u.drawSel);
-      const has = a.ids.some((id) => sel.has(id));
-      if (e.shiftKey) {
-        for (const id of a.ids) { if (has) sel.delete(id); else sel.add(id); }
-        this.ui.selectDrawings(sel);
-        if (has || mode !== 'move') return;
-      } else if (!has) this.ui.selectDrawings(a.ids);
-      if (mode !== 'move') return;
-      const mine = this.selectedAreas();
-      const ids = mine.flatMap((x) => x.ids).filter((id) => { const d = this.client.scene?.draws.get(id); return !!d && this.client.canEditDrawing(d); });
-      if (!ids.length) return;
-      const snap = !gridless && !e.altKey && mine.some((x) => x.paint.some((s) => s.kind === 'cells'));
-      this.drag = { kind: 'drawmove', ids, start: w, dx: 0, dy: 0, moved: false, snap };
       return;
     }
     const erase = mode === 'erase';

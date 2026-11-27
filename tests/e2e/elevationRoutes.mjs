@@ -138,11 +138,10 @@ await dm.evaluate(async points => {
 },samples);
 await dm.waitForFunction(p => window.__vtt.board.groundAtPoint(p) === 40,samples[3]);
 const click = await screen(samples[1]);
-await dm.keyboard.down('Control');
+await dm.locator('.terrain-menu').getByRole('button',{name:'Select',exact:true}).click();
 await dm.mouse.click(click.x,click.y);
-await dm.keyboard.up('Control');
 const selected = await dm.evaluate(() => window.__vtt.ui.data.heightPatches?.[0]);
-check('Ctrl-click selects through the touching brush boundary',selected?.height === 30 && selected.cuts.length === 2);
+check('Select picks through the touching brush boundary',selected?.height === 30 && selected.cuts.length === 2);
 await dm.locator('.ht-card .numf input').fill('35');
 await dm.locator('.ht-card .numf input').press('Enter');
 await dm.waitForFunction(p => window.__vtt.board.groundAtPoint(p) === 35,samples[0]);

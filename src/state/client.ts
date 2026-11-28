@@ -1,6 +1,6 @@
 import { initialBoundaryControls } from '../core/gradientBoundaries';
 import { brushWall, resolveWalls, wallChains } from '../core/wallBrush';
-import { reuseStrokeGeometry, standingSurface } from '../core/terrain';
+import { reuseStrokeGeometry } from '../core/terrain';
 import type { Backend, Unsub } from '../backend/types';
 import { SERVER_TS } from '../backend/types';
 import {
@@ -12,7 +12,7 @@ import { BLANK_BG, BLANK_COLS, BLANK_MAP, BLANK_ROWS, blankSpot, clampSquares, i
 import {
   applyDamage, cleanHp, withoutLights, EXPLORE_MIN_CELLS, EXPLORE_JUMP_CELLS, EXPLORE_TELEPORT_CELLS, EXPLORE_TELEPORT_MS, emptyInit, moveEntry, nextTurn, orderOf, pctOf, prevTurn, publicHp, sightRadiusPx, sortByInit, toPub,
 } from '../core/combat';
-import { lineOp, polyOp } from '../core/fog';
+import { explorationScene, type ExplorationJob, type ExplorationScene } from '../core/exploration';
 import { addFx, fxToWire, tickFx } from '../core/effects';
 import { can, detectPreset, PRESETS, type Action } from '../core/permissions';
 import { mapFootprints, sceneRect, snapTokenCenter } from '../core/geometry';
@@ -22,14 +22,14 @@ import { sameSaved, savedFields, tokenFromSaved, type SavedToken } from '../core
 import { isTemplate, movedPoints } from '../core/draw';
 import { throttle } from '../core/throttle';
 import type {
-  Drawing, Effect, ExtraMap, FogMode, FogOp, InitEntry, InitPub, InitState, LivePlot, GridSettings, Permissions, PermPreset, Ping, Player, Role, SceneFolder, SceneIndexEntry,
+  Drawing, Effect, ExtraMap, FogOp, InitEntry, InitPub, InitState, LivePlot, GridSettings, Permissions, PermPreset, Ping, Player, Role, SceneFolder, SceneIndexEntry,
   Handout, Rect, SceneMeta, TableMeta, TableSettings, Token, Vec, ViewCall,
 } from '../types';
 import { newAreaId } from '../core/terrain';
-import { withSightTerrain, terrainEdges, fillTerrainHoles, patchStroke, type HeightPatch, type TerrainEdge } from '../core/terrainEdges';
-import { groundAt, zonesOf } from '../core/height';
-import { sightHeight, isLightMark, litSeen, lightOf, viewerOf, type LightSrc } from '../core/light';
-import { carveWalls, joinAt, normalizeWall, routeReveal, sightSegs, splitPieces, wallMid, wallToWire, type Seg, type Wall } from '../core/walls';
+import { terrainEdges, fillTerrainHoles, patchStroke, type HeightPatch, type TerrainEdge } from '../core/terrainEdges';
+import { zonesOf } from '../core/height';
+import { isLightMark } from '../core/light';
+import { carveWalls, joinAt, normalizeWall, splitPieces, wallToWire, type Seg, type Wall } from '../core/walls';
 import { buildCampaign, newLibraryItems, planImport, type CampaignFile, type CampaignLibraryItem } from '../core/campaign';
 import { addLibraryItem, removeTokenFromLib, saveTokenToLib, watchTokenLib } from './account';
 import { History } from './history';
@@ -302,6 +302,12 @@ export class TableClient {
     this.clearLive();
     this.stopped = true;
     this.pictures.stop();
+    this.exploreEpoch++;
+    this.exploreWorker?.terminate();
+    this.exploreWorker=null;
+    this.exploreGeometry='';
+    for(const pending of this.exploreJobs.values()) pending.ok([]);
+    this.exploreJobs.clear();
     for (const u of this.unsubs) u();
     for (const u of this.sceneUnsubs) u();
     this.unsubs = [];
@@ -545,22 +551,25 @@ export class TableClient {
       if (!live()) return;
       const w = normalizeWall(k, v);
       if (w) s.walls.set(k, w); else s.walls.delete(k);
-      s.wallRev++; this.bump();
+      s.wallRev++; this.scheduleExploration(); this.bump();
     };
     this.sceneUnsubs.push(b.listenChildren(P.sceneWalls(tid, sid), {
       added: wallSet, changed: wallSet,
-      removed: (k) => { if (live()) { s.walls.delete(k); s.wallRev++; this.bump(); } },
+      removed: (k) => { if (live()) { s.walls.delete(k); s.wallRev++; this.scheduleExploration(); this.bump(); } },
     }, sceneFail('walls')));
 
     const drawSet = (k: string, v: any) => {
       if (!live()) return;
       const d = normalizeDrawing(k, v);
+      const old = s.draws.get(k);
       if (d) { reuseStrokeGeometry(s.draws.get(k),d); s.draws.set(k,d); } else s.draws.delete(k);
-      s.drawRev++; this.bump();
+      s.drawRev++;
+      if (this.isGroundDrawing(old) || this.isGroundDrawing(d ?? undefined) || old?.dl || d?.dl) { this.exploreGroundRev++; this.scheduleExploration(); }
+      this.bump();
     };
     this.sceneUnsubs.push(b.listenChildren(P.sceneDraw(tid, sid), {
       added: drawSet, changed: drawSet,
-      removed: (k) => { if (live()) { s.draws.delete(k); s.drawRev++; this.bump(); } },
+      removed: (k) => drawSet(k, null),
     }, sceneFail('drawings')));
 
     const liveSet = (k: string, v: any) => {
@@ -707,6 +716,12 @@ export class TableClient {
   noteFogClear() {
     if (this.coverCache) this.coverCache.cover = false;
     this.trails.clear();
+  }
+
+  playerIdentity(uid: string): string { return this.players.get(uid)?.rid || uid; }
+
+  sharesSight(token: Token): boolean {
+    return this.isDM || !token.ownerUid || this.playerIdentity(token.ownerUid) === this.playerIdentity(this.uid);
   }
 
   /** Fog ops in draw order (push keys sort chronologically). */
@@ -1640,7 +1655,7 @@ export class TableClient {
    * What each token has walked since the trail was last written: the real route it took, seen through the stream of position changes.
    * A jump with no walking in between (undo, a typed position, a token teleported on purpose) starts a new trail instead of joining the dots.
    */
-  private trails = new Map<string, { anchor: Vec | null; pend: Vec[]; segs: Vec[][]; at: number; tele: boolean }>();
+  private trails = new Map<string, { anchor: Vec | null; pend: Vec[]; segs: Vec[][]; at: number; tele: boolean; sight: string; owner: string | null }>();
   /** tokens being teleported right now (their next position change starts a new trail) */
   private noTrail = new Set<string>();
   private exploreTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1649,11 +1664,16 @@ export class TableClient {
   private tokensChanged() {
     if (!this.isDM) return;
     this.syncInitMirror();
+    this.scheduleExploration();
+  }
+
+  private scheduleExploration() {
+    if (!this.isDM) return;
     const m = this.scene?.meta;
     if (!m?.fog.vision || !m.fog.explore || !this.fogHasCover()) { this.trails.clear(); return; }
     this.observeTrails();
     if (this.exploreTimer) clearTimeout(this.exploreTimer);
-    this.exploreTimer = setTimeout(() => { this.exploreTimer = null; void this.exploreNow(); }, 400);
+    this.exploreTimer = setTimeout(() => { this.exploreTimer = null; void this.exploreNow().catch(this.fail('remember explored ground')); }, 400);
   }
 
   /** Add each sighted token's current position to its trail. */
@@ -1663,14 +1683,27 @@ export class TableClient {
     if (!s || !m) return;
     const g = m.grid;
     const now = Date.now();
+    const lamps = m.light.ambient === 'dark' ? [...s.tokens.values()].filter(t => t.light && (!t.hidden || isLightMark(t)))
+      .map(t => [t.x,t.y,t.size,t.elev,t.fly,t.light!.b,t.light!.d].join(',')).join('|') : '';
+    for (const id of this.trails.keys()) if (!s.tokens.has(id)) this.trails.delete(id);
     for (const t of s.tokens.values()) {
-      if (sightRadiusPx(t, g) <= 0 || t.hidden) continue;
+      if (sightRadiusPx(t, g) <= 0 || t.hidden) { this.trails.delete(t.id); continue; }
+      const owner = t.ownerUid ? this.playerIdentity(t.ownerUid) : null;
+      const sight = [t.sight,t.dv,t.size,t.fly,t.elev,this.gridAt(t).cell,m.light.ambient,m.light.edge,m.fog.gradientVision,s.wallRev,this.exploreGroundRev,lamps].join('|');
       const here = { x: t.x, y: t.y };
       let tr = this.trails.get(t.id);
-      if (!tr) { this.trails.set(t.id, { anchor: null, pend: [here], segs: [], at: now, tele: true }); continue; }
+      if (!tr || tr.owner !== owner) {
+        this.trails.set(t.id, { anchor: null, pend: [here], segs: [], at: now, tele: true, owner, sight });
+        continue;
+      }
+      const sightChanged = tr.sight !== sight;
+      tr.sight = sight;
       const last = tr.pend.length ? tr.pend[tr.pend.length - 1] : tr.anchor;
       const dist = last ? Math.hypot(here.x - last.x, here.y - last.y) : Infinity;
-      if (last && dist < EXPLORE_MIN_CELLS * g.cell) continue;
+      if (last && dist < EXPLORE_MIN_CELLS * g.cell) {
+        if (sightChanged && !tr.pend.length) tr.pend.push(here);
+        continue;
+      }
       const idle = now - tr.at;
       tr.at = now;
       const jumped = this.noTrail.has(t.id) || !last || dist > EXPLORE_JUMP_CELLS * g.cell || (idle > EXPLORE_TELEPORT_MS && dist > EXPLORE_TELEPORT_CELLS * g.cell);
@@ -1694,52 +1727,77 @@ export class TableClient {
     const m = s?.meta;
     if (!this.isDM || !s || !m?.fog.vision || !m.fog.explore || !this.fogHasCover()) { this.trails.clear(); return 0; }
     this.observeTrails();
-    const g = m.grid;
-    const sid = s.id;
-    const updates: Record<string, FogOp> = {};
-    let count = 0;
-    // ground they have seen is kept grey (shown dimmed when nobody can see it now) unless the DM wants it plainly clear
-    const mode: FogMode = m.fog.dim ? 'x' : 'r';
-    const zones = zonesOf(s.draws.values(), g);
-    const geometry=this.wallGeometry();
-    const segs = withSightTerrain([...sightSegs([...geometry.walls.values()].filter(w=>!w.face), w => groundAt(zones, wallMid(w)) + w.h), ...geometry.terrain], zones, geometry.openings, m.fog.gradientVision);
-    // in the dark a token remembers what its own light, its darkvision and its touch reach as it walks, and what other lights show it where it stands
-    const dark = m.light.ambient === 'dark';
-    const altOf = (t: Token, p: Vec = t) => sightHeight(t, standingSurface(zones, p));
-    const lights: LightSrc[] = dark
-      ? [...s.tokens.values()].filter((t) => (!t.hidden || isLightMark(t)) && t.light).map((t) => lightOf(t, g, { x: t.x, y: t.y }, altOf(t))).filter((l): l is LightSrc => !!l)
-      : [];
+    const job: ExplorationJob = {trails:[],dark:m.light.ambient==='dark',lamps:[]};
     for (const t of s.tokens.values()) {
-      let r = sightRadiusPx(t, g);
+      const grid = this.gridAt(t);
+      if (job.dark && t.light) job.lamps.push({token:t,grid});
       const tr = this.trails.get(t.id);
-      if (!tr || r <= 0 || t.hidden) continue;
-      const viewer = dark ? viewerOf(t, g, { x: t.x, y: t.y }, altOf(t)) : null;
-      if (dark) {
-        if (!viewer) continue;
-        r = Math.min(r, Math.max(viewer.touch, viewer.dv, lights.find((l) => l.id === t.id)?.r ?? 0));
-      }
-      const lines = [...tr.segs, ...(tr.pend.length ? [tr.pend] : [])];
-      for (const line of lines) {
-        // keep the shape of the route but not every little step of it
-        const pts = line.filter((p, i) => i === 0 || i === line.length - 1 || Math.hypot(p.x - line[i - 1].x, p.y - line[i - 1].y) >= g.cell * 0.2);
-        // with no wall in reach this is the one thick line; with walls it is what the token could see from a spot every square along the way
-        for (const shape of routeReveal(pts, r, segs, g.cell, p => altOf(t, p))) {
-          updates[`${P.sceneFog(this.tableId, sid)}/${this.backend.newKey()}`] = shape.t === 'line' ? lineOp(mode, shape.pts, shape.w) : polyOp(mode, shape.pts);
-          count++;
-        }
-      }
-      if (viewer && lines.length) {
-        for (const piece of litSeen(viewer, lights.filter((l) => l.id !== t.id), segs)) {
-          updates[`${P.sceneFog(this.tableId, sid)}/${this.backend.newKey()}`] = polyOp(mode, piece);
-          count++;
-        }
-      }
-      if (lines.length) { const lastLine = lines[lines.length - 1]; tr.anchor = lastLine[lastLine.length - 1]; }
+      if (!tr || t.hidden || sightRadiusPx(t,grid)<=0) continue;
+      const routes = [...tr.segs, ...(tr.pend.length ? [tr.pend] : [])];
+      if (!routes.length) continue;
+      job.trails.push({token:t,grid,routes,viewer:t.ownerUid ? this.playerIdentity(t.ownerUid) : undefined});
+      tr.anchor = routes.at(-1)!.at(-1)!;
       tr.segs = [];
       tr.pend = [];
     }
-    if (count && this.scene === s) await this.backend.update(updates);
-    return count;
+    if (!job.trails.length) return 0;
+    const key = [s.id,this.exploreGroundRev,s.wallRev,m.fog.gradientVision,m.light.edge,JSON.stringify(m.grid),JSON.stringify(mapFootprints(m)),JSON.stringify(sceneRect(m))].join('|');
+    const geometry = (): ExplorationScene => ({
+      draws:[...s.draws.values()].filter(d=>this.isGroundDrawing(d) || d.dl),
+      walls:[...s.walls.values()], grid:m.grid, maps:mapFootprints(m), gradient:m.fog.gradientVision,
+      rect:sceneRect(m) ?? {x:0,y:0,w:2000,h:1500}, edge:m.light.edge*m.grid.cell/m.grid.ft,
+    });
+    // Reserve the timestamp before solving so a later Hide brush always wins.
+    const prefix = this.backend.newKey(), epoch=this.exploreEpoch;
+    let ops: FogOp[];
+    try {
+      ops = await this.solveExploration(key, geometry, job);
+      if (epoch !== this.exploreEpoch || this.scene !== s || !s.meta?.fog.explore || !ops.length) return 0;
+      const path = P.sceneFog(this.tableId, s.id);
+      const updates = Object.fromEntries(ops.map((op, i) => [`${path}/${prefix}-${i.toString(36).padStart(5, '0')}`, op]));
+      await this.backend.update(updates);
+      return ops.length;
+    } catch (error) {
+      if (this.scene === s && epoch === this.exploreEpoch) {
+        for (const trail of job.trails) {
+          const pending=this.trails.get(trail.token.id);
+          if (pending && pending.owner === (trail.viewer ?? null)) pending.segs.unshift(...trail.routes);
+        }
+      }
+      throw error;
+    }
+  }
+
+  private exploreGroundRev=0;
+  private exploreEpoch=0;
+  private exploreWorker: Worker | null=null;
+  private exploreGeometry='';
+  private exploreJobs=new Map<number,{ok:(ops:FogOp[])=>void; fail:(e:Error)=>void}>();
+  private exploreSeq=0;
+
+  private solveExploration(key:string, geometry:()=>ExplorationScene, job:ExplorationJob): Promise<FogOp[]> {
+    if(typeof Worker==='undefined') return Promise.resolve(explorationScene(geometry())(job));
+    if(!this.exploreWorker) {
+      const worker=new Worker(new URL('./exploration.worker.ts',import.meta.url),{type:'module'});
+      this.exploreWorker=worker;
+      worker.onmessage=({data})=>{
+        const pending=this.exploreJobs.get(data.id);
+        this.exploreJobs.delete(data.id);
+        if(data.error) pending?.fail(new Error(data.error)); else pending?.ok(data.ops);
+      };
+      worker.onerror=e=>{
+        for(const pending of this.exploreJobs.values()) pending.fail(new Error(e.message));
+        this.exploreJobs.clear();
+        worker.terminate(); this.exploreWorker=null; this.exploreGeometry='';
+      };
+    }
+    const scene=key===this.exploreGeometry ? undefined : geometry();
+    const id=++this.exploreSeq;
+    return new Promise((ok,fail)=>{
+      this.exploreJobs.set(id,{ok,fail});
+      this.exploreWorker!.postMessage({id,scene,job});
+      this.exploreGeometry=key;
+    });
   }
 
   // ---------------------------------------------------------------- pings
@@ -2107,12 +2165,17 @@ export class TableClient {
     const prevBase = this.scene?.meta?.fog.base ?? 'hidden';
     const prevEnabled = this.scene?.meta?.fog.enabled ?? false;
     const prevVision = this.scene?.meta?.fog.vision ?? false;
-    const apply = (ops: Record<string, FogOp> | null, b: 'hidden' | 'clear', enabled: boolean, vision?: boolean) => this.backend.update({
-      [P.sceneFog(this.tableId, sid)]: ops && Object.keys(ops).length ? ops : null,
-      [`${P.sceneMeta(this.tableId, sid)}/fog/base`]: b,
-      [`${P.sceneMeta(this.tableId, sid)}/fog/enabled`]: enabled,
-      ...(vision === undefined ? {} : { [`${P.sceneMeta(this.tableId, sid)}/fog/vision`]: vision }),
-    });
+    const apply = async (ops: Record<string, FogOp> | null, b: 'hidden' | 'clear', enabled: boolean, vision?: boolean) => {
+      this.exploreEpoch++;
+      this.trails.clear();
+      await this.backend.update({
+        [P.sceneFog(this.tableId, sid)]: ops && Object.keys(ops).length ? ops : null,
+        [`${P.sceneMeta(this.tableId, sid)}/fog/base`]: b,
+        [`${P.sceneMeta(this.tableId, sid)}/fog/enabled`]: enabled,
+        ...(vision === undefined ? {} : { [`${P.sceneMeta(this.tableId, sid)}/fog/vision`]: vision }),
+      });
+      if (this.scene?.id === sid) this.scheduleExploration();
+    };
     const revealSight = base === 'hidden' ? true : undefined;
     await apply(null, base, true, revealSight);
     this.history.push({

@@ -344,10 +344,10 @@ export interface InitPub {
 }
 
 export type FogMode = 'r' | 'h' | 'x'; // reveal | hide | explored (seen once: shown grey when nobody can see it now)
-export type FogOp =
+export type FogOp = { /** Stable player identity for a privately explored area. Unassigned scouts and DM brushes are shared. */ viewer?: string } & (
   | { m: FogMode; t: 'rect'; p: string }            // "x,y,w,h"
   | { m: FogMode; t: 'poly'; p: string }            // "x1,y1,x2,y2,..."
-  | { m: FogMode; t: 'line'; p: string; w: number }; // polyline + stroke width
+  | { m: FogMode; t: 'line'; p: string; w: number }); // polyline + stroke width
 
 export interface Permissions {
   playersMoveAnyToken: boolean;

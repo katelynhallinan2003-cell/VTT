@@ -248,6 +248,19 @@ interface Item { root: Container; g: Graphics; text: Text | null; sig: string; s
 /** All saved drawings, kept as one Graphics (or Text) per drawing and only repainted when that drawing changes. */
 export class DrawLayer {
   readonly container = new Container();
+  readonly templates = new Container();
+  private separateTemplates = false;
+  private spellIds = new Set<string>();
+
+  /** Keep the ordinary drawing order unless player fog needs a separate pass for spells. */
+  maskTemplates(enabled: boolean) {
+    this.separateTemplates = enabled;
+    const parent = enabled ? this.templates : this.container;
+    for (const id of this.spellIds) {
+      const item = this.items.get(id);
+      if (item) parent.addChild(item.root);
+    }
+  }
   private items = new Map<string, Item>();
   private grid = '';
   private freeSurfaces:SpellTexture[]=[];
@@ -261,6 +274,7 @@ export class DrawLayer {
     const gridChanged = gridSig !== this.grid;
     this.grid = gridSig;
     const seen = new Set<string>();
+    this.spellIds.clear();
     list.forEach((d, i) => {
       seen.add(d.id);
       const sig = `${d.k}|${d.p}|${d.color}|${d.w}|${d.fill}|${d.fc}|${d.dash}|${d.txt}|${d.fs}|${d.font}|${d.b}|${d.i}|${d.u}|${d.ho}|${d.bw}|${d.hz}|${d.of}|${JSON.stringify(d.spell)}|${textRes}`;
@@ -269,8 +283,10 @@ export class DrawLayer {
         it = { root: new Container(), g: new Graphics(), text: null, sig: '', surface:isTemplate(d.k) ? this.freeSurfaces.pop() ?? new SpellTexture() : new SpellTexture() };
         it.root.addChild(it.g);
         this.items.set(d.id, it);
-        this.container.addChild(it.root);
       }
+      if (isTemplate(d.k)) this.spellIds.add(d.id);
+      const layer = this.separateTemplates && isTemplate(d.k) ? this.templates : this.container;
+      if (it.root.parent !== layer) layer.addChild(it.root);
       it.root.zIndex = i;
       if (it.sig !== sig || gridChanged) {
         it.sig = sig;
@@ -283,7 +299,7 @@ export class DrawLayer {
     for (const [id, it] of this.items) {
       if (!seen.has(id)) { this.forget?.(id); this.releaseItem(it); this.items.delete(id); }
     }
-    this.container.sortableChildren = true;
+    this.container.sortableChildren = this.templates.sortableChildren = true;
   }
 
   /** "10 ft" in the middle of a height zone. */

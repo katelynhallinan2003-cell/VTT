@@ -1,0 +1,121 @@
+import { launch, watch, sleep } from './lib.mjs';
+const BASE = (process.env.BASE || 'http://127.0.0.1:4174/') + '?demo';
+const errors = [];
+const results = [];
+const check = (name, ok, extra = '') => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? '  ' + extra : ''}`); };
+const { browser, context } = await launch();
+const dm = await context.newPage();
+watch(dm, 'dm', errors);
+await dm.goto(BASE);
+await dm.evaluate(() => localStorage.clear());
+await dm.reload();
+await dm.getByRole('button', { name: /Start as the DM/ }).click();
+await dm.getByPlaceholder('New table name').fill('Fog and sight');
+await dm.getByRole('button', { name: 'Create table' }).click();
+await dm.waitForSelector('.board-host canvas');
+await dm.getByRole('button', { name: '+ New scene' }).first().click();
+await dm.getByRole('button', { name: 'Use sample dungeon' }).click();
+await dm.locator('.modal .muted', { hasText: 'Sample dungeon.png' }).waitFor();
+await dm.getByRole('button', { name: 'Create scene' }).click();
+await dm.waitForFunction(() => window.__vtt?.board?.mapSprite);
+await sleep(500);
+const tid = await dm.evaluate(() => location.hash.replace('#/t/', ''));
+const player = await context.newPage();
+watch(player, 'player', errors);
+await player.goto(`${BASE}#/t/${tid}`);
+await player.getByPlaceholder('e.g. Aria').fill('Aria');
+await player.getByRole('button', {name:'Join table'}).click();
+await player.waitForFunction(() => window.__vtt?.board?.mapSprite);
+const uid = await player.evaluate(() => window.__vtt.client.uid);
+try {
+  const setup = await dm.evaluate(async uid => {
+    const { client } = window.__vtt, g = client.grid;
+    const at = (x,y) => ({ x: g.ox + (x+.5)*g.cell, y: g.oy + (y+.5)*g.cell });
+    const a = at(9,8), b = at(15,8), far = at(19,13), dark = at(3,3);
+    const scout = await client.addToken({name:'First scout', ...a, ownerUid:uid, sight:15});
+    await client.addToken({name:'Other player', ...far, ownerUid:'second-player', sight:10});
+    const creature = await client.addToken({name:'Creature', ...at(9,9), ownerUid:'second-player', sight:0});
+    const rect = [at(7,7),at(17,10)].flatMap(p=>[p.x,p.y]).join(',');
+    await client.addDrawing({k:'rect',p:rect,color:'#00ff00',fc:'#00ff00',fill:1,w:1});
+    await client.resetFog('hidden');
+    return {scout,creature,a,b,far,dark,near:at(10,8),edge:at(14,8),cell:g.cell};
+  }, uid);
+  const {a,b,far,dark,near,edge,scout,creature} = setup;
+  await player.keyboard.press('Escape');
+  const settle = async () => {
+    await player.evaluate(()=>new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done))));
+    await player.waitForFunction(()=>window.__vtt.board.sightSettled() && window.__vtt.board.spellPainter.idle);
+    await player.evaluate(()=>new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done))));
+  };
+  async function colors(points) {
+    await settle();
+    const data = (await player.screenshot()).toString('base64');
+    return player.evaluate(async ({data,points})=>{
+      const im = new Image(); im.src='data:image/png;base64,'+data; await im.decode();
+      const canvas=document.createElement('canvas');canvas.width=im.width;canvas.height=im.height;
+      const ctx=canvas.getContext('2d',{willReadFrequently:true}); ctx.drawImage(im,0,0);
+      return points.map(p=>{
+        const {x,y}=window.__vtt.board.worldToScreen(p);
+        return [...ctx.getImageData(Math.round(x),Math.round(y),1,1).data].slice(0,3);
+      });
+    },{data,points});
+  }
+  await player.waitForFunction(()=>window.__vtt.board.maskActors);
+  await player.evaluate(p=>window.__vtt.board.centerOn(p),near);
+  await dm.evaluate(()=>window.__vtt.client.exploreNow());
+  await player.waitForFunction(p=>window.__vtt.board.fogMask.fogAt(p).seen,near);
+  const [initial,unknown] = await colors([near,dark]);
+  check('visible ink is green and unexplored ground black',initial[1]>230 && Math.max(...unknown)<5,JSON.stringify([initial,unknown]));
+  await dm.evaluate(({scout,b})=>window.__vtt.client.moveTokens([{id:scout,...b}]),{scout,b});
+  await player.waitForFunction(id=>window.__vtt.board.outOfSight.has(id),creature);
+  const [memory,visible,other] = await colors([near,edge,far]);
+  check('static green ink is muted in memory and fully coloured in current sight',memory[1]>130 && memory[1]<210 && memory[0]>12 && visible[1]>230,JSON.stringify([memory,visible]));
+  check('another player’s scout reveals no live or remembered terrain here',Math.max(...other)<5,JSON.stringify(other));
+  const spell = await dm.evaluate(({near,edge,cell})=>window.__vtt.client.addDrawing({k:'sphere',p:[(near.x+edge.x)/2,near.y,edge.x+cell,edge.y].join(','),color:'#ff0000',w:2,fill:.85,spell:{range:18,walls:false,elevation:false}}),setup);
+  await player.waitForFunction(id=>window.__vtt.client.scene.draws.has(id),spell);
+  const [hiddenSpell,liveSpell] = await colors([near,edge]);
+  check('one spell stops precisely at current sight',hiddenSpell.every((v,i)=>Math.abs(v-memory[i])<=2) && liveSpell[0]>visible[0]+30,JSON.stringify([hiddenSpell,liveSpell]));
+  await player.evaluate(p=>{const b=window.__vtt.board;b.zoomBy(1.3);b.centerOn(p);},near);
+  const [zoomed]=await colors([near]);
+  check('panning and zooming keep the spell out of grey ground',zoomed.every((v,i)=>Math.abs(v-memory[i])<=2),JSON.stringify(zoomed));
+  const second = await dm.evaluate(({a,uid})=>window.__vtt.client.addToken({name:'Second scout',...a,ownerUid:uid,sight:15}),{a,uid});
+  await player.waitForFunction(({id,second})=>window.__vtt.board.views.has(second) && !window.__vtt.board.outOfSight.has(id),{id:creature,second});
+  const [restored]=await colors([near]);
+  check('another of the same player’s scouts restores the creature and the spell',restored[0]>memory[0]+30,JSON.stringify(restored));
+  await dm.evaluate(id=>window.__vtt.client.updateTokens([id],{sight:0}),second);
+  await player.waitForFunction(id=>window.__vtt.board.outOfSight.has(id),creature);
+  await dm.evaluate(()=>window.__vtt.client.updateScene({light:{ambient:'dark'}}));
+  await player.waitForFunction(()=>window.__vtt.client.scene.meta.light.ambient==='dark');
+  const [darkMemory] = await colors([near]);
+  check('darkness preserves readable remembered ground',darkMemory.every((v,i)=>Math.abs(v-memory[i])<=2),JSON.stringify(darkMemory));
+  await dm.evaluate(()=>window.__vtt.client.updateScene({light:{ambient:'bright'}}));
+  await player.reload();
+  await player.waitForFunction(({p,id})=>window.__vtt?.board?.fogMask.fogAt(p).seen && window.__vtt.board.outOfSight.has(id),{p:near,id:creature});
+  check('the remembered area survives rejoining',true);
+  await dm.evaluate(p=>window.__vtt.client.addFogOp({m:'h',t:'rect',p:[p.x-20,p.y-20,40,40].join(',')}),near);
+  await player.waitForFunction(p=>!window.__vtt.board.fogMask.fogAt(p).seen,near);
+  await player.evaluate(p=>window.__vtt.board.centerOn(p),near);
+  const [covered]=await colors([near]);
+  check('a Hide brush forgets just the covered spot',Math.max(...covered)<5,JSON.stringify(covered));
+  await dm.evaluate(p=>window.__vtt.client.addFogOp({m:'r',t:'rect',p:[p.x-20,p.y-20,40,40].join(',')}),near);
+  await player.waitForFunction(p=>window.__vtt.board.fogMask.fogAt(p).seen,near);
+  const [brush]=await colors([near]);
+  check('a manual reveal shows terrain while concealing the spell',brush.every((v,i)=>Math.abs(v-memory[i])<=2),JSON.stringify(brush));
+  const lampSpot = {x:b.x-setup.cell*2.5,y:b.y};
+  await dm.evaluate(async ({p,scout})=>{
+    const {client}=window.__vtt;
+    await client.updateScene({light:{ambient:'dark'}});
+    await client.updateTokens([scout],{dv:0});
+    await client.resetFog('hidden');
+    await client.addToken({...p,name:'Lamp',shape:'none',size:.5,sight:0,light:{b:2,d:0,c:'#ffffff'}});
+  },{p:lampSpot,scout});
+  await player.waitForFunction(({p,uid})=>{
+    const {client,board}=window.__vtt;
+    return client.scene.meta.light.ambient==='dark' && [...client.scene.fogOps.values()].some(op=>op.m==='x' && op.viewer===uid && op.t==='poly') && board.fogMask.fogAt(p).seen;
+  },{p:lampSpot,uid});
+  const unlit = {x:b.x+setup.cell*2.5,y:b.y};
+  check('a stationary scout remembers a new lamp-lit patch without exploring the unlit side',
+    await player.evaluate(p=>!window.__vtt.board.fogMask.fogAt(p).seen,unlit));
+} finally { await browser.close(); }
+console.log(errors.join('\n'));
+process.exitCode = results.includes(false) || errors.some(e=>/pageerror|shader error/i.test(e)) ? 1 : 0;

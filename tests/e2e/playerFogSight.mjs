@@ -58,6 +58,8 @@ async function samples(at = points) {
     });
   },{points:at,data:png.toString('base64')});
 }
+// This suite measures the live shadow against black. Explored ground has its own pixel test.
+await dm.evaluate(() => window.__vtt.client.updateScene({fog:{explore:false}}, {record:false}));
 const before = await samples();
 await dm.locator('.dock button',{hasText:'Hide everything'}).click();
 await player.waitForFunction(() => window.__vtt.client.scene.meta.fog.enabled);

@@ -131,7 +131,7 @@ describe('model normalisation', () => {
     const m = normalizeSceneMeta({});
     expect(m.grid.cell).toBe(70);
     expect(m.mapLocked).toBe(true);
-    expect(m.fog).toEqual({ enabled: false, base: 'hidden', vision: false, explore: false, dim: true, gradientVision: false });
+    expect(m.fog).toEqual({ enabled: false, base: 'hidden', vision: false, explore: true, dim: true, gradientVision: false });
   });
   it('never writes undefined / null optional fields', () => {
     const wire = tokenToWire(normalizeToken('x', { x: 1, y: 2 }, true));

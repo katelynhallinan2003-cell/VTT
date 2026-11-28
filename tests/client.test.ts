@@ -173,7 +173,7 @@ describe('TableClient over the mock backend', () => {
     await dm.addFogOp({ m: 'h', t: 'rect', p: '10,10,20,20' });
     await waitFor(() => pl.scene?.fogOps.size === 2, 'fog ops');
     expect(pl.fogOpsSorted().map(([, o]) => o.m)).toEqual(['r', 'h']);
-    expect(pl.scene!.meta!.fog).toEqual({ enabled: true, base: 'hidden', vision: true, explore: false, dim: true, gradientVision: false });
+    expect(pl.scene!.meta!.fog).toEqual({ enabled: true, base: 'hidden', vision: true, explore: true, dim: true, gradientVision: false });
     await dm.undoFog();
     await waitFor(() => pl.scene?.fogOps.size === 1, 'undo');
     await dm.resetFog('clear');
@@ -511,7 +511,9 @@ describe('TableClient over the mock backend', () => {
     await waitFor(() => !!dm.scene?.tokens.get(id), 'token');
     await dm.resetFog('hidden');
     await waitFor(() => dm.scene?.meta?.fog.enabled === true, 'fog on');
-    expect(await dm.exploreNow()).toBe(0); // switched off
+    await dm.updateScene({ fog: { explore: false } });
+    await waitFor(() => dm.scene?.meta?.fog.explore === false);
+    expect(await dm.exploreNow()).toBe(0);
 
     await dm.updateScene({ fog: { vision: true, explore: true } });
     await waitFor(() => dm.scene?.meta?.fog.explore === true, 'explore on');
@@ -539,16 +541,16 @@ describe('TableClient over the mock backend', () => {
     void sid;
   });
 
-  it('writes plain reveals instead when remembered ground is not to be greyed', async () => {
-    const { dm } = await setup();
-    const id = await dm.addToken({ x: 350, y: 350, name: 'Scout', size: 1, sight: 30 }, { record: false });
+  it('keeps ownership and exploration history when the DM turns off the grey tint', async () => {
+    const { dm, pl } = await setup();
+    const id = await dm.addToken({ x: 350, y: 350, name: 'Scout', size: 1, sight: 30, ownerUid: pl.uid }, { record: false });
     await waitFor(() => !!dm.scene?.tokens.get(id), 'token');
     await dm.resetFog('hidden');
     await dm.updateScene({ fog: { vision: true, explore: true, dim: false } });
     await waitFor(() => dm.scene?.meta?.fog.dim === false, 'dim off');
     expect(await dm.exploreNow()).toBe(1);
     await waitFor(() => dm.scene!.fogOps.size === 1, 'reveal');
-    expect([...dm.scene!.fogOps.values()][0]).toMatchObject({ m: 'r', t: 'line' });
+    expect([...dm.scene!.fogOps.values()][0]).toMatchObject({ m: 'x', t: 'line', viewer: pl.uid });
   });
 });
 

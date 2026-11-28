@@ -158,6 +158,8 @@ export class Board {
   private segCache: { scene: unknown; rev: number; ground: Terrain | null; gradientVision: boolean; sight: SightSegments; move: Seg[]; terrain: TerrainEdge[]; levelJoins: Seg[]; openings: Seg[] } = { scene: null, rev: -1, ground: null, gradientVision: false, sight: [], move: [], terrain: [], levelJoins: [], openings: [] };
   private auraG = new Graphics();
   private ghostLayer = new Container();
+  private actors = new Container();
+  private overlays = new Container();
   private overlayG = new Graphics();
   private fxLayer = new Container();
   private plotLabels: Text[] = [];
@@ -312,7 +314,9 @@ export class Board {
     this.distText.visible = false;
     this.ghostLayer.sortableChildren = true;
     this.terrainGraphics.addChild(this.terrainLayer.container, this.roughG, this.terrainBrushG);
-    this.world.addChild(this.mapLayer, this.extraLayer, this.gridG, this.terrainGraphics, this.terrainMask, this.lightLayer.tint, this.drawLayer.container, this.wallLayer.container, this.auraG, this.tokenLayer, this.ghostLayer, this.lightLayer.container, this.fogLayer, this.overlayG, this.fxLayer, this.distText);
+    this.actors.addChild(this.auraG, this.tokenLayer, this.ghostLayer, this.lightLayer.container);
+    this.overlays.addChild(this.overlayG, this.fxLayer, this.distText);
+    this.world.addChild(this.mapLayer, this.extraLayer, this.gridG, this.terrainGraphics, this.terrainMask, this.lightLayer.tint, this.drawLayer.container, this.drawLayer.templates, this.wallLayer.container, this.actors, this.fogLayer, this.overlays);
     app.stage.addChild(this.world);
 
     this.bindInput(app.canvas);
@@ -619,7 +623,9 @@ export class Board {
       this.reconcileTokens();
       this.dirty = true;
     }
-    if (scene.fogRev !== this.seenFogRev) {
+    const identity = c.playerIdentity(c.uid);
+    if (scene.fogRev !== this.seenFogRev || identity !== this.fogIdentity) {
+      this.fogIdentity = identity;
       this.seenFogRev = scene.fogRev;
       this.updateFog();
     }
@@ -652,6 +658,8 @@ export class Board {
     this.terrainLayer.reset();
     for (const v of this.views.values()) v.destroy();
     this.views.clear();
+    this.outOfSight.clear();
+    this.fogMask.clear();
     this.drag = null;
     this.polyPts = [];
     this.ui.select([]);
@@ -1106,6 +1114,7 @@ export class Board {
   }
 
   private hitToken(p: Vec): Token | null {
+    if (!this.canSeeObjectAt(p)) return null;
     const list = [...this.views.values()].sort((a, b) => b.container.zIndex - a.container.zIndex);
     for (const v of list) {
       if (this.outOfSight.has(v.token.id)) continue;
@@ -1759,7 +1768,7 @@ export class Board {
   visionNow(): { id: string; x: number; y: number; r: number; alt?: number }[] {
     const meta = this.client.scene?.meta;
     if (!meta || !meta.fog.enabled || !meta.fog.vision) return [];
-    const toks = [...this.views.values()].filter((v) => !v.token.hidden);
+    const toks = [...this.views.values()].filter((v) => !v.token.hidden && this.client.sharesSight(v.token));
     const circles = visionCircles(toks.map((v) => v.token), meta.grid, (t) => {
       const v = this.views.get(t.id)!;
       return v.testPos ? { x: v.token.x, y: v.token.y } : v.display;
@@ -1787,7 +1796,7 @@ export class Board {
       const l = t.light ? lightOf(t, g, at, this.sightHeightAt(t.id, at)) : null;
       if (l) lights.push(l);
       const w = viewerOf(t, g, at, this.sightHeightAt(t.id, at));
-      if (w) viewers.push(w);
+      if (w && this.client.sharesSight(t)) viewers.push(w);
     }
     // the marker of a light can be hidden from this viewer (so it has no view here), but its light still shines
     for (const t of scene.tokens.values()) {
@@ -1806,28 +1815,38 @@ export class Board {
   private outOfSight = new Set<string>();
 
   private drawVision() {
-    this.syncOutOfSight(this.drawVisionShape());
+    const test = this.drawVisionShape();
+    const settings = this.client.scene?.meta?.fog;
+    const mask = !!(this.fogView?.mesh.visible && settings?.vision && settings.explore && settings.dim && (!this.client.isDM || this.ui.data.dmPreview));
+    if (mask !== this.maskActors) {
+      const filters = mask ? [this.fogView!.actorFilter] : null;
+      for (const layer of [this.drawLayer.templates, this.actors, this.overlays]) layer.filters = filters;
+      this.drawLayer.maskTemplates(mask);
+      this.maskActors = mask;
+    }
+    if (mask) this.fogView!.setCamera(this.cam.tx, this.cam.ty, this.cam.zoom);
+    this.liveTest = mask ? test : null;
+    this.syncOutOfSight();
   }
 
-  /** Hide what stands in the grey of the fog from the players, and show it again once it is seen. `test`: can this spot be seen right now (null: no fog to look through). */
-  private syncOutOfSight(test: ((p: Vec) => boolean) | null) {
-    const meta = this.client.scene?.meta;
-    const want = new Set<string>();
-    const dmView = this.client.isDM && !this.ui.data.dmPreview;
-    if (!dmView && test && meta?.fog.enabled && meta.fog.vision && meta.fog.explore && meta.fog.dim && this.fogView?.mesh.visible) {
-      for (const v of this.views.values()) {
-        const t = v.token;
-        // the party always sees itself, and a light stays where it was seen
-        if (t.ownerUid != null || isLightMark(t)) continue;
-        if (this.fogMask.fogAt(v.display).seen && !test(v.display)) want.add(t.id);
-      }
+  private fogIdentity = '';
+  private maskActors = false;
+  private liveTest: ((p: Vec) => boolean) | null = null;
+
+  private canSeeObjectAt(p: Vec) {
+    return !this.maskActors || !!this.liveTest?.(p) || !this.fogMask.coveredAt(p);
+  }
+
+  private syncOutOfSight() {
+    const hidden = new Set<string>();
+    for (const view of this.views.values()) {
+      const visible = this.canSeeObjectAt(view.display);
+      view.container.visible = visible;
+      if (!visible) hidden.add(view.token.id);
     }
-    let changed = want.size !== this.outOfSight.size;
-    if (!changed) for (const id of want) if (!this.outOfSight.has(id)) { changed = true; break; }
-    if (!changed) return;
-    this.outOfSight = want;
-    for (const v of this.views.values()) v.container.visible = !want.has(v.token.id);
-    this.invalidate();
+    this.outOfSight = hidden;
+    const selection = this.ui.data.selection;
+    if ([...selection].some(id => hidden.has(id))) this.ui.select([...selection].filter(id => !hidden.has(id)));
   }
 
   /** How far the fog's soft edge reaches, in map pixels. */
@@ -2246,7 +2265,9 @@ export class Board {
       return;
     }
     const rect = sceneRect(meta) ?? { x: 0, y: 0, w: 2000, h: 1500 };
-    const changed = this.fogMask.sync(this.client.fogOpsSorted(), meta.fog, rect);
+    const viewer = this.client.playerIdentity(this.client.uid);
+    const ops = this.client.fogOpsSorted().filter(([, op]) => !op.viewer || this.client.isDM || op.viewer === viewer);
+    const changed = this.fogMask.sync(ops, meta.fog, rect);
     if (!this.fogMask.hasCover) {
       this.client.noteFogClear();
       if (this.fogView) this.fogView.mesh.visible = false;
@@ -2954,7 +2975,7 @@ export class Board {
   private handleAt(p: Vec): { d: Drawing; h: ReturnType<typeof handlesOf>[number] } | null {
     if (this.ui.data.heightPatches || this.ui.data.drawSel.size !== 1) return null;
     const d = this.shownDrawing([...this.ui.data.drawSel][0]);
-    if (!d || !this.client.canEditDrawing(d)) return null;
+    if (!d || !this.client.canEditDrawing(d) || (isTemplate(d.k) && !this.canSeeObjectAt(p))) return null;
     const r = 7 / this.cam.zoom;
     for (const h of this.drawingHandles(d)) if (Math.abs(p.x - h.x) <= r && Math.abs(p.y - h.y) <= r) return { d, h };
     return null;
@@ -2972,7 +2993,7 @@ export class Board {
     const grid=this.client.grid;
     if(!isTemplate(d.k)) return hitDrawing(d,p,tolerance,grid,solid);
     const [a,b]=parsePts(d.p);
-    if(!b || !onMap(p,this.terrainMaps)) return false;
+    if(!b || !onMap(p,this.terrainMaps) || !this.canSeeObjectAt(p)) return false;
     const volume=spellVolume(d,a,b,grid,{segs:[],ground:q=>this.groundAtPoint(q)});
     return solid ? volume.hits(p) : hitDrawing(d,p,tolerance,grid,false,volume.geom);
   }
@@ -3665,7 +3686,7 @@ export class Board {
       case 'marquee': {
         d.cur = w;
         const r = normRect(d.start, w);
-        const inside = [...this.views.values()].filter((v) => rectContains(r, v.display)).map((v) => v.token.id);
+        const inside = [...this.views.values()].filter((v) => !this.outOfSight.has(v.token.id) && rectContains(r, v.display)).map((v) => v.token.id);
         this.ui.select([...d.base, ...inside]);
         break;
       }
@@ -4003,7 +4024,7 @@ export class Board {
     }
     if (mod && e.key.toLowerCase() === 'a') {
       e.preventDefault();
-      ui.select([...this.views.keys()]);
+      ui.select([...this.views.keys()].filter(id => !this.outOfSight.has(id)));
       return;
     }
     if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); void this.runHistory(e.shiftKey ? 'redo' : 'undo'); return; }

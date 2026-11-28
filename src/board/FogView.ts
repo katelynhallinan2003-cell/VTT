@@ -1,5 +1,6 @@
 import { Container, Filter, GlProgram, Mesh, MeshGeometry, RenderTexture, Shader, Sprite, Texture, type Renderer } from 'pixi.js';
 import type { Rect, Vec } from '../types';
+import { GREY_FOG } from '../core/fog';
 import { canvasTexture } from './textures';
 
 // The fog is drawn on the GPU. The scene's fog (hidden, revealed and explored
@@ -27,26 +28,53 @@ void main() {
   vWorld = aPosition;
 }`;
 
+const liveSight = `
+uniform sampler2D uSight;
+uniform vec4 uSightMap;
+uniform vec4 uSightClamp;
+uniform float uSightOn;
+float sightAt(vec2 world) {
+  vec2 s = (world - uSightMap.xy) * uSightMap.zw;
+  if (uSightOn < 0.5 || any(lessThan(s, uSightClamp.xy)) || any(greaterThan(s, uSightClamp.zw))) return 0.0;
+  return texture(uSight, s).a;
+}`;
+
 const fogFragment = `
 precision highp float;
 in vec2 vUV;
 in vec2 vWorld;
 out vec4 finalColor;
 uniform sampler2D uFog;
-uniform sampler2D uSight;
-uniform vec4 uSightMap;
-uniform vec4 uSightClamp;
-uniform float uSightOn;
 uniform float uAlpha;
+${liveSight}
 void main() {
   float fog = texture(uFog, vUV).a;
-  float seen = 0.0;
-  if (uSightOn > 0.5) {
-    vec2 s = (vWorld - uSightMap.xy) * uSightMap.zw;
-    if (s.x >= uSightClamp.x && s.y >= uSightClamp.y && s.x <= uSightClamp.z && s.y <= uSightClamp.w) seen = texture(uSight, s).a;
+  float a = fog * (1.0 - sightAt(vWorld)) * uAlpha;
+  float memory = 1.0 - smoothstep(${GREY_FOG}, 1.0, fog);
+  finalColor = vec4(vec3(0.24, 0.26, 0.28) * memory * a, a);
+}`;
+
+// The same fog and live-sight textures clip moving things pixel by pixel.
+// A spell spanning a doorway can show its near half while its far half stays hidden.
+const actorFragment = `
+precision highp float;
+in vec2 vTextureCoord;
+in vec2 vScreen;
+out vec4 finalColor;
+uniform sampler2D uTexture;
+uniform sampler2D uFog;
+uniform vec4 uFogMap;
+uniform vec4 uCamera;
+${liveSight}
+void main() {
+  vec2 world = (vScreen - uCamera.xy) * uCamera.z;
+  vec2 uv = (world - uFogMap.xy) * uFogMap.zw;
+  float visibility = 1.0;
+  if (all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0)))) {
+    float covered = smoothstep(0.0, ${GREY_FOG}, texture(uFog, uv).a);
+    visibility = mix(1.0, smoothstep(0.10, 0.45, sightAt(world)), covered);
   }
-  float a = fog * (1.0 - seen) * uAlpha;
-  finalColor = vec4(0.0, 0.0, 0.0, a);
+  finalColor = texture(uTexture, vTextureCoord) * visibility;
 }`;
 
 // One direction of a separable Gaussian. Pairs of taps share one bilinear
@@ -86,11 +114,13 @@ void main() {
 const filterVertex = `
 in vec2 aPosition;
 out vec2 vTextureCoord;
+out vec2 vScreen;
 uniform vec4 uInputSize;
 uniform vec4 uOutputFrame;
 uniform vec4 uOutputTexture;
 void main(void) {
   vec2 position = aPosition * uOutputFrame.zw + uOutputFrame.xy;
+  vScreen = position;
   position.x = position.x * (2.0 / uOutputTexture.x) - 1.0;
   position.y = position.y * (2.0 * uOutputTexture.z / uOutputTexture.y) - uOutputTexture.z;
   gl_Position = vec4(position, 0.0, 1.0);
@@ -137,6 +167,7 @@ export class FogView {
   private fogSize = '';
   private rect: Rect = { x: 0, y: 0, w: 1, h: 1 };
   private shader: Shader;
+  readonly actorFilter: Filter;
   private sightRT: RenderTexture | null = null;
   private stage = new Container();
   private shape = new Mesh({ geometry: new MeshGeometry({ positions: new Float32Array(6), uvs: new Float32Array(6), indices: new Uint32Array([0, 1, 2]) }), texture: Texture.WHITE });
@@ -155,12 +186,19 @@ export class FogView {
         uFog: Texture.EMPTY.source,
         uSight: Texture.EMPTY.source,
         fogUniforms: {
+          uCamera: { value: new Float32Array(4), type: 'vec4<f32>' },
+          uFogMap: { value: new Float32Array(4), type: 'vec4<f32>' },
           uSightMap: { value: new Float32Array(4), type: 'vec4<f32>' },
           uSightClamp: { value: new Float32Array(4), type: 'vec4<f32>' },
           uSightOn: { value: 0, type: 'f32' },
           uAlpha: { value: 1, type: 'f32' },
         },
       },
+    });
+    this.actorFilter = new Filter({
+      glProgram: GlProgram.from({ vertex: filterVertex, fragment: actorFragment, name: 'fog-live-objects' }),
+      resources: { uFog: Texture.EMPTY.source, uSight: Texture.EMPTY.source, fogUniforms: this.shader.resources.fogUniforms },
+      resolution: 'inherit',
     });
     this.mesh = new Mesh({ geometry, shader: this.shader });
     this.stage.addChild(this.shape, this.picture);
@@ -170,13 +208,14 @@ export class FogView {
 
   /** The fog's own picture (black where it is fogged), covering `rect` on the map. Call `fogChanged` when its pixels change. */
   setFog(canvas: HTMLCanvasElement, rect: Rect) {
+    this.uniforms.uFogMap.set([rect.x, rect.y, 1 / rect.w, 1 / rect.h]);
     const size = `${canvas.width}x${canvas.height}`;
     if (canvas !== this.fogCanvas || size !== this.fogSize || this.fogTex === Texture.EMPTY) {
       const old = this.fogTex;
       this.fogTex = canvasTexture(canvas);
       this.fogCanvas = canvas;
       this.fogSize = size;
-      this.shader.resources.uFog = this.fogTex.source;
+      this.actorFilter.resources.uFog = this.shader.resources.uFog = this.fogTex.source;
       if (old !== Texture.EMPTY) old.destroy(true);
     }
     if (rect.x !== this.rect.x || rect.y !== this.rect.y || rect.w !== this.rect.w || rect.h !== this.rect.h) {
@@ -184,6 +223,11 @@ export class FogView {
       const { x, y, w, h } = rect;
       this.mesh.geometry.positions = new Float32Array([x, y, x + w, y, x + w, y + h, x, y + h]);
     }
+  }
+
+  setCamera(tx: number, ty: number, zoom: number) {
+    const camera = this.uniforms.uCamera;
+    camera[0] = tx; camera[1] = ty; camera[2] = 1 / zoom;
   }
 
   fogChanged() { if (this.fogTex !== Texture.EMPTY) this.fogTex.source.update(); }
@@ -202,7 +246,7 @@ export class FogView {
       const old = this.sightRT;
       this.capacity = Math.min(SIGHT_MAX, need);
       this.sightRT = RenderTexture.create({ width: this.capacity, height: this.capacity, antialias: false });
-      this.shader.resources.uSight = this.sightRT.source;
+      this.actorFilter.resources.uSight = this.shader.resources.uSight = this.sightRT.source;
       old?.destroy(true);
     }
     return this.sightRT;
@@ -287,6 +331,7 @@ export class FogView {
   }
 
   destroy() {
+    this.actorFilter.destroy();
     this.mesh.destroy();
     this.shape.destroy();
     this.picture.destroy();

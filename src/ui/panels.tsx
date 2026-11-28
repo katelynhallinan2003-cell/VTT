@@ -496,7 +496,7 @@ export function ScenePanel(props: { client: TableClient; ui: UiState; board: Boa
               hint="Ground a token has seen stays revealed. It is only recorded while your browser is open." />
             {meta.fog.explore && (
               <Toggle checked={meta.fog.dim} onChange={(v) => { void client.updateScene({ fog: { dim: v } }); }} label="Grey out what they cannot see right now"
-                hint="Ground they saw earlier turns grey, and monsters on it stay out of sight until someone looks again." />
+                hint="Previously seen ground stays grey. Tokens and spells appear wherever your scouts can currently see." />
             )}
             <SightAll client={client} />
           </>

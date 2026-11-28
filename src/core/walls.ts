@@ -339,11 +339,7 @@ export function inPoly(p: Vec, poly: Vec[]): boolean {
 
 export type RevealShape = { t: 'line'; pts: Vec[]; w: number } | { t: 'poly'; pts: Vec[] };
 
-/**
- * What a token reveals as it walks a route: with no wall anywhere near, one thick line (as before); otherwise
- * what it could see from a spot every `step` pixels along the way, so it does not reveal rooms it only walked past.
- */
-export function routeReveal(route: Vec[], r: number, segs: Seg[], step: number, alt?: number | ((p: Vec) => number)): RevealShape[] {
+export function routeSamples(route: Vec[], step: number): Vec[] {
   if (!route.length) return [];
   const samples: Vec[] = [route[0]];
   for (let i = 1; i < route.length; i++) {
@@ -352,6 +348,16 @@ export function routeReveal(route: Vec[], r: number, segs: Seg[], step: number, 
     const n = Math.max(1, Math.ceil(len / step));
     for (let k = 1; k <= n; k++) samples.push({ x: a.x + ((b.x - a.x) * k) / n, y: a.y + ((b.y - a.y) * k) / n });
   }
+  return samples;
+}
+
+/**
+ * What a token reveals as it walks a route: with no wall anywhere near, one thick line (as before); otherwise
+ * what it could see from a spot every `step` pixels along the way, so it does not reveal rooms it only walked past.
+ */
+export function routeReveal(route: Vec[], r: number, segs: Seg[], step: number, alt?: number | ((p: Vec) => number)): RevealShape[] {
+  if (!route.length) return [];
+  const samples = routeSamples(route, step);
   const vis = samples.map((s) => visibilityPolygon(s, r, segs, 64, typeof alt === 'function' ? alt(s) : alt));
   if (vis.every((v) => v.free)) return [{ t: 'line', pts: route, w: r * 2 }];
   return vis.flatMap(v => [v.poly,...v.faces].map(p => ({ t: 'poly' as const, pts: simplifyPoly(p, 0.75) })));

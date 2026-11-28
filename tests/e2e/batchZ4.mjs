@@ -58,7 +58,7 @@ const fOld = await fogAt(oldSpot), fFar = await fogAt(farSpot);
 check('where it started is now seen ground under fog', fOld.fog && fOld.seen, JSON.stringify(fOld));
 check('ground it never saw is fog that was never seen', fFar.fog && !fFar.seen, JSON.stringify(fFar));
 const aOld = await alphaAt(oldSpot), aFar = await alphaAt(farSpot);
-check('seen ground is drawn lighter than unseen ground', aFar === 255 && aOld > 120 && aOld < 200, `${aOld} vs ${aFar}`);
+check('seen ground is drawn lighter than unseen ground', aFar === 255 && aOld > 90 && aOld < 135, `${aOld} vs ${aFar}`);
 check('ops written for it are the grey kind', await dm.evaluate(() => [...window.__vtt.client.scene.fogOps.values()].every((o) => o.m === 'x')));
 
 // ---- as a player: the grey ground hides what stands in it, and the clear ground does not

@@ -129,7 +129,7 @@ export function normalizeSceneMeta(raw: any): SceneMeta {
       enabled: bool(m.fog?.enabled, false),
       base: m.fog?.base === 'clear' ? 'clear' : 'hidden',
       vision: bool(m.fog?.vision, false),
-      explore: bool(m.fog?.explore, false),
+      explore: bool(m.fog?.explore, true),
       dim: bool(m.fog?.dim, true),
     },
     light: {
@@ -399,9 +399,10 @@ export function initPubToWire(p: InitPub | null): Record<string, unknown> | null
 export function normalizeFogOp(raw: any): FogOp | null {
   if (!raw || typeof raw.p !== 'string') return null;
   const m = raw.m === 'h' ? 'h' : raw.m === 'x' ? 'x' : 'r';
-  if (raw.t === 'rect') return { m, t: 'rect', p: raw.p };
-  if (raw.t === 'poly') return { m, t: 'poly', p: raw.p };
-  if (raw.t === 'line') return { m, t: 'line', p: raw.p, w: num(raw.w, 40) };
+  const scope = m === 'x' && typeof raw.viewer === 'string' ? { viewer: raw.viewer } : {};
+  if (raw.t === 'rect') return { ...scope, m, t: 'rect', p: raw.p };
+  if (raw.t === 'poly') return { ...scope, m, t: 'poly', p: raw.p };
+  if (raw.t === 'line') return { ...scope, m, t: 'line', p: raw.p, w: num(raw.w, 40) };
   return null;
 }
 

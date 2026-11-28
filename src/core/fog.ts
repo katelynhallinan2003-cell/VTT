@@ -1,7 +1,7 @@
 import type { FogMode, FogOp, FogSettings, Rect, Vec } from '../types';
 
 /** How much of the fog stays over ground that was seen once and is out of sight now (0 = none, 1 = all). */
-export const GREY_FOG = 0.58;
+export const GREY_FOG = 0.46;
 
 /** "x,y,x,y,..." <-> points. One short string per op keeps the database small and atomic. */
 export function encodePoints(points: Vec[]): string {
@@ -42,14 +42,15 @@ export function paintOp(ctx: Ctx2D, op: FogOp, origin: Vec, scale: number, erase
     const [x, y, w, h] = op.p.split(',').map(Number);
     if ([x, y, w, h].every(Number.isFinite)) ctx.fillRect(x, y, w, h);
   } else if (op.t === 'poly') {
-    const pts = decodePoints(op.p);
-    if (pts.length >= 3) {
-      ctx.beginPath();
+    ctx.beginPath();
+    for (const ring of op.p.split(';')) {
+      const pts = decodePoints(ring);
+      if (pts.length < 3) continue;
       ctx.moveTo(pts[0].x, pts[0].y);
       for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
       ctx.closePath();
-      ctx.fill();
     }
+    ctx.fill(op.p.includes(';') ? 'evenodd' : 'nonzero');
   } else if (op.t === 'line') {
     const pts = decodePoints(op.p);
     ctx.lineWidth = op.w;
@@ -85,7 +86,9 @@ export class FogMask {
   /** the ground that has been seen once (white), wiped where the fog is put back */
   private seenCanvas = document.createElement('canvas');
   private seenCtx = this.seenCanvas.getContext('2d', { willReadFrequently: true })!;
-  private applied: string[] = [];
+  // Token picking queries the same small patches repeatedly while the camera moves.
+  private coverTiles = new Map<number, Uint8ClampedArray>();
+  private applied: [string, FogOp][] = [];
   private key = '';
   /** whether any ground has been marked as explored (nothing to put together otherwise) */
   private hasSeen = false;
@@ -111,11 +114,10 @@ export class FogMask {
     const scale = Math.min(1, maxSide / Math.max(rect.w, rect.h, 1));
     const w = Math.max(1, Math.ceil(rect.w * scale));
     const h = Math.max(1, Math.ceil(rect.h * scale));
-    const key = `${settings.base}|${rect.x},${rect.y},${rect.w},${rect.h}|${w}x${h}`;
-    const ids = ops.map(([id]) => id);
+    const key = `${settings.base}|${settings.vision}|${settings.explore}|${settings.dim}|${rect.x},${rect.y},${rect.w},${rect.h}|${w}x${h}`;
     const sameBase = key === this.key;
-    const isExtension = sameBase && ids.length >= this.applied.length && this.applied.every((id, i) => id === ids[i]);
-    if (isExtension && ids.length === this.applied.length) return false;
+    const isExtension = sameBase && ops.length >= this.applied.length && this.applied.every(([id, op], i) => id === ops[i][0] && op === ops[i][1]);
+    if (isExtension && ops.length === this.applied.length) return false;
 
     if (!isExtension) {
       for (const c of [this.canvas, this.fogCanvas, this.seenCanvas]) {
@@ -138,11 +140,13 @@ export class FogMask {
     if (!isExtension) this.hasCover = settings.base === 'hidden';
     for (let i = this.applied.length; i < ops.length; i++) {
       const op = ops[i][1];
-      if (op.m === 'x') {
-        paintOp(this.seenCtx, op, this.origin, this.scale);
+      if (op.m === 'x' && !settings.explore) continue;
+      const remembered = settings.vision && settings.explore && settings.dim;
+      if (remembered && op.m !== 'h') {
+        paintOp(this.seenCtx, op, this.origin, this.scale, false);
         this.hasSeen = true;
       } else {
-        paintOp(this.fogCtx, op, this.origin, this.scale);
+        paintOp(this.fogCtx, op, this.origin, this.scale, op.m !== 'h');
         if (op.m === 'h') this.hasCover = true;
         checkCover = true;
         // fog put back over ground covers it again: it has to be seen anew
@@ -157,7 +161,8 @@ export class FogMask {
         for (let i=3;i<data.length;i+=4) if (data[i]) { this.hasCover = true; break; }
       }
     }
-    this.applied = ids;
+    this.coverTiles.clear();
+    this.applied = ops;
     this.key = key;
     this.compose();
     return true;
@@ -178,6 +183,19 @@ export class FogMask {
       ctx.globalAlpha = 1;
     }
     ctx.globalCompositeOperation = 'source-over';
+  }
+
+  coveredAt(p: Vec): boolean {
+    if (!this.hasCover) return false;
+    const x = Math.floor((p.x - this.origin.x) * this.scale), y = Math.floor((p.y - this.origin.y) * this.scale);
+    if (x < 0 || y < 0 || x >= this.canvas.width || y >= this.canvas.height) return false;
+    const left = x - x % 32, top = y - y % 32, key = top * this.canvas.width + left;
+    let rgba = this.coverTiles.get(key);
+    if (!rgba) {
+      rgba = this.fogCtx.getImageData(left, top, 32, 32).data;
+      this.coverTiles.set(key, rgba);
+    }
+    return rgba[((y - top) * 32 + x - left) * 4 + 3] > 127;
   }
 
   /** Is there fog over this spot, and has the ground there been seen before? (Both false: clear ground.) */

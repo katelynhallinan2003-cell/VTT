@@ -121,10 +121,10 @@ try {
   });
   await dm.waitForFunction(()=>{
     const {board,client}=window.__vtt, line=[...client.scene.draws.values()].find(d=>d.k==='beam');
-    const polygons=g=>g.context.instructions.filter(i=>i.action==='stroke').flatMap(i=>i.data.path.instructions)
-      .filter(i=>i.action==='poly').map(i=>JSON.stringify(i.data[0]));
-    const rendered=polygons(board.drawLayer.items.get(line.id).g);
-    return polygons(board.overlayG).some(p=>rendered.includes(p));
+    const outlines=g=>g.context.instructions.filter(i=>i.action==='stroke').map(i=>i.data.path.instructions)
+      .filter(path=>path.some(step=>step.action==='lineTo')).map(path=>JSON.stringify(path));
+    const rendered=outlines(board.drawLayer.items.get(line.id).g);
+    return board.spellPainter.idle && outlines(board.overlayG).some(path=>rendered.includes(path));
   });
   for(const shape of ['square','flat','pointy']) {
     await dm.evaluate(async shape=>{
@@ -140,6 +140,25 @@ try {
   }
   await clear.click();
   await clear.waitFor({state:'detached'});
+  const aura=await dm.evaluate(async id=>{
+    const {client,ui}=window.__vtt, t=client.scene.tokens.get(id);
+    await client.updateTokens([id],{size:3,fly:true,elev:40});
+    const aura=await client.addDrawing({k:'emanation',p:[t.x,t.y,t.x+200,t.y].join(','),color:'#ff8800',
+      w:2,fill:.3,fs:28,txt:'',dash:false,bw:5,of:5,spell:{source:id,stick:true,start:-200,range:25}});
+    ui.set({tplMode:'select',drawSel:new Set([aura])});
+    return aura;
+  },token);
+  const attachedHeight=selected.getByLabel('Starting elevation (ft)');
+  await dm.waitForFunction(()=>document.querySelector('.drawtag input[readonly]')?.value==='40');
+  assert.equal(await attachedHeight.isEditable(),false);
+  await dm.evaluate(id=>window.__vtt.client.updateTokens([id],{elev:24}),token);
+  await dm.waitForFunction(()=>document.querySelector('.drawtag input[readonly]')?.value==='24');
+  await selected.getByLabel('Stick to token').uncheck();
+  await dm.waitForFunction(id=>{
+    const {client,board}=window.__vtt,d=client.scene.draws.get(id);
+    return !d.spell.stick && d.spell.start===24 && d.of===client.grid.ft*3 && board.attachedDrawing(d)===d;
+  },aura);
+  assert(await attachedHeight.isEditable());
   assert.deepEqual(errors,[]);
   console.log('Passed spell controls, token hits, reload, fixed spatial range, projected outlines, and square/hex snapping.');
 } finally { await browser.close(); }

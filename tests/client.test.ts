@@ -36,6 +36,19 @@ async function setup() {
 }
 
 describe('TableClient over the mock backend', () => {
+  it('reuses ground for spell edits and picks up changed or deleted terrain',async()=>{
+    const {dm,dmB,tid,sid}=await setup();
+    const path=P.sceneDraw(tid,sid);
+    await dmB.set(path+'/hill',{k:'rect',hz:15,p:'0,0,100,100'});
+    const hill=dm.groundTerrain;
+    expect(hill.areas[0].h).toBe(15);
+    await dmB.set(path+'/spell',{k:'sphere',p:'0,0,100,100'});
+    expect(dm.groundTerrain).toBe(hill);
+    await dmB.set(path+'/hill/hz',25);
+    expect(dm.groundTerrain.areas[0].h).toBe(25);
+    await dmB.remove(path);
+    expect(dm.groundTerrain.areas).toHaveLength(0);
+  });
   it('creates a table whose first scene becomes live, and players follow it', async () => {
     const { dm, pl, sid } = await setup();
     expect(dm.activeSceneId).toBe(sid);

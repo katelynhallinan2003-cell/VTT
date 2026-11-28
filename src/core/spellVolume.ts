@@ -335,8 +335,9 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
   }
   // The lowest-cost launch is level with the target when possible. A higher
   // point on the same face can clear a rim. Charge its longer diagonal too.
-  function emissionCost(to:Vec,z:number,budget=reach,from=emitterPoint(to)):number {
+  function emissionCost(to:Vec,z:number,budget=reach,from=emitterPoint(to),onlyReach=false):number {
     const lateral=distance(from,to);
+    if (lateral>budget+eps) return Infinity;
     const dz=Math.sqrt(Math.max(0,budget*budget-lateral*lateral));
     const h=elevated ? clamp(z,0,width) : 0;
     const cost=(startZ:number)=>{
@@ -347,14 +348,72 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
       const origin={x:from.x+(a.x-from.x)*f,y:from.y+(a.y-from.y)*f};
       return clear(origin,startZ,to,z) ? spent : Infinity;
     };
+    const top=elevated ? clamp(z+dz,0,width) : h;
+    // For membership only, the highest affordable launch clears everything
+    // that a lower launch clears. Routing still needs the cheaper clear leg.
+    if (onlyReach) return cost(top);
     const direct=cost(h);
     if (direct!==Infinity || !elevated) return direct;
-    const top=clamp(z+dz,0,width);
     return top>h+eps ? cost(top) : Infinity;
   }
   function launchCost(q:Vec,z:number) {
     if(own) return emissionCost(q,z);
     return clear(a,0,q,z) ? travel(a,0,q,z) : Infinity;
+  }
+  // In a vertical slice the shortest open-air route over a ridge is a taut
+  // line over its crests. This also handles the downhill side of a smooth
+  // slope, where there is no wall endpoint for the corner solver to visit.
+  function overCrest(from:Vec,to:Vec,z:number) {
+    // Include any wall exactly on the emitting face, as in emissionCost.
+    const inset=Math.min(.001,Math.max(distance(from,to)*2e-6,eps)/Math.max(1,distance(from,a)));
+    from={x:from.x+(a.x-from.x)*inset,y:from.y+(a.y-from.y)*inset};
+    const dx=to.x-from.x,dy=to.y-from.y,run=Math.hypot(dx,dy);
+    if (!elevated || !run || run>reach+eps) return false;
+    const passage=pathFloor(from,to);
+    const height=(p:Vec,t:number)=>passage?.(p,t) ?? floor(p);
+    const base=height(from,0);
+    if (base>width+eps || height(to,1)>z+eps) return false;
+    const peaks:{t:number;z:number}[]=[];
+    const n=sampleCount(run);
+    for (let i=1;i<n;i++) {
+      const t=i/n;
+      peaks.push({t,z:height({x:from.x+t*dx,y:from.y+t*dy},t)});
+    }
+    const crest=(wall:Seg)=>{
+      if (wall.one && wall.terrainPxPerFt===undefined && sideOf(wall,from)===-wall.one) return false;
+      const t=rayHit(from,dx,dy,wall);
+      if (t>=1-1e-7) return false;
+      if (wall.top===undefined) return true;
+      peaks.push({t,z:(wall.top-start)*px});
+      return false;
+    };
+    if (walls.length>24) wallIndex ??= indexSpellWalls(walls);
+    if (wallIndex ? wallIndex(from,to,crest) : walls.some(crest)) return false;
+    let summit=Math.max(z,base);
+    for (const p of peaks) summit=Math.max(summit,p.z);
+    const launch=clamp(summit,0,width);
+    const hull=[{t:0,z:launch}];
+    peaks.sort((a,b)=>a.t-b.t || b.z-a.z);
+    peaks.push({t:1,z});
+    for (const p of peaks) {
+      const last=hull[hull.length-1];
+      if (last.t===p.t) {
+        if (p.z>last.z+eps) return false;
+        continue;
+      }
+      while (hull.length>=2) {
+        const a=hull[hull.length-2],b=hull[hull.length-1];
+        if ((b.z-a.z)*(p.t-b.t)>(p.z-b.z)*(b.t-a.t)) break;
+        hull.pop();
+      }
+      hull.push(p);
+    }
+    let cost=0;
+    for(let i=1;i<hull.length;i++) {
+      const a=hull[i-1],b=hull[i];
+      cost+=Math.hypot((b.t-a.t)*run,b.z-a.z);
+    }
+    return cost<=reach+eps;
   }
   const tips=new Map<Seg,Station[]>();
   let linkMemo:Map<number,number>|undefined;
@@ -480,11 +539,12 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
         else hi=Math.min(hi,0);
       }
       const z=elevated ? clamp(width,lo,hi) : 0;
-      if(emissionCost(p,z,reach,from)<=reach+eps || (hi>z && emissionCost(p,hi,reach,from)<=reach+eps)) return true;
+      if(emissionCost(p,z,reach,from,true)<=reach+eps || (hi>z && emissionCost(p,hi,reach,from,true)<=reach+eps)) return true;
       // A pillar can screen the nearest point while another part of the face
       // has a clear ray. Check those emitters before charging a corner detour.
-      for(const q of emitterSides) if(emissionCost(p,z,reach,q)<=reach+eps) return true;
+      for(const q of emitterSides) if(emissionCost(p,z,reach,q,true)<=reach+eps) return true;
       if(settings.walls===false || settings.wrap===false) return false;
+      if (overCrest(from,p,z)) return true;
       const first=blocker(from,clamp(z,0,width),p,z);
       return overDeck(p,lo,hi) || (!!first && around(p,z,first));
     }

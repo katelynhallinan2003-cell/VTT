@@ -1,5 +1,5 @@
 import type { Drawing, GridSettings, Rect } from '../types';
-import { zonesOf, groundAt } from '../core/height';
+import { zonesOf, spellGroundSampler } from '../core/height';
 import type { Seg } from '../core/walls';
 import { spellPicture, type PictureRequest, type SpellPicture } from '../core/spellPicture';
 import type { SpellWorld } from '../core/spellVolume';
@@ -24,8 +24,7 @@ function composePreview(p:SpellPicture,color:string) {
   if(skinCanvas.height!==img.rows)skinCanvas.height=img.rows;
   const ctx=previewCanvas.getContext('2d',{willReadFrequently:true}), skin=skinCanvas.getContext('2d');
   if(!ctx || !skin || !img.w || !img.h)return;
-  const frame=skin.createImageData(img.cols,img.rows);
-  frame.data.set(img.rgba);skin.putImageData(frame,0,0);
+  skin.putImageData(new ImageData(img.rgba as Uint8ClampedArray<ArrayBuffer>,img.cols,img.rows),0,0);
   ctx.resetTransform();ctx.clearRect(0,0,size,size);
   ctx.globalAlpha=.46;ctx.drawImage(skinCanvas,0,0,size,size);
   ctx.setTransform(size/img.w,0,0,size/img.h,-img.x*size/img.w,-img.y*size/img.h);
@@ -39,8 +38,7 @@ function composePreview(p:SpellPicture,color:string) {
   ctx.beginPath();
   for(let i=0;i<p.contact.length;i+=4){const t=p.contact;ctx.moveTo(t[i],t[i+1]);ctx.lineTo(t[i+2],t[i+3]);}
   ctx.strokeStyle='#ffffff';ctx.lineWidth=Math.max(img.w,img.h)/size*.8;ctx.globalAlpha=.9;ctx.stroke();
-  p.surface={...img,cols:size,rows:size,rgba:ctx.getImageData(0,0,size,size).data};
-  p.composed=true;
+  return {...img,cols:size,rows:size,rgba:ctx.getImageData(0,0,size,size).data};
 }
 self.onmessage = ({
   data
@@ -54,34 +52,25 @@ self.onmessage = ({
     const s = data.scene;
     grid = s.grid;
     const terrain = zonesOf(s.draws, grid);
-    const memo = new Map<number, Map<number, number>>();
-    let count = 0;
     world = {
       segs: s.segs,
       openings: s.openings,
       maps: s.maps,
       steppedGround: s.steppedGround,
-      ground: terrain.areas.length ? p => {
-        if (count >= 250000) {
-          memo.clear();
-          count = 0;
-        }
-        let row = memo.get(p.x);
-        if (!row) memo.set(p.x, row = new Map());
-        let z = row.get(p.y);
-        if (z === undefined) {
-          z = groundAt(terrain, p);
-          row.set(p.y, z);
-          count++;
-        }
-        return z;
-      } : undefined
+      ground: terrain.areas.length ? spellGroundSampler(terrain) : undefined
     };
   }
   if (!data.req) return;
   const picture = spellPicture(data.req, grid, world);
-  if(data.req.fast && !data.req.cover && !picture.solid)composePreview(picture,data.req.color);
+  const {fast,cover,spell,color}=data.req;
+  if (!cover && !picture.solid && (fast || (spell.k==='emanation' && spell.spell?.stick))) {
+    const composite=composePreview(picture,color);
+    if (composite && fast) { picture.surface=composite; picture.composed=true; }
+    else if (composite) picture.movingSurface=composite;
+  }
+  const buffers=[picture.triangles.buffer,picture.fill.buffer,picture.outline.buffer,picture.wire.buffer,picture.contact.buffer,picture.surface.rgba.buffer];
+  if (picture.movingSurface) buffers.push(picture.movingSurface.rgba.buffer);
   self.postMessage(picture, {
-    transfer: [picture.triangles.buffer,picture.fill.buffer, picture.outline.buffer, picture.wire.buffer, picture.contact.buffer, picture.surface.rgba.buffer]
+    transfer: buffers
   });
 };

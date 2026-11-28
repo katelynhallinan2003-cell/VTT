@@ -17,6 +17,8 @@ An issue the user says is still broken moves back up to *Open* with a note on wh
 
 ## Open
 
+- [ ] **#201 Smooth dragging with attached emanations** (added 2026-11-27). Long coast drags now reuse measured terrain and update the attached spell in the background. All five spell types tested at 144 Hz. Occasional browser frame drops still exceed the requested minimum.
+
 Carried over from the old `TASKS.md` on 2026-11-22 (asked 2026-11-21, before this file existed):
 
 - [ ] **#4 Players get "permission denied" when drawing or placing a template** (waiting on user) (added 2026-11-21):
@@ -321,3 +323,4 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
 - [x] **#198 Paint more of a selected gradient** (added 2026-11-27, completed 2026-11-27). Extend the area with the terrain brush and retain its height controls.
 - [x] **#199 Creature-sized emanations on slopes** (added 2026-11-27, completed 2026-11-27). Use full-precision token altitude and emit above, below and around its occupied prism. Checked the saved cat at fifteen positions and its rendered spell through consecutive moves.
 - [x] **#200 Trace the two southeast fog patches on Elevation Test 4** (added 2026-11-27, completed 2026-11-27). The opposite riverbank blocks both sight lines. Removing the corresponding terrain edge in a diagnostic copy revealed each patch.
+- [x] **#202 Verify ground coverage below the coast cat** (added 2026-11-27, completed 2026-11-27). Attached emanations follow the creature’s altitude, and wrapped routes can cross a crest within range. Verified five nearby targets against the actual Player Preview fill in campaign (6).

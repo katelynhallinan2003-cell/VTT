@@ -36,16 +36,24 @@ function setAt(tree: Json, path: string, value: Json): Json {
   if (keys.length === 0) return prune(value) ?? {};
   const root = tree && typeof tree === 'object' ? tree : {};
   let cur = root;
+  const parents: [Json, string][] = [];
   for (let i = 0; i < keys.length - 1; i++) {
     const k = keys[i];
     if (!cur[k] || typeof cur[k] !== 'object') cur[k] = {};
+    parents.push([cur, k]);
     cur = cur[k];
   }
   const last = keys[keys.length - 1];
   const p = prune(value);
-  if (p === undefined) delete cur[last];
-  else cur[last] = p;
-  return prune(root) ?? {};
+  if (p === undefined) {
+    delete cur[last];
+    for (let i = parents.length - 1; i >= 0 && !Object.keys(cur).length; i--) {
+      const [parent, key] = parents[i];
+      delete parent[key];
+      cur = parent;
+    }
+  } else cur[last] = p;
+  return root;
 }
 
 function resolveSpecials(v: Json, now: number): Json {
@@ -71,6 +79,7 @@ export class MockBackend implements Backend {
   private user: AuthUser | null = null;
   private disconnects: [string, Json][] = [];
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private persistDue = 0;
   private readonly persist: boolean;
 
   constructor(opts: { persist?: boolean; channel?: string } = {}) {
@@ -147,26 +156,40 @@ export class MockBackend implements Backend {
     for (const [p, v] of Object.entries(updates)) resolved[p] = resolveSpecials(v, now);
     for (const [p, v] of Object.entries(resolved)) this.tree = setAt(this.tree, p, structuredClone(v ?? null));
     if (broadcast) this.channel?.postMessage({ type: 'update', updates: resolved });
-    this.schedulePersist();
-    this.notify();
+    const paths=Object.keys(resolved).map(path => split(path).join('/'));
+    // Cursor trails and drag ghosts are broadcast live. Persist their removal
+    // on release, without serializing a whole campaign mid-drag.
+    if (Object.values(resolved).some(v=>v==null) || paths.some(p=>!/^tables\/[^/]+\/scenes\/[^/]+\/live(?:\/|$)/.test(p))) this.schedulePersist();
+    this.notify(paths);
   }
 
   private schedulePersist() {
-    if (!this.persist || this.persistTimer) return;
-    this.persistTimer = setTimeout(() => { this.persistTimer = null; this.flush(); }, 200);
+    if (!this.persist) return;
+    // Save after a burst of movement. Closing the tab also flushes immediately.
+    const now=Date.now();
+    if (this.persistTimer) clearTimeout(this.persistTimer);
+    else this.persistDue=now+3000;
+    this.persistTimer = setTimeout(() => { this.persistTimer = null; this.flush(); }, Math.min(200,Math.max(0,this.persistDue-now)));
   }
   private flush() {
     if (!this.persist) return;
     try { localStorage.setItem(LS_KEY, JSON.stringify(this.tree)); } catch { /* quota */ }
   }
 
-  private notify() {
+  private notify(changed?: string[]) {
+    // A token coordinate can only affect listeners above or below that path.
+    const affected = (path: string) => {
+      if (!changed) return true;
+      const key = split(path).join('/');
+      return changed.some(p => !key || !p || p === key || p.startsWith(key + '/') || key.startsWith(p + '/'));
+    };
     for (const l of [...this.valueLs]) {
+      if (!affected(l.path)) continue;
       const v = getAt(this.tree, l.path);
       const s = JSON.stringify(v);
       if (s !== l.last) { l.last = s; l.cb(structuredClone(v)); }
     }
-    for (const l of [...this.childLs]) this.diffChildren(l);
+    for (const l of [...this.childLs]) if (affected(l.path)) this.diffChildren(l);
   }
 
   private diffChildren(l: ChildL) {

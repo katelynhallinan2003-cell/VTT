@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_GRID, normalizeDrawing, normalizeLive, viaToWire, MAX_ROUTE_CORNERS } from '../src/core/model';
 import { terrainOf, groundAtTerrain } from '../src/core/terrain';
 import { terrainEdges } from '../src/core/terrainEdges';
-import { movementCost } from '../src/core/movementCost';
+import { movementCost, type MovementLegs } from '../src/core/movementCost';
 import type { Drawing, Vec } from '../src/types';
 
 const grid = { ...DEFAULT_GRID, cell: 5, ft: 5, visible: false, snap: false, rule: 'euclid' as const };
@@ -74,6 +74,16 @@ describe('erased bridge sides',()=>{
     expect(measure([point(0),point(15),point(30)]).ft).toBe(30);
     expect(measure([point(30),point(0)]).ft).toBe(30);
     expect(measure([point(0),point(15,0),point(30)]).note).toBe('');
+  });
+  it('keeps a cached drag exact when it continues under a bridge, stops or retraces',()=>{
+    const resolved=resolveWalls(edges,gaps),faces=[...resolved.terrain,...resolved.openings];
+    for(const flight of [null,2]){
+      const legs:MovementLegs=[];
+      for(const [xs,stops] of [[[0,15],[]],[[0,15,30],[]],[[0,15,30],[1]],[[0,15,30],[]],[[0,15,4],[]],[[0,5,4],[]]]) {
+        const path=xs.map(x=>point(x));
+        expect(movementCost(grid,path,flight,ctx,faces,[],stops,legs)).toEqual(movementCost(grid,path,flight,ctx,faces,[],stops));
+      }
+    }
   });
   it('retains the climb for a stop on the deck, an intact edge or an intentional waypoint',()=>{
     expect(measure([point(0),point(15)]).ft).toBe(25);

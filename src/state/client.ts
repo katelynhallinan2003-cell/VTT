@@ -64,7 +64,7 @@ export interface SceneState {
 
 /** A drawing as the caller describes it; the text styling and the fill colour are optional. */
 export type NewDrawing = Omit<Drawing, 'id' | 'uid' | 't' | 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc' | 'dt' | 'dl' | 'dd'> & Partial<Pick<Drawing, 'fc' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'of' | 'hg' | 'ha' | 'he' | 'hc' | 'dt' | 'dl' | 'dd'>>;
-export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'hg' | 'ha' | 'he' | 'hc' | 'gradientEnabled' | 'gradientFixed' | 'gradient' | 'td' | 'spell'>>;
+export type DrawingPatch = Partial<Pick<Drawing, 'color' | 'w' | 'fill' | 'fc' | 'dash' | 'txt' | 'bw' | 'of' | 'p' | 'fs' | 'font' | 'b' | 'i' | 'u' | 'ho' | 'hz' | 'hg' | 'ha' | 'he' | 'hc' | 'gradientEnabled' | 'gradientFixed' | 'gradient' | 'td' | 'spell'>>;
 
 export type ScenePatch = Partial<Omit<SceneMeta, 'grid' | 'fog' | 'light'>> & {
   grid?: Partial<GridSettings>;
@@ -602,6 +602,21 @@ export class TableClient {
   get activeSceneId() { return this.meta?.activeScene ?? null; }
   get sceneIsActive() { return !!this.viewSceneId && this.viewSceneId === this.activeSceneId; }
   get grid(): GridSettings { return this.scene?.meta?.grid ?? DEFAULT_GRID; }
+  private groundCache?: {scene:SceneState|null; revision:number; grid:GridSettings; terrain:ReturnType<typeof zonesOf>; draws:Drawing[]};
+  /** Share the parsed terrain between movement, walls and the selected token's height readout. */
+  get groundTerrain() {
+    const scene=this.scene, grid=this.grid, revision=scene?.drawRev ?? -1;
+    const saved=this.groundCache;
+    if (saved && saved.scene===scene && saved.grid===grid && saved.revision===revision) return saved.terrain;
+    const draws=Array.from(scene?.draws.values() ?? []).filter(d=>this.isGroundDrawing(d));
+    if (saved && saved.scene===scene && saved.grid===grid && draws.length===saved.draws.length && draws.every((d,i)=>d===saved.draws[i])) {
+      saved.revision=revision;
+      return saved.terrain;
+    }
+    const terrain=zonesOf(draws,grid);
+    this.groundCache={scene,grid,revision,terrain,draws};
+    return terrain;
+  }
   private ownGridsCache: { meta: unknown; list: MapGrid[] } | null = null;
   /** The grid that counts at a spot: an added map may have its own squares, colour and switch. The scene's own grid object when none does. */
   gridAt(p: Vec): GridSettings {
@@ -635,7 +650,7 @@ export class TableClient {
     let c=this.contourCache;
     if (!c || c.scene!==scene || c.rev!==(scene?.drawRev ?? -1) || c.grid!==key) {
       // A drawing that is not ground (a spell, a note) leaves the contours as they were.
-      const zones=scene ? zonesOf(scene.draws.values(),grid) : null;
+      const zones=scene ? this.groundTerrain : null;
       if (c && c.scene===scene && c.grid===key && zones && zones.sig===c.sig) c={...c,rev:scene!.drawRev};
       else {
         const joins:Seg[]=[];

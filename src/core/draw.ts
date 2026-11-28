@@ -105,12 +105,16 @@ export function fitPenPoints(pts: Vec[], tol: number): Vec[] {
 }
 
 export function distToSegment(p: Vec, a: Vec, b: Vec): number {
+  return Math.sqrt(segmentDistanceSq(p,a,b));
+}
+
+export function segmentDistanceSq(p: Vec, a: Vec, b: Vec): number {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
   const l2 = dx * dx + dy * dy;
-  if (l2 === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  if (l2 === 0) return (p.x-a.x)**2+(p.y-a.y)**2;
   const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2));
-  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+  return (p.x-(a.x+t*dx))**2+(p.y-(a.y+t*dy))**2;
 }
 
 export function pointInPoly(p: Vec, poly: Vec[]): boolean {

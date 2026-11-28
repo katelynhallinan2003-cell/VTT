@@ -1,4 +1,4 @@
-import { Container, Sprite, Text, type Texture } from 'pixi.js';
+import { Container, RenderTexture, Sprite, Text, type Renderer, type Texture } from 'pixi.js';
 import { areaLabelAt, heightColor, type Terrain } from '../core/terrain';
 import { paintTerrain, type TerrainRaster } from './terrainRaster';
 import type { Rect } from '../types';
@@ -19,12 +19,13 @@ export class TerrainLayer {
   private running=false;
   private version=0;
   private latest:{terrain:Terrain;selected:Set<string>;version:number}|null=null;
-  constructor(private invalidate:()=>void) {}
+  constructor(private invalidate:()=>void, private renderer:()=>Renderer) {}
   private labels = new Map<number, Text>();
   private labelBoxes: (Rect & { elevation: number })[] = [];
   private zoom = 1;
   private coveredLabels: Text[] = [];
   private key = '';
+  private terrain?:Terrain;
   private levels: number[] = [];
 
   colourAt(h: number): string { return heightColor(h, this.levels.length ? this.levels : undefined); }
@@ -33,10 +34,11 @@ export class TerrainLayer {
   sync(t: Terrain, selected: Set<string>, show: boolean, warm = false) {
     this.container.visible = show;
     if (!show && !warm) return;
-    const key = `${t.sig}#${[...selected].sort().join(',')}`;
-    if (key === this.key) return;
-    if (!t.areas.length) { this.reset(); this.key=key; return; }
+    const key = [...selected].sort().join(',');
+    if (this.terrain === t && key === this.key) return;
+    if (!t.areas.length) { this.reset(); this.key=key; this.terrain=t; return; }
     this.key = key;
+    this.terrain = t;
     this.latest={terrain:t,selected,version:++this.version};
     if (!this.running) this.renderLatest();
   }
@@ -90,6 +92,21 @@ export class TerrainLayer {
     this.labelBoxes=boxes;
     this.invalidate();
     this.layoutLabels();
+    // Prepare the overlay and its text while hidden. The first drag only
+    // changes opacity and can reuse the same GPU assets as later moves.
+    if (!this.container.visible) {
+      const target=RenderTexture.create({width:1,height:1});
+      const alpha=this.container.alpha;
+      try {
+        this.container.visible=true;
+        this.container.alpha=1;
+        this.renderer().render({container:this.container,target,clear:true});
+      } finally {
+        this.container.visible=false;
+        this.container.alpha=alpha;
+        target.destroy(true);
+      }
+    }
   }
 
   setZoom(zoom: number) {
@@ -142,6 +159,7 @@ export class TerrainLayer {
     this.version++;
     this.latest=null;
     this.key='';
+    this.terrain=undefined;
     this.levels=[];
     if (this.sprite) this.sprite.visible = false;
     for (const tx of this.labels.values()) tx.destroy();

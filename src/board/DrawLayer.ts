@@ -67,9 +67,10 @@ export class SpellTexture {
       // Keep the GPU allocation fixed throughout a drag. Resizing a live
       // canvas source can invalidate an upload already queued by WebGL.
       const tile=this.staging!;
-      tile.width=img.cols;tile.height=img.rows;
-      const src=tile.getContext('2d')!,frame=src.createImageData(img.cols,img.rows);
-      frame.data.set(img.rgba);src.putImageData(frame,0,0);
+      if (tile.width!==img.cols) tile.width=img.cols;
+      if (tile.height!==img.rows) tile.height=img.rows;
+      const frame=new ImageData(img.rgba as Uint8ClampedArray<ArrayBuffer>,img.cols,img.rows);
+      tile.getContext('2d')!.putImageData(frame,0,0);
       const ctx=this.canvas.getContext('2d')!;
       ctx.clearRect(0,0,this.size,this.size);
       ctx.drawImage(tile,0,0,this.size,this.size);
@@ -128,7 +129,10 @@ export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1,
     const current=!view || view.current;
     const lines=(parts:Float32Array,width:number,color:number,opacity:number)=>{
       if(!parts.length)return;
-      for(let i=0;i<parts.length;i+=4) g.moveTo(parts[i],parts[i+1]).lineTo(parts[i+2],parts[i+3]);
+      for(let i=0;i<parts.length;i+=4) {
+        if (!i || parts[i]!==parts[i-2] || parts[i+1]!==parts[i-1]) g.moveTo(parts[i],parts[i+1]);
+        g.lineTo(parts[i+2],parts[i+3]);
+      }
       g.stroke({width,color,alpha:opacity,cap:'round',join:'round'});
     };
     // The moving silhouette is cheap enough to cut against the ground immediately,
@@ -144,7 +148,8 @@ export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1,
     if(picture?.composed && surface){
       surface.draw(g,picture.surface,Math.min(1,fillA/TEMPLATE_FILL));
       rim(Math.max(1.5,s.w*.65),alpha*.45);
-      paint(ellipsePts(pts[0].x,pts[0].y,Math.max(3,s.w*1.2),Math.max(3,s.w*1.2)),alpha);
+      if (s.k==='emanation') paint(footprintPoly(pts[0],widthPx,hexShape),null,Math.max(1.5,s.w*.6));
+      else paint(ellipsePts(pts[0].x,pts[0].y,Math.max(3,s.w*1.2),Math.max(3,s.w*1.2)),alpha);
       return;
     }
     if(picture && surface)surface.draw(g,picture.surface,Math.min(.65,fillA*1.65));

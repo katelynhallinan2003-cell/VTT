@@ -8,15 +8,15 @@ import { isGroundDrawing, type SightSceneData } from '../core/sightScene';
 import {
   clamp, cornerTotals, distanceFt, fitCamera, pathFt, gridFromRect, mapFootprints, mapRect, normRect, sceneRect, pointInToken, rectContains, snapDragCenter, snapTokenCenter, snapToCellCenter, snapToCorner, zoomAt,
 } from '../core/geometry';
-import { DRAW_COLORS, FILL_LEVEL, STROKE_CELLS, parsePts, dashSegments, fitPenPoints, handlesOf, hitDrawing, pointInPoly, isTemplate, joinPts, resizeDrawing, setLineMeasurer, footprintPx, snapTemplate, templateLabel, templateWidthPx, type HandleId, type TemplateSnapState } from '../core/draw';
+import { DRAW_COLORS, FILL_LEVEL, STROKE_CELLS, parsePts, dashSegments, simplify, fitPenPoints, handlesOf, hitDrawing, pointInPoly, isTemplate, joinPts, resizeDrawing, setLineMeasurer, footprintPx, snapTemplate, templateLabel, templateWidthPx, type HandleId, type TemplateSnapState } from '../core/draw';
 import { templateRoughDraws } from '../core/templaterough';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
-import { altitudeOf, dayOf, dimOf, groundAt, heightNote, isRough, roughOf, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
+import { altitudeOf, dayOf, dimOf, groundAt, spellGroundSampler, heightNote, isRough, roughOf, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
 import { dragGradient, gradientPath, initialGradientLine, locate } from '../core/gradientGeometry';
 import type { SightSegments } from '../core/terrainSight';
 import { withSightTerrain, areaShape, brushCuts, bucketRegion, extendGradient, clippedBrush, patchStroke, connectedHeight, type TerrainEdge } from '../core/terrainEdges';
-import { movementCost } from '../core/movementCost';
+import { movementCost, type MovementLegs } from '../core/movementCost';
 import { EMPTY_TERRAIN, MAX_STROKE_CELLS, slopeAt, surfaceHeight, hasSlope, standingSurface, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
 import { scaleCut, type GridCut, type PixelImage } from '../core/gridcut';
@@ -124,11 +124,11 @@ export class Board {
   private drawLayer = new DrawLayer((id,s)=>this.spellPicture(id,s),id=>this.spellPainter.forget(id));
   private spellPicture(slot:string,s:Shape){
     const drag=this.drag;
-    const fast=slot==='preview' || (drag?.kind==='drawresize' && !!drag.patch && drag.id===slot) || (drag?.kind==='drawmove' && drag.moved && drag.ids.includes(slot));
+    const fast=this.movingAuras.has(slot) || slot==='preview' || (drag?.kind==='drawresize' && !!drag.patch && drag.id===slot) || (drag?.kind==='drawmove' && drag.moved && drag.ids.includes(slot));
     return this.spellPainter.request(this.sightSceneKey(),slot,{color:s.color,spell:{k:s.k,bw:s.bw,of:s.of,spell:s.spell},
       a:s.pts[0],b:s.pts[1],cover:this.coverOn(),fast});
   }
-  private terrainLayer = new TerrainLayer(()=>this.invalidate());
+  private terrainLayer = new TerrainLayer(()=>this.invalidate(), ()=>this.app.renderer);
   /** difficult terrain: a layer of its own, hatched on the map */
   private rough: Terrain = EMPTY_TERRAIN({ ...DEFAULT_GRID });
   private roughG = new Graphics();
@@ -155,7 +155,7 @@ export class Board {
   private wallRunFirst: Vec | null = null;
   private wallRunCount = 0;
   private seenWallRev = -1;
-  private segCache: { scene: unknown; rev: number; ground: string; sight: SightSegments; move: Seg[]; terrain: TerrainEdge[]; levelJoins: Seg[]; openings: Seg[] } = { scene: null, rev: -1, ground: '', sight: [], move: [], terrain: [], levelJoins: [], openings: [] };
+  private segCache: { scene: unknown; rev: number; ground: Terrain | null; gradientVision: boolean; sight: SightSegments; move: Seg[]; terrain: TerrainEdge[]; levelJoins: Seg[]; openings: Seg[] } = { scene: null, rev: -1, ground: null, gradientVision: false, sight: [], move: [], terrain: [], levelJoins: [], openings: [] };
   private auraG = new Graphics();
   private ghostLayer = new Container();
   private overlayG = new Graphics();
@@ -353,6 +353,10 @@ export class Board {
     cancelAnimationFrame(this.raf);
     this.sightSolver.destroy();
     this.spellPainter.reset();
+    this.movingAuras.clear();
+    this.auraPositions.clear();
+    this.attachedAuras=[];
+    this.attachedState='';
     this.drawLayer.clear();
     this.fogView?.destroy();
     this.resizeObs?.disconnect();
@@ -532,6 +536,11 @@ export class Board {
     let moving = false;
     for (const v of this.views.values()) if (v.tick(dt)) moving = true;
     for (const v of this.ghostViews.values()) if (v.tick(dt)) moving = true;
+    this.syncMovingAuras();
+    if (this.spellDrawDirty && this.client.scene) {
+      this.spellDrawDirty=false;
+      this.refreshDraws(false);
+    }
     if (moving) this.dirty = true;
     if (this.pings.length) { this.tickPings(); this.dirty = true; }
     if (this.press) this.dirty = true;
@@ -576,7 +585,7 @@ export class Board {
 
     if (scene.drawRev !== this.seenZoneRev) {
       this.seenZoneRev = scene.drawRev;
-      const next = zonesOf(scene.draws.values(), this.client.grid);
+      const next = this.client.groundTerrain;
       if (next.sig !== this.zones.sig) {
         this.zones = next;
         const editing = this.ui.data.gradientArea;
@@ -589,14 +598,22 @@ export class Board {
     }
     if (scene.drawRev!==this.seenDrawRev || scene.wallRev!==this.seenWallRev) this.seenTokensRev=-1;
     if (scene.tokensRev !== this.seenTokensRev) {
-      if (scene.drawRev!==this.seenDrawRev) this.attachedSources=[...new Set([...scene.draws.values()].flatMap(d=>d.k==='emanation' && d.spell?.stick && d.spell.source ? [d.spell.source] : []))];
+      if (scene.drawRev!==this.seenDrawRev) {
+        this.attachedAuras=[...scene.draws.values()].filter(d=>d.k==='emanation' && d.spell?.stick && d.spell.source);
+        this.attachedSources=[...new Set(this.attachedAuras.map(d=>d.spell!.source!))];
+        if (scene.meta && this.attachedAuras.some(d=>this.sourceVisible(d))) this.spellPainter.warm(this.sightSceneKey());
+        for (const id of this.auraPositions.keys()) if (!this.attachedAuras.some(d=>d.id===id)) {
+          this.auraPositions.delete(id);
+          this.movingAuras.delete(id);
+        }
+      }
       const state=this.attachedSources.map(id=>{
         const t=scene.tokens.get(id);
         return t && this.visibleToViewer(t) ? [id,t.x,t.y,t.size,this.heightOf(t).alt].join(',') : '';
       }).join('|');
       if(state!==this.attachedState) {
         this.attachedState=state; this.spellCache=undefined; this.spellDrawDirty=true;
-        this.refreshRough();
+        if (this.attachedAuras.some(d=>d.td)) this.refreshRough();
       }
       this.seenTokensRev = scene.tokensRev;
       this.reconcileTokens();
@@ -606,10 +623,9 @@ export class Board {
       this.seenFogRev = scene.fogRev;
       this.updateFog();
     }
-    if (scene.drawRev !== this.seenDrawRev || this.spellDrawDirty) {
-      this.spellDrawDirty=false;
+    if (scene.drawRev !== this.seenDrawRev) {
+      this.spellDrawDirty=true;
       this.seenDrawRev = scene.drawRev;
-      this.drawLayer.sync(this.drawingsShown(), c.grid, this.textRes, this.coverOn(), this.wallsForSpells());
       const stale = [...this.ui.data.drawSel].filter((id) => !scene.draws.has(id));
       if (stale.length) this.ui.selectDrawings([...this.ui.data.drawSel].filter((id) => scene.draws.has(id)));
       this.dirty = true;
@@ -640,6 +656,10 @@ export class Board {
     this.polyPts = [];
     this.ui.select([]);
     this.spellPainter.reset();
+    this.movingAuras.clear();
+    this.auraPositions.clear();
+    this.attachedAuras=[];
+    this.attachedState='';
     this.drawLayer.clear();
     this.wallLayer.clear();
     this.wallPreview = null; this.wallHover = null; this.wallStart = null;
@@ -978,17 +998,24 @@ export class Board {
   // ------------------------------------------------------------------ tokens
   private spellCache?: {scene:TableClient['scene']; draw:number; wall:number; meta:number; preview:boolean;
     entries:{color:string; source?:string; volume:ReturnType<typeof spellVolume>}[]};
+  private spellVolumes=new WeakMap<Drawing,{sceneKey:string;points:string;start?:number;width?:number;volume:ReturnType<typeof spellVolume>}>();
   private activeSpells() {
     const scene=this.client.scene;
     if(!scene) return [];
     const saved=this.spellCache,preview=this.ui.data.dmPreview;
     if(saved && saved.scene===scene && saved.draw===scene.drawRev && saved.wall===scene.wallRev && saved.meta===scene.metaRev && saved.preview===preview) return saved.entries;
-    const entries=[];
+    const entries=[], sceneKey=this.sightSceneKey();
     for(const raw of scene.draws.values()) {
       const d=this.attachedDrawing(raw);
       if(!isTemplate(d.k) || !this.sourceVisible(d) || (d.pv && d.uid!==this.client.uid && (!this.client.isDM || preview))) continue;
-      const [a,b]=parsePts(d.p);
-      if(b) entries.push({color:d.color,source:d.k==='emanation' && d.spell?.stick ? d.spell.source : undefined,volume:spellVolume(d,a,b,this.client.grid,this.wallsForSpells())});
+      let cached=this.spellVolumes.get(raw);
+      if (!cached || cached.sceneKey!==sceneKey || cached.points!==d.p || cached.start!==d.spell?.start || cached.width!==d.of) {
+        const [a,b]=parsePts(d.p);
+        if (!b) continue;
+        cached={sceneKey,points:d.p,start:d.spell?.start,width:d.of,volume:spellVolume(d,a,b,this.client.grid,this.wallsForSpells())};
+        this.spellVolumes.set(raw,cached);
+      }
+      entries.push({color:d.color,source:d.k==='emanation' && d.spell?.stick ? d.spell.source : undefined,volume:cached.volume});
     }
     this.spellCache={scene,draw:scene.drawRev,wall:scene.wallRev,meta:scene.metaRev,preview,entries};
     return entries;
@@ -1211,6 +1238,8 @@ export class Board {
 
   /** Is the ground at this spot difficult? */
   isRoughAt(p: Vec): boolean { return isRough(this.rough, p); }
+  private measuredDrag?: {drag:Drag; grid:GridSettings; edges:TerrainEdge[]; move:Seg[]|null;
+    zones:Terrain; rough:Terrain; fly:boolean; faces:Seg[]; legs:MovementLegs};
 
   /** Movement along the accepted route, including terrain, walls and flight clearance. */
   private moveCost(path: Vec[], fly: boolean, elevation = 0, stops: number[] = []): { ft: number; note: string } {
@@ -1218,10 +1247,19 @@ export class Board {
     const { terrain, move, levelJoins, openings } = this.wallSegs();
     const slopes = this.zones.areas.some(hasSlope);
     if (!slopes && !terrain.length && !openings.length && !move.length && !this.rough.areas.length) return { ft: pathFt(grid,path), note: '' };
+    const blockers=this.moveBlockers();
+    let cache=this.measuredDrag;
+    if (this.drag?.kind==='tokens') {
+      if (!cache || cache.drag!==this.drag || cache.grid!==grid || cache.edges!==terrain || cache.move!==blockers ||
+          cache.zones!==this.zones || cache.rough!==this.rough || cache.fly!==fly) {
+        this.measuredDrag=cache={drag:this.drag,grid,edges:terrain,move:blockers,zones:this.zones,rough:this.rough,fly,
+          faces:levelJoins.length || openings.length ? [...terrain,...levelJoins,...openings] : terrain,legs:[]};
+      }
+    } else this.measuredDrag=cache=undefined;
     return movementCost(grid, path, fly ? elevation : null, {
       slope: slopes ? p => slopeAt(this.zones,p) : undefined,
       ground: p => groundAtTerrain(this.zones,p), rough: p => isRough(this.rough,p),
-    }, levelJoins.length || openings.length ? [...terrain,...levelJoins,...openings] : terrain, this.moveBlockers() ? move : [], stops);
+    }, cache?.faces ?? (levelJoins.length || openings.length ? [...terrain,...levelJoins,...openings] : terrain), blockers ? move : [], stops,cache?.legs);
   }
 
   // ------------------------------------------------------------------ walls
@@ -1231,12 +1269,12 @@ export class Board {
     if (!scene) return { sight: [], move: [], terrain: [], levelJoins: [], openings: [] };
     const c = this.segCache;
     // how tall a wall's top is depends on the ground it stands on, so the pieces are rebuilt when the ground changes too
-    const gsig = this.zones.sig + "|" + !!scene.meta?.fog.gradientVision;
-    if (c.scene !== scene || c.rev !== scene.wallRev || c.ground !== gsig) {
+    const gradientVision = !!scene.meta?.fog.gradientVision;
+    if (c.scene !== scene || c.rev !== scene.wallRev || c.ground !== this.zones || c.gradientVision !== gradientVision) {
       const {walls,terrain,levelJoins,openings}=this.client.wallGeometry();
       const list = [...walls.values()].filter(w=>!w.face);
       const topOf = (w: Wall) => groundAt(this.zones, wallMid(w)) + w.h;
-      this.segCache = { scene, terrain, levelJoins, openings, rev: scene.wallRev, ground: gsig, sight: withSightTerrain([...sightSegs(list, topOf), ...terrain],this.zones,openings,!!scene.meta?.fog.gradientVision), move: moveSegs(list, topOf) };
+      this.segCache = { scene, terrain, levelJoins, openings, rev: scene.wallRev, ground: this.zones, gradientVision, sight: withSightTerrain([...sightSegs(list, topOf), ...terrain],this.zones,openings,gradientVision), move: moveSegs(list, topOf) };
     }
     return this.segCache;
   }
@@ -1245,7 +1283,7 @@ export class Board {
   private placementSpell(source?:string) {
     const settings=this.ui.data.tplSettings;
     const token=source && this.client.scene?.tokens.get(source);
-    return token && settings.start===undefined ? {...settings,start:this.heightOf(token).alt} : settings;
+    return token && (settings.stick || settings.start===undefined) ? {...settings,start:this.heightOf(token).alt} : settings;
   }
   placementElevations() {
     const u=this.ui.data,d=this.drag;
@@ -1271,18 +1309,7 @@ export class Board {
   private spellGround(): (p: Vec) => number {
     const zones = this.zones;
     if (this.groundMemo?.zones !== zones) {
-      const memo = new Map<number, Map<number, number>>();
-      let size = 0;
-      const at = (p: Vec) => {
-        let row = memo.get(p.x);
-        if (!row) {
-          if (size > 250000) { memo.clear(); size = 0; }
-          memo.set(p.x, row = new Map());
-        }
-        let h = row.get(p.y);
-        if (h === undefined) { h = groundAt(zones, p); row.set(p.y, h); size++; }
-        return h;
-      };
+      const at=spellGroundSampler(zones);
       this.groundMemo = { zones, at };
     }
     return this.groundMemo.at;
@@ -1336,11 +1363,11 @@ export class Board {
     const editing = dm && u.tool === 'wall';
     if (!editing && !u.showWalls) { this.wallLayer.container.visible=false; return; }
     const edit = editing && u.wallMode === 'edit';
-    this.wallLayer.sync(this.wallsShown(), {
+    this.wallLayer.sync(() => this.wallsShown(), {
       z: this.cam.zoom, cell: this.client.grid.cell, showAll: dm && !u.dmPreview,
       selected: editing ? u.wallSel : NO_IDS, hover: edit && this.wallHover ? this.wallHover : null, handles: edit,
       hoverIds: edit && this.wallHover ? this.hoverRun(this.wallHover) : undefined,
-    }, `${scene.wallRev}:${this.wallPrevSeq}:${this.zones.sig}`, editing || u.showWalls);
+    }, `${this.sightSceneKey()}:${this.wallPrevSeq}`, editing || u.showWalls);
   }
 
   /** The door or window whose handle is under `p` (the DM clicks it to open or close it). */
@@ -1771,7 +1798,7 @@ export class Board {
     }
     const r = (n: number) => Math.round(n * 2) / 2;
     const painted = this.paintedLight();
-    const key = `${scene.id}|${ambient}|${scene.wallRev}:${this.zones.sig}:${meta.fog.gradientVision}|${painted ? `${painted.day?.sig ?? ''}~${painted.dim?.sig ?? ''}~${Math.round(painted.edge)}` : ''}|${lights.map((l) => `${r(l.x)},${r(l.y)},${r(l.b)},${r(l.r)},${l.c},${l.alt ?? ''}`).join(';')}|${viewers.map((w) => `${r(w.x)},${r(w.y)},${r(w.r)},${r(w.dv)},${r(w.touch)},${w.alt ?? ''}`).join(';')}`;
+    const key = `${scene.id}|${ambient}|${this.sightSceneKey()}|${painted ? `${painted.day?.sig ?? ''}~${painted.dim?.sig ?? ''}~${Math.round(painted.edge)}` : ''}|${lights.map((l) => `${r(l.x)},${r(l.y)},${r(l.b)},${r(l.r)},${l.c},${l.alt ?? ''}`).join(';')}|${viewers.map((w) => `${r(w.x)},${r(w.y)},${r(w.r)},${r(w.dv)},${r(w.touch)},${w.alt ?? ''}`).join(';')}`;
     return { ambient, lights, viewers, painted, key, paintedKey: painted ? `${painted.day?.sig ?? ''}~${painted.dim?.sig ?? ''}~${Math.round(painted.edge)}` : '' };
   }
 
@@ -1827,7 +1854,7 @@ export class Board {
     const feather = this.sightFeather();
     // in the dark, a token only sees what is lit (or what its darkvision reaches): the fog is cut open in that shape
     const dark = !!L && L.ambient === 'dark' && fog && meta.fog.enabled && meta.fog.vision;
-    if (L) this.lightLayer.setPainted(L.painted, L.ambient, sceneRect(meta) ?? { x: 0, y: 0, w: 2000, h: 1500 }, this.wallSegs().sight, `${L.paintedKey}|${scene!.wallRev}|${this.zones.sig}`);
+    if (L) this.lightLayer.setPainted(L.painted, L.ambient, sceneRect(meta) ?? { x: 0, y: 0, w: 2000, h: 1500 }, this.wallSegs().sight, `${L.paintedKey}|${this.sightSceneKey()}`);
     const circles = fog && !dark ? this.visionNow() : [];
     const viewers: Viewer[] = L?.ambient === 'dark' ? L.viewers : [];
     const lights: LightSrc[] = L ? L.lights : [];
@@ -2503,7 +2530,10 @@ export class Board {
 
   /** A dashed line through the points (and a dot at each corner in between). */
   private dashedLine(g: Graphics, pts: Vec[], color: number, z: number, stops?: number[]) {
-    for (const [p, q] of dashSegments(pts, 9 / z, 6 / z)) g.moveTo(p.x, p.y).lineTo(q.x, q.y);
+    // Subpixel bends need no separate pair of round caps. Measurement and
+    // waypoint dots retain every accepted point.
+    const stroke=pts.length>32 ? simplify(pts,.35/z) : pts;
+    for (const [p, q] of dashSegments(stroke, 9 / z, 6 / z)) g.moveTo(p.x, p.y).lineTo(q.x, q.y);
     g.stroke({ width: 2.5 / z, color, alpha: 0.9, cap: 'round' });
     for (const p of stops ? stops.map(i => pts[i]) : pts.slice(1, -1)) g.circle(p.x, p.y, 4 / z).fill({ color, alpha: 0.9 });
   }
@@ -2770,27 +2800,61 @@ export class Board {
     return p ? this.emanationSource(p,p) : null;
   }
 
-  attachedDrawing(d:Drawing):Drawing {
+  attachedDrawing(d:Drawing, displayed=false):Drawing {
     if (d.k!=='emanation' || !d.spell?.stick || !d.spell.source) return d;
     const token=this.emanationToken(d);
     const points=parsePts(d.p);
     if (!token || !points.length) return d;
-    const dx=token.x-points[0].x,dy=token.y-points[0].y;
+    const pos=displayed ? this.auraPosition(token) : token;
+    const dx=pos.x-points[0].x,dy=pos.y-points[0].y;
     return {...d,p:joinPts(points.map(p=>({x:p.x+dx,y:p.y+dy}))),of:Math.max(1,token.size)*this.client.grid.ft,
-      spell:{...d.spell,start:d.spell.start ?? this.heightOf(token).alt}};
+      spell:{...d.spell,start:this.heightOf(token,pos).alt}};
   }
 
   private sourceVisible(d:Drawing) {
     return !(d.k==='emanation' && d.spell?.stick && d.spell.source) || !!this.emanationToken(d);
   }
 
+  private attachedAuras:Drawing[]=[];
+  private auraPositions=new Map<string,Vec>();
+  private movingAuras=new Map<string,number>();
+  private auraPosition(token:Token):Vec {
+    const view=this.views.get(token.id);
+    return view && !this.ui.data.testMove && !this.teleportHeld ? view.display : token;
+  }
+
+  // Match the on-screen token between shared updates. A quiet source gets an
+  // exact final solve, including when the last position itself hasn't changed.
+  private syncMovingAuras() {
+    if (!this.attachedAuras.length) return;
+    const now=performance.now();
+    let changed=false;
+    for (const d of this.attachedAuras) {
+      const token=this.emanationToken(d);
+      if (!token) continue;
+      const p=this.auraPosition(token), last=this.auraPositions.get(d.id);
+      if (last && (p.x!==last.x || p.y!==last.y)) {
+        this.movingAuras.set(d.id,now);
+        changed=true;
+      } else {
+        const since=this.movingAuras.get(d.id);
+        if (since!==undefined && now-since>=100) {
+          this.movingAuras.delete(d.id);
+          this.drawLayer.invalidate(d.id);
+          changed=true;
+        }
+      }
+      if (!last || p.x!==last.x || p.y!==last.y) this.auraPositions.set(d.id,{x:p.x,y:p.y});
+    }
+    if (changed) this.spellDrawDirty=true;
+  }
   private attachedSources:string[]=[];
   private attachedState='';
   drawingsShown(): Drawing[] {
     // ground (boxes, circles and brush strokes with a height) is painted by the terrain layer, not here
     const c = this.client;
     // a template its maker kept private is for them and the DM only
-    const list = c.drawingsSorted().filter((d) => d.hz == null && d.k !== 'terrain' && this.sourceVisible(d) && !(d.pv && (!c.isDM || this.ui.data.dmPreview) && d.uid !== c.uid)).map(d=>this.attachedDrawing(d));
+    const list = c.drawingsSorted().filter((d) => d.hz == null && d.k !== 'terrain' && this.sourceVisible(d) && !(d.pv && (!c.isDM || this.ui.data.dmPreview) && d.uid !== c.uid)).map(d=>this.attachedDrawing(d,true));
     const pv = this.drawPreview;
     const move=this.drag;
     if(move?.kind==='drawmove' && move.moved) return list.map(d=>move.ids.includes(d.id) && isTemplate(d.k) && !d.spell?.stick
@@ -3466,7 +3530,7 @@ export class Board {
       k, p: joinPts(pts), color: isT ? u.tplColor : u.drawColor, w: isT ? Math.max(2, stroke) : stroke,
       fill: !isT && closed ? FILL_LEVEL[u.drawFillMode] : 0, fc: closed ? u.drawFillColor : '',
       dash: !isT && u.drawDash, txt: '', fs: 28, bw: u.tplWidth, of: k === 'emanation' && d.of ? d.of : undefined, pv: isT && !u.tplShare ? true : undefined,
-      spell:isT ? {...(u.tplSettings.stick ? u.tplSettings : this.placementSpell(d.source)),stick:d.source && u.tplSettings.stick ? true : undefined,source:d.source,range:d.range} : undefined,
+      spell:isT ? {...this.placementSpell(d.source),...(d.source && u.tplSettings.stick ? {stick:true,start:undefined} : {stick:undefined}),source:d.source,range:d.range} : undefined,
       td: isT && u.tplRough ? true : undefined,
     }, { onId: (id) => {
       if(isT) this.spellPainter.placed(id);
@@ -3730,6 +3794,7 @@ export class Board {
 
   private onPointerUp(e: PointerEvent) {
     this.cancelPress();
+    this.measuredDrag=undefined;
     const d = this.drag;
     this.drag = null;
     try { this.app.canvas.releasePointerCapture(e.pointerId); } catch { /* not captured */ }

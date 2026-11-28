@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_GRID, drawingToWire, normalizeDrawing } from '../src/core/model';
 import { initialBoundaryControls } from '../src/core/gradientBoundaries';
 import { dragGradient, gradientPath, initialGradientLine } from '../src/core/gradientGeometry';
-import { heightColor, groundAtTerrain, slopeAt, standingGround, terrainOf } from '../src/core/terrain';
+import { heightColor, groundAtTerrain, slopeAt, standingGround, surfaceHeight, terrainOf } from '../src/core/terrain';
 import { bucketRegion, extendGradient, inRegion, connectedHeight, areaShape, terrainEdges, fillTerrainHoles, terrainHoleOptions, patchStroke } from '../src/core/terrainEdges';
 import { movementCost } from '../src/core/movementCost';
 import type { Seg } from '../src/core/walls';
@@ -14,6 +14,19 @@ const line=(x:number,height:number): GradientControl => ({id:String(x),height,pa
 const area=(gradient: GradientControl[]) => normalizeDrawing('hill',{k:'rect',hz:12,p:'0,-10,8,10',gradient})!;
 
 describe('editable gradients',()=>{
+  it('keeps the same matched heights when a long line is indexed in tiles',()=>{
+    const corner={x:0,y:0,rise:25};
+    const short=[{x:-96,y:-64,rise:-5},corner,{x:96,y:-64,rise:-5}];
+    const dense=short.slice(1).flatMap((b,i)=>Array.from({length:16},(_,j)=>{
+      const a=short[i], t=j/16;
+      return {x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t,rise:a.rise+(b.rise-a.rise)*t};
+    })).concat(short[2]);
+    const ground=(path:typeof short)=>({h:0,gradient:[{id:'rim',height:10,path,match:true},line(128,40)]});
+    const indexed=ground(dense), plain=ground(short);
+    for (const x of [-128,-32.01,-32,0,31.99,32,100]) for (const y of [-65,-32,-1,0,32]) {
+      expect(surfaceHeight(indexed,at(x,y))).toBeCloseTo(surfaceHeight(plain,at(x,y)),8);
+    }
+  });
   it('retains the original height until two controls exist and locks the entire line',()=>{
     expect(groundAtTerrain(terrainOf([area([line(0,0)])],grid),at(1))).toBe(12);
     const terrain=terrainOf([area([line(0,0),line(8,6)])],grid);

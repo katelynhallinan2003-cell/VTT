@@ -11,7 +11,7 @@
 import { resolveMatchedLines, resolveGradientBoundaries } from './gradientBoundaries';
 import type { Drawing, GridSettings, Rect, Vec } from '../types';
 import { cellPoly } from './cells';
-import { boundsOf, distToSegment, parsePts, pointInPoly } from './draw';
+import { boundsOf, segmentDistanceSq, parsePts, pointInPoly } from './draw';
 import { snapToCellCenter, snapToCorner } from './geometry';
 import { hexAt, hexToPx, isHex } from './hex';
 
@@ -189,7 +189,7 @@ const brushCells = new WeakMap<TStroke, { cs: number; nx: number; ny: number; ce
 function brushCovers(s: TStroke, p: Vec): boolean {
   const pts = s.pts;
   if (pts.length < 24) {
-    for (let i = 1; i < pts.length; i++) if (distToSegment(p, pts[i - 1], pts[i]) <= s.r) return true;
+    for (let i = 1; i < pts.length; i++) if (segmentDistanceSq(p, pts[i - 1], pts[i]) <= s.r*s.r) return true;
     return false;
   }
   let idx = brushCells.get(s);
@@ -208,7 +208,7 @@ function brushCovers(s: TStroke, p: Vec): boolean {
     brushCells.set(s, idx = { cs, nx, ny, cells });
   }
   const x = Math.max(0, Math.min(idx.nx - 1, Math.floor((p.x - b.x) / idx.cs))), y = Math.max(0, Math.min(idx.ny - 1, Math.floor((p.y - b.y) / idx.cs)));
-  for (const i of idx.cells[y * idx.nx + x]) if (distToSegment(p, pts[i - 1], pts[i]) <= s.r) return true;
+  for (const i of idx.cells[y * idx.nx + x]) if (segmentDistanceSq(p, pts[i - 1], pts[i]) <= s.r*s.r) return true;
   return false;
 }
 
@@ -311,37 +311,63 @@ export function terrainBounds(t: Terrain): Rect | null {
 /** Is this point part of the area? (erase strokes taking away what earlier strokes painted) */
 export function areaHas(a: Area, p: Vec, grid: GridSettings): boolean {
   if (p.x < a.b.x || p.x > a.b.x + a.b.w || p.y < a.b.y || p.y > a.b.y + a.b.h) return false;
-  let inside = false;
   let key: string | undefined;
-  for (const s of a.strokes) {
+  for (let i=a.strokes.length-1; i>=0; i--) {
+    const s=a.strokes[i];
     if (s.kind === 'cells' && key === undefined) key = cellKey(grid, p);
-    if (strokeCovers(s, p, grid, key)) inside = !s.erase;
+    if (strokeCovers(s, p, grid, key)) return !s.erase;
   }
-  return inside;
+  return false;
 }
 
 /** How high the ground is at a point, in feet: the areas folded from the bottom up. No area means 0. */
 export function hasSlope(a:Pick<Area,"gradient">) {
   return !!a.gradient && (a.gradient.length>=2 || !!a.gradient[0]?.match);
 }
+// Nearby samples along spell rays repeatedly query the same gradient line.
+const gradientTiles = new WeakMap<Vec[], Map<number, Map<number, number[]>>>();
+function nearbySegments(path:Vec[], p:Vec) {
+  const size=32, x=Math.floor(p.x/size), y=Math.floor(p.y/size);
+  let rows=gradientTiles.get(path);
+  if (!rows) gradientTiles.set(path, rows=new Map());
+  let row=rows.get(y);
+  if (!row) rows.set(y, row=new Map());
+  let segments=row.get(x);
+  if (!segments) {
+    const center={x:(x+.5)*size,y:(y+.5)*size};
+    const distances=path.slice(1).map((b,i)=>segmentDistanceSq(center,path[i],b));
+    let best=Infinity;
+    for (const sq of distances) best=Math.min(best,sq);
+    // Distance to each segment changes by at most half a tile diagonal.
+    const limit=(Math.sqrt(best)+size*Math.SQRT2)**2;
+    segments=[];
+    for (let i=0;i<distances.length;i++) if (distances[i]<=limit) segments.push(i+1);
+    if (row.size>=256) row.clear();
+    if (rows.size>=256) { rows.clear(); rows.set(y,row); }
+    row.set(x,segments);
+  }
+  return segments;
+}
 export function surfaceHeight(a: Pick<Area, "gradient" | "h">, p: Vec): number {
   if (!a.gradient || !hasSlope(a)) return a.h;
   let weights = 0, total = 0;
   for (const {path,height} of a.gradient) {
-    let d = Math.hypot(p.x-path[0].x,p.y-path[0].y);
-    let value=height;
-    if (path[0].rise===undefined) {
-      for (let i=1; i<path.length; i++) d = Math.min(d,distToSegment(p,path[i-1],path[i]));
-    } else {
-      // A line matched to a pre-painted slope carries the height along its contour.
-      value+=path[0].rise;
-      for (let i=1;i<path.length;i++) {
-        const a=path[i-1], b=path[i], dx=b.x-a.x, dy=b.y-a.y;
-        const t=Math.max(0,Math.min(1,((p.x-a.x)*dx+(p.y-a.y)*dy)/(dx*dx+dy*dy || 1)));
-        const sep=Math.hypot(p.x-a.x-t*dx,p.y-a.y-t*dy);
-        if (sep<d) { d=sep; value=height+(1-t)*(a.rise ?? 0)+t*(b.rise ?? 0); }
+    let nearestSq = (p.x-path[0].x)**2 + (p.y-path[0].y)**2;
+    const matched = path[0].rise !== undefined;
+    let value = height + (path[0].rise ?? 0);
+    const candidates=path.length>=16 ? nearbySegments(path,p) : undefined;
+    const count=candidates?.length ?? path.length-1;
+    for (let j=0; j<count; j++) {
+      const i=candidates ? candidates[j] : j+1;
+      const a=path[i-1], b=path[i], dx=b.x-a.x, dy=b.y-a.y;
+      const t=Math.max(0,Math.min(1,((p.x-a.x)*dx+(p.y-a.y)*dy)/(dx*dx+dy*dy || 1)));
+      const sq=(p.x-(a.x+t*dx))**2+(p.y-(a.y+t*dy))**2;
+      if (sq<nearestSq) {
+        nearestSq=sq;
+        if (matched) value=height+(1-t)*(a.rise ?? 0)+t*(b.rise ?? 0);
       }
     }
+    const d=Math.sqrt(nearestSq);
     if (d < 1e-7) return value;
     weights += 1/d;
     total += value/d;

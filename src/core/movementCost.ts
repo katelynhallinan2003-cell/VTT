@@ -6,6 +6,10 @@ import { sideOf, type Seg } from './walls';
 const rounded = (n: number) => Math.round(n * 10) / 10;
 const EPS = 1e-7;
 type AirPoint = { run: number; z: number };
+type Station = {run:number; ground:number; endGround?:number; endRun?:number; wall:number; passage?:boolean; landing?:boolean; solid?:boolean; slopeExtra?:number};
+/** Prefix samples for one drag, valid for the same terrain, walls, grid and movement mode. */
+export type MovementLegs = {ax:number; ay:number; bx:number; by:number; stop:boolean;
+  stations:Station[]; run:number; rough:number; slopeExtra:number; wall:number; passage:boolean; solid:boolean}[];
 
 /** Shortest flight above the terrain along the chosen horizontal route. A ridge
  * sets a minimum altitude, while a valley between ridges can be flown over. */
@@ -42,24 +46,33 @@ function crossing(a: Vec, b: Vec, edge: Seg): number | null {
 }
 
 export function movementCost(grid: GridSettings, path: Vec[], flyer: number | null, ctx: WalkCtx,
-  edges: Seg[], walls: Seg[], stops: number[] = []) {
+  edges: Seg[], walls: Seg[], stops: number[] = [], legs?:MovementLegs) {
   const flightRuns: number[] | undefined = flyer === null && !ctx.slope ? undefined : [];
   const flat = pathFt(grid, path, [], flightRuns);
   if (path.length < 2) return {ft:0, note:''};
   let slopeExtra = 0;
   let rough = 0, run = 0, wallAtJoin = 0;
   // Each interval describes the surface actually traversed after its entry point.
-  const profile: {run: number; ground: number; endGround?: number; endRun?: number; wall: number; passage?: boolean; landing?:boolean; solid?:boolean; slopeExtra?:number}[] = [];
+  const profile: Station[] = [];
   let passageAtJoin = false, solidAtJoin = false;
   for (let i = 1; i < path.length; i++) {
     const a = path[i-1], b = path[i], dx = b.x-a.x, dy = b.y-a.y;
+    const stop=stops.includes(i-1);
+    const cached=legs?.[i-1];
+    if (cached && cached.ax===a.x && cached.ay===a.y && cached.bx===b.x && cached.by===b.y && cached.stop===stop) {
+      for (const station of cached.stations) profile.push(station);
+      ({run,rough,slopeExtra,wall:wallAtJoin,passage:passageAtJoin,solid:solidAtJoin}=cached);
+      continue;
+    }
+    if (legs && legs.length>=i) legs.length=i-1;
+    const firstStation=profile.length;
     const length = Math.hypot(dx,dy);
     if (!length) continue;
     const ft = flightRuns ? flightRuns[i-1] - run : length * grid.ft / grid.cell;
     const cuts = new Map<number, number>([[0,wallAtJoin],[1,0]]);
     const passages: Set<number> = new Set(passageAtJoin ? [0] : []);
     const solid: Set<number> = new Set<number>(solidAtJoin ? [0] : []);
-    if (stops.includes(i-1)) profile.push({run,ground:ctx.ground(a),wall:0,landing:true});
+    if (stop) profile.push({run,ground:ctx.ground(a),wall:0,landing:true});
     const cut = (edge: Seg, wall: number) => {
       const t = crossing(a,b,edge);
       if (t === null || t < -EPS || t > 1+EPS) return;
@@ -97,6 +110,7 @@ export function movementCost(grid: GridSettings, path: Vec[], flyer: number | nu
     passageAtJoin=passages.has(1); solidAtJoin=solid.has(1);
     if (flyer === null) rough += roughDistance(grid,a,b,ctx.rough);
     run += ft;
+    if (legs) legs[i-1]={ax:a.x,ay:a.y,bx:b.x,by:b.y,stop,stations:profile.slice(firstStation),run,rough,slopeExtra,wall:wallAtJoin,passage:passageAtJoin,solid:solidAtJoin};
   }
   if (!profile.length) return {ft:0, note:''};
   let height = ctx.ground(path[0]), ascent = 0, descent = 0;
@@ -106,6 +120,9 @@ export function movementCost(grid: GridSettings, path: Vec[], flyer: number | nu
   // Within a run of open faces, a raised deck can be passed underneath. Pin the
   // ground at both ends, at deliberate stops, and on both sides of an intact face.
   if (profile.some(s=>s.passage)) {
+    // Underpass decisions depend on the final destination. Preserve raw
+    // samples so extending a route onto or beyond the deck can change them.
+    if (legs) for (let i=0;i<profile.length;i++) profile[i]={...profile[i]};
     // A sloping deck also has an underside. Between two open faces at the same
     // floor level its surface samples do not add ramp distance to the walk below.
     let entered=-1, floor=height;

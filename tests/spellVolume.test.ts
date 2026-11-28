@@ -40,6 +40,15 @@ describe('spell volumes',()=>{
     expect(cast(4).hits(point(20),0)).toBe(true);
     expect(cast(25).hits(point(20),0)).toBe(false);
   });
+  it('wraps over a ridge to nearby ground and charges the actual detour',()=>{
+    const cast=(wrap:boolean,peak:number,segs:SpellWorld['segs']=[])=>spellVolume(
+      {k:'emanation',bw:5,of:15,spell:{range:25,start:0,wrap}},a,point(32.5),grid,
+      {segs,ground:p=>Math.max(0,peak-4*Math.abs(p.x-18))});
+    expect(cast(false,12).hits(point(24),0)).toBe(false);
+    expect(cast(true,12).hits(point(24),0)).toBe(true);
+    expect(cast(true,35).hits(point(27),0)).toBe(false);
+    expect(cast(true,12,[{a:point(7.5,-100),b:point(7.5,100)}]).hits(point(24),0)).toBe(false);
+  });
   it('keeps 60 ft of spatial range when editing elevations or following a gradient',()=>{
     const axis=(settings:Spell['spell'],ground=(p:{x:number})=>0)=>spellAxis({k:'beam',bw:10,spell:{range:60,...settings}},a,point(60),grid,ground);
     expect(axis({start:0,end:36}).b.x).toBe(48);

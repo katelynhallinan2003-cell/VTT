@@ -178,12 +178,19 @@ export class SpellPainter {
     }
     const queue = req.fast ? this.live : this.saved;
     const result = queue.request(scene, slot, req);
+    if (!req.fast && result.current && req.spell.spell?.stick) this.live.forget(slot);
     if (!req.fast && !result.current) {
       // After a height edit the old footprint would claim the wrong targets.
       // A placement preview is reusable only if it depicts this exact cast.
       const preview=this.live.shown.get(slot);
       result.picture=preview?.key===JSON.stringify({...req,fast:true}) ? preview.picture : undefined;
-    } else if(req.fast && !result.picture) result.picture=this.saved.shown.get(slot)?.picture;
+    } else if(req.fast && !result.picture) {
+      const saved=this.saved.shown.get(slot)?.picture;
+      // A gridless final mesh can contain thousands of triangles. Rebuilding
+      // that old mesh on every pointer frame is slower than the live solve.
+      if (saved?.movingSurface) result.picture={...saved,surface:saved.movingSurface,composed:true};
+      else if (!saved?.triangles.length) result.picture=saved;
+    }
     return result;
   }
   warm(scene: string) {

@@ -65,6 +65,7 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
   const [hpOpen, setHpOpen] = useState(false);
   const tokens = [...d.selection].map((id) => client.scene?.tokens.get(id)).filter((t): t is Token => !!t);
   if (!tokens.length) return null;
+  const zones = client.groundTerrain;
   const ids = tokens.map((t) => t.id);
   const t0 = tokens[0];
   const multi = tokens.length > 1;
@@ -79,7 +80,6 @@ export function TokenTag(props: { client: TableClient; ui: UiState; onEdit: (ids
   // a light has no hit points, effects or height: only what it shines, its name, and whether its marker shows
   const tracked = client.isDM && !lights ? tokens.filter((t) => t.hp != null && t.maxHp != null) : [];
   const canAura = !multi && editable && !lights;
-  const zones = zonesOf(client.scene?.draws.values() ?? [], client.grid);
   const alts = tokens.map((t) => altitudeOf(t, standingGround(zones, t)));
   const a0 = alts[0];
   const altText = multi ? (alts.every((a) => a.alt === a0.alt) ? altLabel(a0, t0.fly) : '') : altLabel(a0, t0.fly);

@@ -22,6 +22,20 @@ export const isRough = (rough: Terrain, p: Vec): boolean => rough.areas.length >
 /** How high the ground is at a point, in feet. Painted areas are stacked bottom to top (each one sets the height or adds to it); no area means 0. */
 export const groundAt = groundAtTerrain;
 
+/** Bounded exact-point cache for spell rays. Moving casts generate many
+ * one-use coordinates. Overwrite a slot instead of allocating a map per x. */
+export function spellGroundSampler(terrain:Terrain) {
+  const capacity=65536;
+  const xs=new Float64Array(capacity).fill(NaN), ys=new Float64Array(capacity), heights=new Float64Array(capacity);
+  return (p:Vec) => {
+    const slot=(Math.imul(Math.floor(p.x*64),73856093)^Math.imul(Math.floor(p.y*64),19349663)) & (capacity-1);
+    if (xs[slot]===p.x && ys[slot]===p.y) return heights[slot];
+    xs[slot]=p.x;
+    ys[slot]=p.y;
+    return heights[slot]=groundAt(terrain,p);
+  };
+}
+
 export interface Altitude {
   /** feet above the map's base level */
   alt: number;

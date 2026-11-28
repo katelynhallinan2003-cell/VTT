@@ -48,7 +48,7 @@ export class WallLayer {
 
   clear() { this.g.clear(); this.key = ''; this.selected = null; }
 
-  sync(walls: Wall[], o: WallDrawOpts, rev: number | string, show: boolean) {
+  sync(walls: () => Wall[], o: WallDrawOpts, rev: number | string, show: boolean) {
     this.container.visible = show;
     if (!show) return;
     // The selection is a new set whenever it changes, so its identity is enough.
@@ -56,7 +56,7 @@ export class WallLayer {
     if (key === this.key && o.selected === this.selected) return;
     this.key = key;
     this.selected = o.selected;
-    this.build(walls, o);
+    this.build(walls(), o);
   }
 
   private build(walls: Wall[], o: WallDrawOpts) {

@@ -469,7 +469,9 @@ function SpellAdvanced({settings,kind,heights,placed=false,onChange}:{settings:S
     onChange(next);
   }}/>;
   return <>
-    {settings.elevation!==false && <><div class="spell-heights">{heightField('start','Starting elevation')}{aimedSpell(kind) && heightField('end','Ending elevation')}</div>
+    {settings.elevation!==false && <><div class="spell-heights">{placed && kind==='emanation' && settings.stick
+      ? <label class="field"><span>Starting elevation (ft)</span><input type="number" value={Math.round(heights.start)} readOnly title="Follows the attached token"/></label>
+      : heightField('start','Starting elevation')}{aimedSpell(kind) && heightField('end','Ending elevation')}</div>
       {aimedSpell(kind) && <p class="hint">Ending elevation sets the center of the far face.</p>}</>}
   <p class="hint">The bright border marks affected ground.</p>
   <details class="spell-advanced"><summary>Advanced</summary>
@@ -724,7 +726,10 @@ export function DrawInspector(props: { ui: UiState; client: TableClient; board: 
         )}
         {one?.k==='emanation' && board && (one.spell?.stick || board.emanationToken(one)) && <Toggle label="Stick to token" checked={!!one.spell?.stick} onChange={stick=>{
           const token=board.emanationToken(one);
-          upd({p:placed!.p,spell:{...one.spell,stick,...(token ? {source:token.id} : {})}});
+          const spell={...one.spell,stick};
+          if(stick && token) { spell.source=token.id; delete spell.start; }
+          else { delete spell.source; spell.start=placed!.spell?.start; if(spell.start===undefined) delete spell.start; }
+          upd({p:placed!.p,of:placed!.of,spell});
         }}/>}
         {one?.k==='beam' && <LineWidth value={one.bw} onChange={bw=>upd({bw})}/>}
         {one && axis && <SpellAdvanced key={one.id} placed settings={one.spell ?? {}} heights={axis} kind={one.k} onChange={changeSpell}/>}

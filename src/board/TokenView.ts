@@ -349,7 +349,8 @@ export class TokenView {
   /** The shadow under a flying token and the height tag in its corner. */
   private applyHeight(grid: GridSettings, t: Token) {
     const a = this.altNow;
-    const key = `${a.alt}|${a.clear}|${t.fly}|${t.size}|${t.shape}|${grid.cell}`;
+    const label = altLabel(a, t.fly);
+    const key = `${label}|${a.clear}|${t.size}|${t.shape}|${grid.cell}`;
     if (key === this.hKey) return;
     this.hKey = key;
     const cell = grid.cell;
@@ -364,7 +365,6 @@ export class TokenView {
     }
     const g = this.altG;
     g.clear();
-    const label = altLabel(a, t.fly);
     this.altText.visible = !!label;
     if (!label) return;
     const fs = Math.max(10, cell * 0.2);

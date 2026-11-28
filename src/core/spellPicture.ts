@@ -6,6 +6,8 @@ import { mapSegments, spellVolume, type Spell, type SpellWorld } from './spellVo
 export type Volume = ReturnType<typeof spellVolume>;
 export interface SpellPicture {
   surface: SurfaceImage;
+  /** Ready-to-draw ground while the first moving-source calculation finishes. */
+  movingSurface?: SurfaceImage;
   /** Rectangles as left, top, right, bottom or hex centers as x, y. */
   fill: Float32Array;
   /** Boundary triangles on gridless maps. Interior rows use fill rectangles. */
@@ -153,7 +155,10 @@ export function spellPicture(req: PictureRequest, grid: GridSettings, world: Spe
   } else if (v.bounds.w>0 && v.bounds.h>0) {
     // Use the same floor-height hit query for both the coloured region and
     // its outline. Refine mixed cells on their edges; uniform rows are cheap.
-    const size=Math.max(grid.cell/(fast ? 3 : 9),Math.max(v.bounds.w,v.bounds.h)/(fast ? 40 : 128));
+    const following = fast && spell.k==='emanation' && spell.spell?.stick && spell.spell.source;
+    const subdivisions = following ? 2 : fast ? 3 : 9;
+    const maxCells = following ? 28 : fast ? 40 : 128;
+    const size=Math.max(grid.cell/subdivisions,Math.max(v.bounds.w,v.bounds.h)/maxCells);
     const x0=Math.floor(v.bounds.x/size)*size-size,y0=Math.floor(v.bounds.y/size)*size-size;
     const cols=Math.ceil((v.bounds.x+v.bounds.w-x0)/size)+1, rows=Math.ceil((v.bounds.y+v.bounds.h-y0)/size)+1;
     const hit=(p:Vec)=>v.hits(p,world.ground?.(p) ?? 0);

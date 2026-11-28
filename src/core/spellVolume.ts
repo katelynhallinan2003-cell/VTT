@@ -1,6 +1,6 @@
 import {indexSpellWalls} from './spellWallIndex';
 import type { Drawing, GridSettings, Rect, Vec } from '../types';
-import { boundsOf, distToSegment, footprintPoly, pointInPoly, templateGeom, templateWidthPx } from './draw';
+import { boundsOf, footprintPoly, pointInPoly, templateGeom, templateWidthPx } from './draw';
 import { rayHit, sideOf, type Seg } from './walls';
 import { cellCentersIn, MAX_COVERED } from './cells';
 import { rectContains } from './geometry';
@@ -110,6 +110,21 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
   const width=templateWidthPx(grid,d), half=(d.k==='cube' ? length : width)/2;
   const hex=grid.shape==='square' ? undefined : grid.shape;
   const own=d.k==='emanation' ? footprintPoly(a,width,hex) : undefined;
+  // The emitting solid is the creature's occupied prism. A radial expansion
+  // has a flat roof over the footprint and rounded edges beyond its sides.
+  function emitterPoint(p:Vec):Vec {
+    if (!own) return a;
+    if (!hex) return {x:clamp(p.x,a.x-half,a.x+half),y:clamp(p.y,a.y-half,a.y+half)};
+    if (pointInPoly(p,own)) return p;
+    let nearest=own[0],best=Infinity;
+    for(let i=0;i<own.length;i++) {
+      const u=own[i],v=own[(i+1)%own.length],dx=v.x-u.x,dy=v.y-u.y;
+      const t=clamp(((p.x-u.x)*dx+(p.y-u.y)*dy)/(dx*dx+dy*dy),0,1);
+      const q={x:u.x+t*dx,y:u.y+t*dy},dist=distance(q,p);
+      if(dist<best) { best=dist; nearest=q; }
+    }
+    return nearest;
+  }
   const radius=own ? Math.max(0,run-width/2) : run;
   let geom=templateGeom(d.k,a,b,width,hex);
   const edges:(Vec & {height:number})[][]=[];
@@ -145,11 +160,10 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
     const dx=p.x-a.x,dy=p.y-a.y,x=dx*ux+dy*uy,y=dy*ux-dx*uy;
     if(d.k==='beam' && x< -eps) return null;
     if(!aimed) {
-      if(own && pointInPoly(p,own)) return null;
-      const lateral=own ? Math.min(...own.map((q,i)=>distToSegment(p,q,own[(i+1)%own.length]))) : Math.hypot(dx,dy);
+      const lateral=own ? distance(p,emitterPoint(p)) : Math.hypot(dx,dy);
       if(lateral>radius+eps) return null;
       const h=Math.sqrt(Math.max(0,radius*radius-lateral*lateral));
-      return [-h,h];
+      return [-h,h+(own ? width : 0)];
     }
     let lo=-length-half-Math.abs(rise)-1,hi=-lo;
     const band=(offset:number,slope:number,min:number,max:number)=>{
@@ -308,7 +322,7 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
     }
     return true;
   }
-  const axisZ=(p:Vec)=>run ? rise*clamp(((p.x-a.x)*ux+(p.y-a.y)*uy)/run,0,1) : 0;
+  const axisZ=(p:Vec)=>own && elevated ? clamp(floor(p),0,width) : run ? rise*clamp(((p.x-a.x)*ux+(p.y-a.y)*uy)/run,0,1) : 0;
   // Only build routes if a straight ray actually hits a wall. Neighbor links
   // cross the same finite walls as direct rays and consume actual travel distance.
   const step=Math.max(grid.cell/3,Math.max(bounds.w,bounds.h)/80);
@@ -316,17 +330,36 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
   type Station={p:Vec;z:number;cost:number};
   let routes:Map<string,Station>|undefined;
   function travel(from:Vec,z0:number,to:Vec,z1:number) {
-    if(own && (from===a || pointInPoly(from,own))) {
-      if(pointInPoly(to,own)) return Math.abs(z1-z0);
-      const f=Math.min(1,...own.map((v,i)=>rayHit(from,to.x-from.x,to.y-from.y,{a:v,b:own[(i+1)%own.length]})));
-      return Math.hypot(distance(from,to)*(1-f),z1-z0);
-    }
+    if(own && from===a) return Math.hypot(distance(emitterPoint(to),to),z1-clamp(z1,0,width));
     return Math.hypot(distance(from,to),z1-z0);
+  }
+  // The lowest-cost launch is level with the target when possible. A higher
+  // point on the same face can clear a rim. Charge its longer diagonal too.
+  function emissionCost(to:Vec,z:number,budget=reach,from=emitterPoint(to)):number {
+    const lateral=distance(from,to);
+    const dz=Math.sqrt(Math.max(0,budget*budget-lateral*lateral));
+    const h=elevated ? clamp(z,0,width) : 0;
+    const cost=(startZ:number)=>{
+      const spent=Math.hypot(lateral,z-startZ);
+      if (spent>budget+eps) return Infinity;
+      // Test infinitesimally inside the face so a wall flush against it is hit.
+      const f=Math.min(.001,Math.max(lateral*2e-6,eps)/Math.max(1,distance(from,a)));
+      const origin={x:from.x+(a.x-from.x)*f,y:from.y+(a.y-from.y)*f};
+      return clear(origin,startZ,to,z) ? spent : Infinity;
+    };
+    const direct=cost(h);
+    if (direct!==Infinity || !elevated) return direct;
+    const top=clamp(z+dz,0,width);
+    return top>h+eps ? cost(top) : Infinity;
+  }
+  function launchCost(q:Vec,z:number) {
+    if(own) return emissionCost(q,z);
+    return clear(a,0,q,z) ? travel(a,0,q,z) : Infinity;
   }
   const tips=new Map<Seg,Station[]>();
   let linkMemo:Map<number,number>|undefined;
   if(!aimed){
-    const key=[a.x,a.y,start,step,px,elevated,world.steppedGround,settings.walls!==false].join('|');
+    const key=[a.x,a.y,start,step,px,own ? width : 0,elevated,world.steppedGround,settings.walls!==false].join('|');
     let entry=radialLinks.get(world.segs);
     if(!entry || entry.key!==key || entry.ground!==world.ground){
       entry={key,ground:world.ground,links:new Map()};
@@ -351,8 +384,10 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
       for(const [tip,other] of [[first.a,first.b],[first.b,first.a]]) {
         const len=distance(tip,other) || 1;
         const q={x:tip.x+(tip.x-other.x)*.001/len,y:tip.y+(tip.y-other.y)*.001/len};
-        const qz=axisZ(q),cost=travel(a,0,q,qz);
-        if(cost<=reach+eps && onMap(q,world.maps) && slice(q) && clear(a,0,q,qz)) ends.push({p:q,z:qz,cost});
+        const qz=axisZ(q);
+        if(travel(a,0,q,qz)>reach+eps || !onMap(q,world.maps) || !slice(q)) continue;
+        const cost=launchCost(q,qz);
+        if(cost<=reach+eps) ends.push({p:q,z:qz,cost});
       }
       tips.set(first,ends);
     }
@@ -370,10 +405,12 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
           // Offset lattice points slightly so a wall on a grid line cannot be
           // crossed in two hops that both end exactly on the wall.
           const q={x:a.x+(ni+.013)*step,y:a.y+(nj+.019)*step};
-          const qz=axisZ(q),cost=cur.cost+travel(cur.p,cur.z,q,qz);
+          const qz=axisZ(q);
+          const emitting=own && (cur.p===a || (cur.cost===0 && pointInPoly(cur.p,own)));
+          const cost=emitting ? emissionCost(q,qz) : cur.cost+travel(cur.p,cur.z,q,qz);
           if(cost>reach+eps || cost>=(routes.get(id)?.cost ?? Infinity)-eps || !onMap(q,world.maps)) continue;
           if(!slice(q) && !(own && pointInPoly(q,own))) continue;
-          if(!traversable(i,j,di,dj,cur,q,qz)) continue;
+          if(!emitting && !traversable(i,j,di,dj,cur,q,qz)) continue;
           routes.set(id,{p:q,z:qz,cost});queue.push({i:ni,j:nj});
         }
       }
@@ -401,8 +438,10 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
           const t=(i+.5)/count,x=s.a.x+dx*t,y=s.a.y+dy*t;
           const left={x:x+nx,y:y+ny},right={x:x-nx,y:y-ny};
           const l=floor(left),r=floor(right),q=l<r ? left : right;
-          const top=Math.max(l,r),cost=travel(a,0,q,top);
-          if (Math.abs(l-r)>eps && cost<=reach+eps && onMap(q,world.maps) && clear(a,0,q,top)) lips.push({p:q,z:top,cost});
+          const top=Math.max(l,r);
+          if (Math.abs(l-r)<=eps || travel(a,0,q,top)>reach+eps || !onMap(q,world.maps)) continue;
+          const cost=launchCost(q,top);
+          if (cost<=reach+eps) lips.push({p:q,z:top,cost});
         }
       }
       lips.sort((l,r)=>l.cost-r.cost);
@@ -413,6 +452,10 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
       return reaches(nearest) || (hi!==nearest && reaches(hi));
     });
   }
+  const emitterSides=own?.flatMap((v,i)=>{
+    const next=own[(i+1)%own.length];
+    return [v,{x:(v.x+next.x)/2,y:(v.y+next.y)/2}];
+  }) ?? [];
   function hits(p:Vec,lowFt?:number,highFt=lowFt) {
     if(!onMap(p,world.maps)) return false;
     const span=slice(p);
@@ -426,6 +469,24 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
     if(elevated && lowFt!==undefined) {
       lo=Math.max(lo,(lowFt-start)*px);hi=Math.min(hi,(highFt!-start)*px);
       if(lo>hi+eps) return false;
+    }
+    if(own) {
+      const from=emitterPoint(p);
+      if(distance(from,p)<eps) {
+        // Leave out the caster's occupied space, but allow targets directly
+        // overhead and beneath a flying creature, even in its central square.
+        if(!elevated || (lo>=-eps && hi<=width+eps)) return false;
+        if(hi>width+eps) lo=Math.max(lo,width);
+        else hi=Math.min(hi,0);
+      }
+      const z=elevated ? clamp(width,lo,hi) : 0;
+      if(emissionCost(p,z,reach,from)<=reach+eps || (hi>z && emissionCost(p,hi,reach,from)<=reach+eps)) return true;
+      // A pillar can screen the nearest point while another part of the face
+      // has a clear ray. Check those emitters before charging a corner detour.
+      for(const q of emitterSides) if(emissionCost(p,z,reach,q)<=reach+eps) return true;
+      if(settings.walls===false || settings.wrap===false) return false;
+      const first=blocker(from,clamp(z,0,width),p,z);
+      return overDeck(p,lo,hi) || (!!first && around(p,z,first));
     }
     if(d.k==='beam') return beamReaches(p,lo,hi);
     // A higher point in this same interval clears every wall a lower ray clears.

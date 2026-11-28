@@ -319,3 +319,5 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
 - [x] **#196 Bucket fill elevation** (added 2026-11-27, completed 2026-11-27). Fill the connected region under the cursor up to painted boundaries and map edges.
 - [x] **#197 Match a gradient boundary line** (added 2026-11-27, completed 2026-11-27). New boundary controls start as lines. Match follows adjacent flat or sloped surfaces.
 - [x] **#198 Paint more of a selected gradient** (added 2026-11-27, completed 2026-11-27). Extend the area with the terrain brush and retain its height controls.
+- [x] **#199 Creature-sized emanations on slopes** (added 2026-11-27, completed 2026-11-27). Use full-precision token altitude and emit above, below and around its occupied prism. Checked the saved cat at fifteen positions and its rendered spell through consecutive moves.
+- [x] **#200 Trace the two southeast fog patches on Elevation Test 4** (added 2026-11-27, completed 2026-11-27). The opposite riverbank blocks both sight lines. Removing the corresponding terrain edge in a diagnostic copy revealed each patch.

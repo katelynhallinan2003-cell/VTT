@@ -15,6 +15,31 @@ function spell(k:Spell['k'], length:number, settings:Spell['spell']={}, world:Sp
   return spellVolume({k,bw:5,spell:settings},a,point(length),grid,world);
 }
 describe('spell volumes',()=>{
+  it('expands from all six faces of a Huge creature, including above and below its space',()=>{
+    const cast=(elevation=true)=>spellVolume({k:'emanation',bw:5,of:15,spell:{range:25,start:10,elevation}},a,point(32.5),grid,{segs:[],ground:()=>-50});
+    const v=cast();
+    expect(v.heightSpan(a)).toEqual([-15,50]);
+    for(const h of [-15,5,35,50]) expect(v.hits(a,h)).toBe(true);
+    for(const h of [-15.1,12,50.1]) expect(v.hits(a,h)).toBe(false);
+    expect(v.hits(a,10,25)).toBe(false);
+    expect(v.hits(point(22.5),45)).toBe(true); // 15 ft sideways and 20 ft above its top
+    expect(v.hits(point(22.5),45.1)).toBe(false);
+    expect(cast(false).hits(point(32.4),-50)).toBe(true);
+    expect(cast(false).hits(a)).toBe(false);
+  });
+  it('emits from its exposed sides on consecutive squares of a fractional slope',()=>{
+    const ground=(p:{x:number})=>.04*p.x-4.493;
+    for(const x of [0,5,10]){
+      const emitter=point(x),v=spellVolume({k:'emanation',bw:5,of:15,spell:{range:25,start:ground(emitter)}},emitter,point(x+32.5),grid,{segs:[],ground});
+      for(const dx of [-25,25]) expect(v.hits(point(x+dx),ground(point(x+dx)))).toBe(true);
+    }
+  });
+  it('can emit over a low obstruction but stops at a wall spanning its full height',()=>{
+    const cast=(top:number)=>spellVolume({k:'emanation',bw:5,of:15,spell:{range:25,start:0,wrap:false}},a,point(32.5),grid,
+      {segs:[{a:point(12,-100),b:point(12,100),top}],ground:()=>0});
+    expect(cast(4).hits(point(20),0)).toBe(true);
+    expect(cast(25).hits(point(20),0)).toBe(false);
+  });
   it('keeps 60 ft of spatial range when editing elevations or following a gradient',()=>{
     const axis=(settings:Spell['spell'],ground=(p:{x:number})=>0)=>spellAxis({k:'beam',bw:10,spell:{range:60,...settings}},a,point(60),grid,ground);
     expect(axis({start:0,end:36}).b.x).toBe(48);

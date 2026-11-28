@@ -1,4 +1,4 @@
-import { expandPoly, footprintPoly, pointInPoly, templateWidthPx } from './draw';
+import { expandPoly, footprintPoly, templateWidthPx } from './draw';
 import { onMap, type Spell, type SpellWorld } from './spellVolume';
 import type { Volume } from './spellPicture';
 import type { GridSettings, Vec } from '../types';
@@ -59,7 +59,7 @@ export function spellSurface(spell: Spell, a: Vec, v: Volume, grid: GridSettings
   };
   const half = templateWidthPx(grid, spell) / 2,
     n = fast ? 24 : 48;
-  let inner: Vec[] | undefined;
+
   if (spell.k === 'sphere' || spell.k === 'emanation') {
     const radius = spell.k === 'sphere' ? run : Math.max(0, run - half);
     let directions: {
@@ -69,7 +69,7 @@ export function spellSurface(spell: Spell, a: Vec, v: Volume, grid: GridSettings
       dy: number;
     }[];
     if (spell.k === 'emanation') {
-      inner = footprintPoly(a, half * 2, grid.shape === 'square' ? undefined : grid.shape);
+      const inner = footprintPoly(a, half * 2, grid.shape === 'square' ? undefined : grid.shape);
       const foot = inner.map(p => ({
           x: p.x - a.x,
           y: p.y - a.y
@@ -82,13 +82,13 @@ export function spellSurface(spell: Spell, a: Vec, v: Volume, grid: GridSettings
         dx: two[i].x - p.x,
         dy: two[i].y - p.y
       }));
-      // Inner faces make the open space around the caster visible in the tilted view.
-      for (let i = 0; i < foot.length; i++) {
-        const p = foot[i],
-          q = foot[(i + 1) % foot.length],
-          normal = unit(vec(p.y - q.y, q.x - p.x, 0));
-        const at = (p: Vec, h: number) => vertex(vec(p.x, p.y, h), normal);
-        quad(at(p, -radius), at(p, radius), at(q, radius), at(q, -radius), i + 3);
+      for(const sign of [-1,1]) {
+        const z=sign<0 ? -radius : half*2+radius;
+        const normal=vec(0,0,sign),center=vertex(vec(0,0,z),normal);
+        for(let i=0;i<foot.length;i++) {
+          const p=foot[i],q=foot[(i+1)%foot.length];
+          tri(center,vertex(vec(p.x,p.y,z),normal),vertex(vec(q.x,q.y,z),normal),2);
+        }
       }
     } else directions = Array.from({
       length: n
@@ -100,11 +100,13 @@ export function spellSurface(spell: Spell, a: Vec, v: Volume, grid: GridSettings
     }));
     let prev: Vertex[] = [];
     const bands = fast ? 10 : 20;
-    for (let j = 0; j <= bands; j++) {
-      const phi = Math.PI * (j / bands - .5),
+    const prism=spell.k==='emanation';
+    for (let j = 0; j <= bands+(prism ? 1 : 0); j++) {
+      const upper=prism && j>bands/2;
+      const phi = Math.PI * ((j-(upper ? 1 : 0)) / bands - .5),
         cs = Math.cos(phi),
         sn = Math.sin(phi);
-      const ring = directions.map(d => vertex(vec(d.x + d.dx * radius * cs, d.y + d.dy * radius * cs, radius * sn), vec(d.dx * cs, d.dy * cs, sn)));
+      const ring = directions.map(d => vertex(vec(d.x + d.dx * radius * cs, d.y + d.dy * radius * cs, radius * sn+(upper ? half*2 : 0)), vec(d.dx * cs, d.dy * cs, sn)));
       if (j) for (let i = 0; i < ring.length; i++) {
         const k = (i + 1) % ring.length;
         quad(prev[i], prev[k], ring[k], ring[i], 1);
@@ -201,7 +203,6 @@ export function spellSurface(spell: Spell, a: Vec, v: Volume, grid: GridSettings
         y: a.y + f * p.y + b * q.y + c * r.y
       };
       if (spell.k === 'beam' && (at.x - a.x) * ux + (at.y - a.y) * uy < -.001) continue;
-      if (inner && id === 1 && pointInPoly(at, inner)) continue;
       if (maps?.length && (!onMap(at, maps) || !onMap({
         x: a.x + x0 + (x + .5) * pixel,
         y: a.y + y0 + (y + .5) * pixel

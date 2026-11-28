@@ -17,7 +17,7 @@ import { dragGradient, gradientPath, initialGradientLine, locate } from '../core
 import type { SightSegments } from '../core/terrainSight';
 import { withSightTerrain, areaShape, brushCuts, bucketRegion, extendGradient, clippedBrush, patchStroke, connectedHeight, type TerrainEdge } from '../core/terrainEdges';
 import { movementCost } from '../core/movementCost';
-import { EMPTY_TERRAIN, MAX_STROKE_CELLS, slopeAt, surfaceHeight, hasSlope, standingSurface, standingGround, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
+import { EMPTY_TERRAIN, MAX_STROKE_CELLS, slopeAt, surfaceHeight, hasSlope, standingSurface, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
 import { scaleCut, type GridCut, type PixelImage } from '../core/gridcut';
 import { AUTO_GRID_STRENGTH, detectPrintedGrid, impliedGrid } from '../core/mapgrid';
@@ -977,7 +977,7 @@ export class Board {
 
   // ------------------------------------------------------------------ tokens
   private spellCache?: {scene:TableClient['scene']; draw:number; wall:number; meta:number; preview:boolean;
-    entries:{color:string; volume:ReturnType<typeof spellVolume>}[]};
+    entries:{color:string; source?:string; volume:ReturnType<typeof spellVolume>}[]};
   private activeSpells() {
     const scene=this.client.scene;
     if(!scene) return [];
@@ -988,7 +988,7 @@ export class Board {
       const d=this.attachedDrawing(raw);
       if(!isTemplate(d.k) || !this.sourceVisible(d) || (d.pv && d.uid!==this.client.uid && (!this.client.isDM || preview))) continue;
       const [a,b]=parsePts(d.p);
-      if(b) entries.push({color:d.color,volume:spellVolume(d,a,b,this.client.grid,this.wallsForSpells())});
+      if(b) entries.push({color:d.color,source:d.k==='emanation' && d.spell?.stick ? d.spell.source : undefined,volume:spellVolume(d,a,b,this.client.grid,this.wallsForSpells())});
     }
     this.spellCache={scene,draw:scene.drawRev,wall:scene.wallRev,meta:scene.metaRev,preview,entries};
     return entries;
@@ -1014,11 +1014,11 @@ export class Board {
     if(n>1) for(let j=0;j<n;j++) for(let i=0;i<n;i++) points.push({
       x:t.x+(i+.5-n/2)*cell*t.size/n,y:t.y+(j+.5-n/2)*cell*t.size/n
     });
-    return spells.filter(s=>points.some(p=>s.volume.hits(p,foot,head))).map(s=>s.color);
+    return spells.filter(s=>s.source!==t.id && points.some(p=>s.volume.hits(p,foot,head))).map(s=>s.color);
   }
   /** How high a token is (at `pos`, or where it is): flying, or standing on the ground there. */
   heightOf(t: Token, pos?: Vec): Altitude {
-    return altitudeOf(t, standingGround(this.zones, pos ?? t));
+    return altitudeOf(t, standingSurface(this.zones, pos ?? t));
   }
 
   /** How high the ground is at a spot, in feet. */
@@ -1242,12 +1242,17 @@ export class Board {
   }
 
   /** What stops a spell, for the template painter. */
+  private placementSpell(source?:string) {
+    const settings=this.ui.data.tplSettings;
+    const token=source && this.client.scene?.tokens.get(source);
+    return token && settings.start===undefined ? {...settings,start:this.heightOf(token).alt} : settings;
+  }
   placementElevations() {
     const u=this.ui.data,d=this.drag;
     const here=this.pointerW ?? this.viewCenterWorld();
     const pts=d?.kind==='shape' ? d.pts : [here,here];
     const axis=spellAxis({k:u.tplKind,bw:u.tplWidth,of:d?.kind==='shape' ? d.of : undefined,
-      spell:{...u.tplSettings,range:d?.kind==='shape' ? d.range : undefined}},pts[0],pts[1] ?? pts[0],this.client.grid,p=>this.groundAtPoint(p));
+      spell:{...this.placementSpell(d?.kind==='shape' ? d.source : undefined),range:d?.kind==='shape' ? d.range : undefined}},pts[0],pts[1] ?? pts[0],this.client.grid,p=>this.groundAtPoint(p));
     return {start:Math.round(axis.start),end:Math.round(axis.end)};
   }
 
@@ -2440,10 +2445,10 @@ export class Board {
         if (d.pts.length >= 2) this.plotLabel(li++, `${Math.round(d.hz)} ft`, (d.pts[0].x + d.pts[1].x) / 2, Math.min(d.pts[0].y, d.pts[1].y) - 8 / z, num(zc));
       } else {const shape:Shape={
         k: d.dk, pts: d.pts, color: isT ? u.tplColor : u.drawColor, w: isT ? Math.max(2, this.strokePx()) : this.strokePx(),
-        fill: !isT && (d.dk === 'rect' || d.dk === 'ellipse') ? FILL_LEVEL[u.drawFillMode] : 0, fc: isT ? undefined : u.drawFillColor, dash: !isT && u.drawDash, bw: u.tplWidth, of: d.of, spell:{...u.tplSettings,range:d.range},
+        fill: !isT && (d.dk === 'rect' || d.dk === 'ellipse') ? FILL_LEVEL[u.drawFillMode] : 0, fc: isT ? undefined : u.drawFillColor, dash: !isT && u.drawDash, bw: u.tplWidth, of: d.of, spell:{...this.placementSpell(d.source),range:d.range},
       };paintShape(g,shape,grid,0.85,this.coverOn(),this.wallsForSpells(),undefined,isT && d.pts.length>=2 ? this.spellPicture('preview',shape) : undefined,this.previewSurface);}
       if (isT && d.pts.length >= 2) {
-        const axis=spellAxis({k:d.dk,bw:u.tplWidth,of:d.of,spell:{...u.tplSettings,range:d.range}},d.pts[0],d.pts[1],grid,p=>this.groundAtPoint(p));
+        const axis=spellAxis({k:d.dk,bw:u.tplWidth,of:d.of,spell:{...this.placementSpell(d.source),range:d.range}},d.pts[0],d.pts[1],grid,p=>this.groundAtPoint(p));
         const tip=mapPoint(axis.b,this.terrainMaps);
         this.plotLabel(li++,templateLabel(d.dk,grid,d.pts[0],tip,u.tplWidth,footprintPx(grid,d.of ?? 0),axis.feet),tip.x,tip.y-12/z,num(u.tplColor));
       }
@@ -3361,7 +3366,7 @@ export class Board {
     const sphereAt = this.ui.data.tplSphereSnap;
     const free = kind === 'sphere' && sphereAt === 'off'; // a sphere that is told not to snap goes exactly where it is put
     const gridded=this.coverOn(),target=mapPoint(w,this.terrainMaps);
-    const spell:Spell=placed ?? {k:kind,bw:this.ui.data.tplWidth,of:d?.of,spell:this.ui.data.tplSettings};
+    const spell:Spell=placed ?? {k:kind,bw:this.ui.data.tplWidth,of:d?.of,spell:this.placementSpell(d?.source)};
     const snap=snapTemplate(grid, start, target, {
       origin: !placed && grid.snap && !free, length: gridded,
       kind, widthPx: templateWidthPx(grid,spell), sphereAt,
@@ -3461,7 +3466,7 @@ export class Board {
       k, p: joinPts(pts), color: isT ? u.tplColor : u.drawColor, w: isT ? Math.max(2, stroke) : stroke,
       fill: !isT && closed ? FILL_LEVEL[u.drawFillMode] : 0, fc: closed ? u.drawFillColor : '',
       dash: !isT && u.drawDash, txt: '', fs: 28, bw: u.tplWidth, of: k === 'emanation' && d.of ? d.of : undefined, pv: isT && !u.tplShare ? true : undefined,
-      spell:isT ? {...u.tplSettings,stick:d.source && u.tplSettings.stick ? true : undefined,source:d.source,range:d.range} : undefined,
+      spell:isT ? {...(u.tplSettings.stick ? u.tplSettings : this.placementSpell(d.source)),stick:d.source && u.tplSettings.stick ? true : undefined,source:d.source,range:d.range} : undefined,
       td: isT && u.tplRough ? true : undefined,
     }, { onId: (id) => {
       if(isT) this.spellPainter.placed(id);

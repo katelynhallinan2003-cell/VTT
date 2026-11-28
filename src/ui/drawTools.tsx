@@ -1,5 +1,5 @@
-import { aimedSpell, mapPoint, spellAxis, snapSpellFeet } from '../core/spellVolume';
-import { joinPts, parsePts } from '../core/draw';
+import { aimedSpell, spellAxis, snapSpellFeet } from '../core/spellVolume';
+import { parsePts } from '../core/draw';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { Board } from '../board/Board';
 import { DRAW_COLORS, DRAW_NAME, FILL_LEVEL, FONTS, LINE_H, STROKE_CELLS, fillModeOf, fontStack, isTemplate, sizeFt, withSizeFt, type FillMode } from '../core/draw';
@@ -432,19 +432,44 @@ export function WallFlyout(props: { ui: UiState; client: TableClient; onDetect?:
   );
 }
 
+function SpellHeightField({label,height,assigned,change}:{label:string;height:number;assigned?:number;change:(z?:number)=>void}){
+  const input=useRef<HTMLInputElement>(null), timer=useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const dirty=useRef(false);
+  const latest=useRef(change);
+  latest.current=change;
+  useEffect(()=>()=>clearTimeout(timer.current),[]);
+  useLayoutEffect(()=>{
+    if(input.current && !dirty.current) input.current.value=String(Math.round(height));
+  },[height,assigned]);
+  function commit(blur:boolean){
+    clearTimeout(timer.current);
+    const el=input.current;
+    if(!el || !dirty.current) return;
+    if(el.validity.valid && (el.value!=='' || blur)){
+      const z=el.value==='' ? undefined : el.valueAsNumber;
+      if(z!==assigned)latest.current(z);
+    }
+    if(blur) {
+      dirty.current=false;
+      if(el.value==='' || !el.validity.valid) el.value=String(Math.round(height));
+      else el.value=String(Math.round(el.valueAsNumber));
+    }
+  }
+  return <label class="field"><span>{label} (ft)</span><input ref={input} type="number" step="any" title="Clear to follow ground elevation"
+    onInput={()=>{dirty.current=true;clearTimeout(timer.current);timer.current=setTimeout(()=>commit(false),180);}}
+    onBlur={()=>commit(true)} onKeyDown={e=>{if(e.key==='Enter') e.currentTarget.blur();}}/></label>;
+}
+
 function SpellAdvanced({settings,kind,heights,placed=false,onChange}:{settings:SpellSettings;kind:Drawing['k'];heights:{start:number;end:number};placed?:boolean;onChange:(v:SpellSettings)=>void}) {
-  const heightField=(key:'start'|'end',label:string)=><label class="field"><span>{label} (ft)</span>
-    <input key={key+':'+settings[key]+':'+Math.round(heights[key])} type="number" step="any" title="Clear to follow ground elevation" defaultValue={Math.round(heights[key])}
-      onBlur={e=>{
-        const input=e.currentTarget, next={...settings};
-        if (!input.validity.valid || input.value===input.defaultValue) return;
-        if (input.value==='') delete next[key]; else next[key]=input.valueAsNumber;
-        input.value=String(Math.round(heights[key]));
-        if (next[key]!==settings[key]) onChange(next);
-      }} onKeyDown={e=>{if(e.key==='Enter') e.currentTarget.blur();}}/></label>;
+  const heightField=(key:'start'|'end',label:string)=><SpellHeightField key={key} label={label} height={heights[key]} assigned={settings[key]} change={z=>{
+    const next={...settings};
+    if(z===undefined)delete next[key];else next[key]=z;
+    onChange(next);
+  }}/>;
   return <>
     {settings.elevation!==false && <><div class="spell-heights">{heightField('start','Starting elevation')}{aimedSpell(kind) && heightField('end','Ending elevation')}</div>
       {aimedSpell(kind) && <p class="hint">Ending elevation sets the center of the far face.</p>}</>}
+  <p class="hint">The bright border marks affected ground.</p>
   <details class="spell-advanced"><summary>Advanced</summary>
     <Toggle checked={settings.walls!==false} onChange={walls=>onChange({...settings,walls})} label={placed?'This spell considers walls':'Consider walls'} />
     {settings.walls!==false && kind!=='beam' && <Toggle checked={settings.wrap!==false} onChange={wrap=>onChange({...settings,wrap})} label={placed?'This spell wraps around corners':'Wrap around corners'} />}
@@ -631,8 +656,7 @@ export function DrawInspector(props: { ui: UiState; client: TableClient; board: 
   const changeSpell=(spell:SpellSettings)=>{
     if(!one || !axis) return;
     const next={...spell,range:spell.range ?? snapSpellFeet(axis.feet,gridded)};
-    const projected=spellAxis({...one,spell:next},ends[0],ends[1],client.grid,p=>board?.groundAtPoint(p) ?? 0);
-    upd({spell:next,...(projected.run>=.1 ? {p:joinPts([ends[0],mapPoint(projected.b,board?.spellMaps() ?? [])])} : {})});
+    upd({spell:next});
   };
   const ft = client.grid.ft;
   return (

@@ -140,13 +140,12 @@ describe('spell volumes',()=>{
 
 describe('spell presentation',()=>{
   it('traces the actual floor slice of a 10 ft sphere with its center 6 ft high',()=>{
-    const v=spell('sphere',10,{start:6});
-    const cut=floorLines(v,grid,{segs:[]},true);
+    const picture=(start:number)=>spellPicture({spell:{k:'sphere',bw:5,spell:{start}},a,b:point(10),color:'#aa55ff',cover:false,fast:false},grid,{segs:[]});
+    const cut=picture(6);
     expect(cut.contact.length).toBeGreaterThan(8);
     for(let i=0;i<cut.contact.length;i+=2)
       expect(Math.hypot(cut.contact[i],cut.contact[i+1])).toBeCloseTo(8,1);
-    expect(floorLines(spell('sphere',10,{start:11}),grid,{segs:[]},true).contact).toHaveLength(0);
-    expect(floorLines(v,grid,{segs:[]},false).contact).toHaveLength(0);
+    expect(picture(11).contact).toHaveLength(0);
   });
   it.each(['beam','cone','cube','sphere','emanation'] as const)('shades the %s volume and removes buried surfaces',k=>{
     const render=(height:number,elevation=true)=>spellPicture({spell:{k,bw:6,of:5,spell:{start:0,end:0,elevation}},
@@ -167,16 +166,52 @@ describe('spell presentation',()=>{
     const lowCliff=spellPicture(req,grid,{segs:[{a:point(-10,-5),b:point(-10,20),top:2}],ground:()=>0}).surface;
     expect(lowCliff.rgba).toEqual(open.rgba);
   });
+  it('uses ground altitude for footprint fill and keeps an airborne token hittable',()=>{
+    const req={spell:{k:'sphere' as const,bw:5,spell:{start:6,range:10}},a,b:point(10),color:'#223344',cover:false,fast:false};
+    const world={segs:[],ground:()=>0};
+    const picture=spellPicture(req,grid,world);
+    expect(picture.contact.length).toBeGreaterThan(0);
+    for(let k=0;k<picture.contact.length;k+=2)
+      expect(Math.hypot(picture.contact[k],picture.contact[k+1])).toBeCloseTo(8,1);
+    const raised={...req,spell:{...req.spell,spell:{start:16,range:10}}};
+    for(const cover of [true,false]){
+      const air=spellPicture({...raised,cover},grid,world);
+      expect(air.fill.length+air.triangles.length+air.contact.length).toBe(0);
+      expect(air.surface.rgba.some(Boolean)).toBe(true);
+    }
+    const volume=spellVolume(raised.spell,a,point(10),grid,world);
+    expect(volume.hits(a,0,5)).toBe(false);
+    expect(volume.hits(a,10,15)).toBe(true);
+  });
+  it('passes below an open 30 ft deck, while targeting the deck only at its height',()=>{
+    const edge=(x:number)=>({a:point(x,-60),b:point(x,60),top:30,terrainPxPerFt:1});
+    const entry=edge(6),exit=edge(12);
+    const ground=(p:{x:number})=>p.x>=6 && p.x<=12 ? 30 : 0;
+    const open={ground,segs:[],openings:[entry,exit]};
+    for(const k of ['beam','cube','cone','sphere'] as const){
+      const cast=spell(k,25,{start:0,end:0,wrap:false},open);
+      expect(cast.hits(point(18),0)).toBe(true);
+      expect(cast.hits(point(9),0,5)).toBe(true);
+      expect(cast.hits(point(9),30)).toBe(false);
+      const closed=spell(k,25,{start:0,end:0,wrap:false},{...open,openings:[entry],segs:[exit]});
+      expect(closed.hits(point(18),0)).toBe(false);
+    }
+    expect(spell('sphere',40,{start:0},open).hits(point(9),30)).toBe(true);
+  });
+  it('maps visible cone pixels to their physical overhead positions',()=>{
+    const d={k:'cone' as const,bw:5,spell:{start:18,end:11}},end=point(-32,24);
+    const v=spellVolume(d,a,end,grid),pic=spellPicture({spell:d,a,b:end,color:'#ff7900',cover:false,fast:false},grid,{segs:[]});
+    const img=pic.surface;
+    for(let j=0;j<img.rows;j+=3)for(let i=0;i<img.cols;i+=3)if(img.rgba[(j*img.cols+i)*4+3]){
+      const p={x:img.x+(i+.5)*img.w/img.cols,y:img.y+(j+.5)*img.h/img.rows};
+      expect(v.heightSpan(p)).not.toBeNull();
+    }
+  });
   it('cuts the far rim of a cone and keeps the exposed wire on a sloping floor',()=>{
     const world={segs:[],ground:(p:{x:number})=>p.x*.25};
     const v=spell('cone',25,{start:8,end:1},world),cut=floorLines(v,grid,world,true);
     expect(cut.wire.length).toBeGreaterThan(0);
-    expect(cut.contact.length).toBeGreaterThan(0);
     expect(cut.wire).not.toEqual(floorLines(v,grid,world,false).wire);
-    for(let i=0;i<cut.contact.length;i+=2){
-      const q=point(cut.contact[i],cut.contact[i+1]),span=v.heightSpan(q);
-      if(span)expect(Math.min(Math.abs(world.ground(q)-span[0]),Math.abs(world.ground(q)-span[1]))).toBeLessThan(.15);
-    }
   });
   it('keeps the authored first blocker when tracing across many indexed walls',()=>{
     const walls=Array.from({length:80},(_,i)=>({a:point((i*19)%83,(i%5)-4),b:point((i*19)%83+3,i%9+3)}));

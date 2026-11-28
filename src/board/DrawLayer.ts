@@ -1,4 +1,4 @@
-import {floorLines,spellOutline,spellPicture} from '../core/spellPicture';
+import {floorLines,spellOutline,spellPicture,trimSpellCell} from '../core/spellPicture';
 import type {PictureView} from './SpellPainter';
 import clip, {type MultiPolygon, type Polygon, type Pair} from 'polygon-clipping';
 import { spellVolume, type SpellWorld } from '../core/spellVolume';
@@ -58,6 +58,7 @@ export class SpellTexture {
   draw(g:Graphics,img:import('../core/spellSurface').SurfaceImage,alpha:number){
     if(!this.canvas){
       this.canvas=document.createElement('canvas');
+      this.canvas.width=this.canvas.height=this.size;
       this.staging=document.createElement('canvas');
       const source=new CanvasSource({resource:this.canvas,width:this.size,height:this.size,resolution:1,scaleMode:'linear'});
       this.texture=new Texture({source});
@@ -132,31 +133,25 @@ export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1,
     };
     // The moving silhouette is cheap enough to cut against the ground immediately,
     // even while the worker is still finding the affected cells around walls.
-    const skin=current && picture ? picture : floorLines(volume,grid,world,s.spell?.elevation!==false,true,false);
+    const skin=current && picture ? picture : floorLines(volume,grid,world,s.spell?.elevation!==false,true);
     const rim=(width:number,opacity=alpha)=>lines(skin.outline,width,col,opacity);
     if(outlineWidth!==undefined) {
-      rim(outlineWidth);
-      if(picture) lines(picture.contact,outlineWidth,col,alpha);
+      rim(outlineWidth,alpha*.7);
       if(s.k==='emanation') paint(footprintPoly(pts[0],widthPx,hexShape),null,outlineWidth);
       return;
     }
+    const groundInk=Math.min(1,fillA*1.6);
+    if(picture?.composed && surface){
+      surface.draw(g,picture.surface,Math.min(1,fillA/TEMPLATE_FILL));
+      rim(Math.max(1.5,s.w*.65),alpha*.45);
+      paint(ellipsePts(pts[0].x,pts[0].y,Math.max(3,s.w*1.2),Math.max(3,s.w*1.2)),alpha);
+      return;
+    }
+    if(picture && surface)surface.draw(g,picture.surface,Math.min(.65,fillA*1.65));
     if(picture && !picture.solid) {
-      const lit=cover ? Math.max(.5,fillA)*alpha : fillA;
+      const lit=groundInk;
       const paintCells=(poly:Vec[])=>{
-        if(s.k==='beam') {
-          // A covered cell can straddle the emitter. Cut just its rear portion.
-          const {ux,uy}=volume.axis;
-          const forward=(p:Vec)=>(p.x-pts[0].x)*ux+(p.y-pts[0].y)*uy;
-          const clipped:Vec[]=[];
-          for(let i=0;i<poly.length;i++) {
-            const p=poly[i],q=poly[(i+1)%poly.length],dp=forward(p),dq=forward(q);
-            if(dp>=0) clipped.push(p);
-            if((dp<0)!==(dq<0)) {
-              const t=dp/(dp-dq); clipped.push({x:p.x+(q.x-p.x)*t,y:p.y+(q.y-p.y)*t});
-            }
-          }
-          poly=clipped;
-        }
+        if(s.k==='beam')poly=trimSpellCell(poly,pts[0],volume.axis);
         if(poly.length>=3) paint(poly,lit);
       };
       const data=picture.fill;
@@ -166,11 +161,15 @@ export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1,
         const left=data[i],top=data[i+1],right=data[i+2],bottom=data[i+3];
         paintCells([{x:left,y:top},{x:right,y:top},{x:right,y:bottom},{x:left,y:bottom}]);
       }
+      const tris=picture.triangles;
+      if(tris.length){
+        for(let i=0;i<tris.length;i+=6)g.moveTo(tris[i],tris[i+1]).lineTo(tris[i+2],tris[i+3]).lineTo(tris[i+4],tris[i+5]).closePath();
+        g.fill({color:fcol,alpha:lit});
+      }
     } else if(picture?.solid) {
-      paint(outline,fillA,0,s.k==='emanation' ? footprintPoly(pts[0],widthPx,hexShape) : undefined);
+      paint(outline,groundInk,0,s.k==='emanation' ? footprintPoly(pts[0],widthPx,hexShape) : undefined);
     }
-    if(picture && surface)surface.draw(g,picture.surface,alpha*Math.min(1,fillA/TEMPLATE_FILL));
-    rim(Math.max(1.5,s.w*.65),picture ? alpha*.65 : alpha);
+    rim(Math.max(1.5,s.w*.65),picture ? alpha*.60 : alpha);
     if(!picture) lines(skin.wire,Math.max(1,s.w*.55),col,alpha*.65);
     if(picture){
       // A lighter line inside a spell-coloured edge distinguishes the ground cut

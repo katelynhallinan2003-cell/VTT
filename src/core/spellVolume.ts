@@ -6,7 +6,7 @@ import { cellCentersIn, MAX_COVERED } from './cells';
 import { rectContains } from './geometry';
 
 export type Spell = Pick<Drawing,'k'|'bw'|'of'|'spell'>;
-export interface SpellWorld { segs:Seg[]; ground?:(p:Vec)=>number; maps?:Rect[]; steppedGround?:boolean }
+export interface SpellWorld { segs:Seg[]; openings?:Seg[]; ground?:(p:Vec)=>number; maps?:Rect[]; steppedGround?:boolean }
 export const aimedSpell=(k:Drawing['k'])=>k==='cone' || k==='beam' || k==='cube';
 const distance=(a:Vec,b:Vec)=>Math.hypot(b.x-a.x,b.y-a.y);
 const clamp=(v:number,l:number,h:number)=>Math.max(l,Math.min(h,v));
@@ -190,16 +190,63 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
     return wallIndex(from,to,blocks);
   };
   const floor=(p:Vec)=>(ground(p)-start)*px;
+  // An erased contour is an entrance under a raised deck. Only lower the
+  // intervening floor along rays that actually cross the cut, and only for
+  // the raised span. Ground targeting still asks about the deck's real height.
+  const openings = (world.openings ?? []).filter(s =>
+    Math.min(s.a.x,s.b.x) <= bounds.x+bounds.w && Math.max(s.a.x,s.b.x) >= bounds.x &&
+    Math.min(s.a.y,s.b.y) <= bounds.y+bounds.h && Math.max(s.a.y,s.b.y) >= bounds.y);
+  function pathFloor(from:Vec,to:Vec) {
+    if (!openings.length) return undefined;
+    const dx=to.x-from.x, dy=to.y-from.y, dist=Math.hypot(dx,dy);
+    if (!dist) return undefined;
+    const cuts:number[]=[];
+    const x0=Math.min(from.x,to.x),x1=Math.max(from.x,to.x),y0=Math.min(from.y,to.y),y1=Math.max(from.y,to.y);
+    for(const s of openings){
+      if((s.a.x<x0 && s.b.x<x0) || (s.a.x>x1 && s.b.x>x1) ||
+         (s.a.y<y0 && s.b.y<y0) || (s.a.y>y1 && s.b.y>y1))continue;
+      const t=rayHit(from,dx,dy,s);
+      if(t<=1)cuts.push(t);
+    }
+    if(cuts.length>1)cuts.sort((a,b)=>a-b);
+    if (!cuts.length) return undefined;
+    const spans:{from:number;to:number;low:number;high:number}[]=[];
+    let enter:{from:number;low:number;high:number}|undefined;
+    const at=(t:number)=>ground({x:from.x+dx*t,y:from.y+dy*t});
+    const delta=Math.min(.001,grid.cell*.005/dist);
+    let last=-Infinity;
+    for (const t of cuts) {
+      if (t-last<1e-7) continue;
+      last=t;
+      const before=at(t-delta), after=at(t+delta);
+      if (after>before+.001) {
+        if (enter) spans.push({...enter,to:t});
+        enter={from:t,low:before,high:after};
+      } else if (before>after+.001) {
+        spans.push({from:enter?.from ?? 0,to:t,low:Math.max(enter?.low ?? after,after),high:Math.max(enter?.high ?? before,before)});
+        enter=undefined;
+      }
+    }
+    if (enter) spans.push({...enter,to:1});
+    if (!spans.length) return undefined;
+    return (p:Vec,t:number)=>{
+      const z=ground(p);
+      const span=spans.find(s=>t>=s.from-1e-8 && t<=s.to+1e-8 && z>=s.low && z<=s.high+.01);
+      return ((span?.low ?? z)-start)*px;
+    };
+  }
   // Complete flat terrace boundaries are already tested at exact ray crossings.
   // Only continuous slopes and terrain with missing contours need interior samples.
   const sampleCount=(run:number)=>world.ground && !world.steppedGround ? Math.max(1,Math.min(128,Math.ceil(run/(grid.cell/4)))) : 1;
   function aboveGround(from:Vec,z0:number,to:Vec,z1:number) {
     if(!elevated) return true;
-    if(z0<floor(from)-eps || z1<floor(to)-eps) return false;
+    const passage=pathFloor(from,to);
+    if(z0<(passage?.(from,0) ?? floor(from))-eps || z1<(passage?.(to,1) ?? floor(to))-eps) return false;
     const n=sampleCount(distance(from,to));
     for(let i=1;i<n;i++) {
       const t=i/n;
-      if(z0+t*(z1-z0)<floor({x:from.x+(to.x-from.x)*t,y:from.y+(to.y-from.y)*t})-eps) return false;
+      const q={x:from.x+(to.x-from.x)*t,y:from.y+(to.y-from.y)*t};
+      if(z0+t*(z1-z0)<(passage?.(q,t) ?? floor(q))-eps) return false;
     }
     return true;
   }
@@ -240,19 +287,21 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
     if(elevated && (world.ground || sin>0)) {
       // Even without an intervening wall, a downward ray can enter the
       // interior of a plateau. Parallel lanes may meet different ground.
+      const passage=pathFloor(p,{x:p.x-ux*x,y:p.y-uy*x});
       const n=sampleCount(x);
       // Flat base ground needs only the highest ray-relative floor: for
       // uphill rays this can also be the ray's oblique emitting face.
       for(let i=0;i<=n;i++) {
         const back=x*i/n, q={x:p.x-ux*back,y:p.y-uy*back};
-        if(!occlude(back,floor(q)+back*sin/cos-eps)) return false;
+        if(!occlude(back,(passage?.(q,i/n) ?? floor(q))+back*sin/cos-eps)) return false;
       }
       // On a tilted emitting face some rays can start beneath the surface
       // between terrain samples. Check their actual emission position.
       if(sin>0) {
         const emitsAbove=(z:number)=>{
           const back=Math.max(0,Math.min(x,(x*cos+z*sin)*cos));
-          return z-back*sin/cos>=floor({x:p.x-back*ux,y:p.y-back*uy})-eps;
+          const q={x:p.x-back*ux,y:p.y-back*uy};
+          return z-back*sin/cos>=(passage?.(q,x ? back/x : 0) ?? floor(q))-eps;
         };
         if(!visible.some(([low,high])=>emitsAbove(high) || emitsAbove(low))) return false;
       }
@@ -342,7 +391,8 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
     if(!span) return false;
     let [lo,hi]=span;
     if(elevated) {
-      lo=Math.max(lo,floor(p));
+      const localFloor=floor(p);
+      if(lo<localFloor) lo=Math.max(lo,pathFloor(a,p)?.(p,1) ?? localFloor);
       if(lo>hi+eps) return false;
     }
     if(elevated && lowFt!==undefined) {
@@ -384,5 +434,5 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
     return range ? [start+range[0]/px,start+range[1]/px] : null;
   }
   return {geom,bounds,axis,edges,handle,hits,cells,heightSpan,hasWalls:walls.length>0,
-    groundClips:elevated && (!!world.ground || rise!==0 || start<0),feet:axis.feet};
+    groundClips:elevated && (!!world.ground || rise!==0 || start!==0),feet:axis.feet};
 }

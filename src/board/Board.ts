@@ -108,13 +108,13 @@ export class Board {
   private gridG = new Graphics();
   private tokenLayer = new Container();
   private fogLayer = new Container();
-  private previewSurface=new SpellTexture(96);
+  private previewSurface=new SpellTexture(160);
   private spellPainter=new SpellPainter(
     ()=>{
-      const {segs,maps,steppedGround}=this.wallsForSpells();
+      const {segs,maps,steppedGround,openings}=this.wallsForSpells();
       // Spell rays need only these numeric segment properties. Live terrain
       // sight segments also carry non-transferable fog callbacks.
-      return {grid:this.client.grid,maps,steppedGround,draws:[...this.client.scene!.draws.values()].filter(isGroundDrawing),
+      return {grid:this.client.grid,maps,steppedGround,openings,draws:[...this.client.scene!.draws.values()].filter(isGroundDrawing),
         segs:segs.map(({a,b,top,one,terrainPxPerFt})=>({a,b,top,one,terrainPxPerFt}))};
     },
     ()=>({grid:this.client.grid,world:this.wallsForSpells()}),
@@ -1123,7 +1123,7 @@ export class Board {
     const grid = this.client.grid;
     const templates=[...scene.draws.values()].filter(d=>d.td && isTemplate(d.k) && (!d.pv || (this.client.isDM && !this.ui.data.dmPreview) || d.uid===this.client.uid));
     const w = templates.length ? this.wallsForSpells() : undefined;
-    const spell = w ? templateRoughDraws(templates, grid, w.segs, w.ground,w.maps) : [];
+    const spell = w ? templateRoughDraws(templates, grid, w.segs, w.ground,w.maps,w.openings) : [];
     const next = roughOf(spell.length ? [...scene.draws.values(), ...spell] : scene.draws.values(), grid);
     if (next.sig !== this.rough.sig) { this.rough = next; this.paintRough(); }
   }
@@ -1232,7 +1232,6 @@ export class Board {
   }
 
   /** What stops a spell, for the template painter. */
-  spellMaps() { return this.terrainMaps; }
   placementElevations() {
     const u=this.ui.data,d=this.drag;
     const here=this.pointerW ?? this.viewCenterWorld();
@@ -1247,7 +1246,7 @@ export class Board {
     // a spell also depends on how high the ground is where it starts (a wall lower than that does not stop it)
     const {sight,openings}=this.wallSegs();
     const steppedGround=!openings.length && !this.zones.areas.some(a=>(a.gradient?.length ?? 0)>=2);
-    return { segs:sight, steppedGround, maps:this.terrainMaps, rev:this.sightSceneKey(), ground: this.zones.areas.length ? this.spellGround() : undefined };
+    return { segs:sight, openings, steppedGround, maps:this.terrainMaps, rev:this.sightSceneKey(), ground: this.zones.areas.length ? this.spellGround() : undefined };
   }
 
   /**

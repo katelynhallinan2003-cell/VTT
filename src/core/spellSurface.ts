@@ -32,12 +32,10 @@ const vertex = (p: V3, n: V3): Vertex => ({
   n
 });
 
-/** Shallow oblique rendering of the same oriented solid used for spell hits.
+/** Overhead rendering of the same oriented solid used for spell hits.
  * The casting point anchors the model; the separate board fill stays in map coordinates. */
-export function spellSurface(spell: Spell, a: Vec, v: Volume, grid: GridSettings, world: SpellWorld, tint: string, fast: boolean, reached?: (x: number, y: number) => boolean): SurfaceImage {
-  const sx = .25,
-    sy = -.43,
-    view = unit(vec(-sx, -sy, 1)),
+export function spellSurface(spell: Spell, a: Vec, v: Volume, grid: GridSettings, world: SpellWorld, tint: string, fast: boolean): SurfaceImage {
+  const view = vec(0, 0, 1),
     light = unit(vec(-.55, -.6, .78));
   const halfway = unit(vec(light.x + view.x, light.y + view.y, light.z + view.z));
   const {
@@ -140,8 +138,8 @@ export function spellSurface(spell: Spell, a: Vec, v: Volume, grid: GridSettings
       face([cap(0, -1, side), cap(len, -1, side), cap(len, 1, side), cap(0, 1, side)], basis(0, 0, side), side + 8);
     }
   }
-  const projX = (p: V3) => p.x + sx * p.z,
-    projY = (p: V3) => p.y + sy * p.z;
+  const projX = (p: V3) => p.x,
+    projY = (p: V3) => p.y;
   let x0 = Infinity,
     y0 = Infinity,
     x1 = -Infinity,
@@ -209,8 +207,21 @@ export function spellSurface(spell: Spell, a: Vec, v: Volume, grid: GridSettings
         y: a.y + y0 + (y + .5) * pixel
       }, maps))) continue;
       if (elevated && start + z / scale < (floorAt?.(at) ?? 0) - .0001) continue;
-      if (reached && !reached(at.x, at.y)) continue;
-      const normal = unit(vec(f * p.n.x + b * q.n.x + c * r.n.x, f * p.n.y + b * q.n.y + c * r.n.y, f * p.n.z + b * q.n.z + c * r.n.z));
+
+      let normal = unit(vec(f * p.n.x + b * q.n.x + c * r.n.x, f * p.n.y + b * q.n.y + c * r.n.y, f * p.n.z + b * q.n.z + c * r.n.z));
+      // A small bevel depicts the edge of a level box in a true overhead
+      // view. Its shading stays entirely inside the physical silhouette.
+      if ((spell.k==='cube' || spell.k==='beam') && id===9) {
+        const dx=at.x-a.x,dy=at.y-a.y;
+        const along=(dx*ux+dy*uy)*co+z*si, side=-dx*uy+dy*ux;
+        const h=spell.k==='cube' ? len/2 : half;
+        const edge=Math.min(along,len-along,h-Math.abs(side)),bevel=Math.min(h*.18,len*.08);
+        if(edge<bevel && bevel>0){
+          const slope=Math.max(0,1-edge/bevel);
+          const ns=edge===h-Math.abs(side) ? basis(0,Math.sign(side)*slope,1) : basis((along<len/2 ? -1 : 1)*slope,0,1);
+          normal=unit(ns);
+        }
+      }
       const diffuse = Math.max(0, dot(normal, light)),
         rim = (1 - Math.max(0, dot(normal, view))) ** 3;
       const shine = .10 * diffuse + .44 * Math.max(0, dot(normal, halfway)) ** 20 + .26 * rim;

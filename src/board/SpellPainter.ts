@@ -178,7 +178,12 @@ export class SpellPainter {
     }
     const queue = req.fast ? this.live : this.saved;
     const result = queue.request(scene, slot, req);
-    if (!result.picture) result.picture = (req.fast ? this.saved : this.live).shown.get(slot)?.picture;
+    if (!req.fast && !result.current) {
+      // After a height edit the old footprint would claim the wrong targets.
+      // A placement preview is reusable only if it depicts this exact cast.
+      const preview=this.live.shown.get(slot);
+      result.picture=preview?.key===JSON.stringify({...req,fast:true}) ? preview.picture : undefined;
+    } else if(req.fast && !result.picture) result.picture=this.saved.shown.get(slot)?.picture;
     return result;
   }
   warm(scene: string) {

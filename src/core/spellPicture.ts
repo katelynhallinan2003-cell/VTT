@@ -1,5 +1,5 @@
 import { spellSurface, type SurfaceImage } from './spellSurface';
-import { snapToCellCenter } from './geometry';
+import { cellPoly } from './cells';
 import type { GridSettings, Vec } from '../types';
 import { isHex } from './hex';
 import { mapSegments, spellVolume, type Spell, type SpellWorld } from './spellVolume';
@@ -8,11 +8,25 @@ export interface SpellPicture {
   surface: SurfaceImage;
   /** Rectangles as left, top, right, bottom or hex centers as x, y. */
   fill: Float32Array;
+  /** Boundary triangles on gridless maps. Interior rows use fill rectangles. */
+  triangles: Float32Array;
+  composed?: boolean;
   hex: boolean;
   solid: boolean;
   outline: Float32Array;
   wire: Float32Array;
   contact: Float32Array;
+}
+/** A covered cell behind a line's emitting face is cut at the origin. */
+export function trimSpellCell(poly:Vec[],origin:Vec,axis:{ux:number;uy:number}):Vec[] {
+  const forward=(p:Vec)=>(p.x-origin.x)*axis.ux+(p.y-origin.y)*axis.uy;
+  const out:Vec[]=[];
+  for(let i=0;i<poly.length;i++){
+    const p=poly[i],q=poly[(i+1)%poly.length],dp=forward(p),dq=forward(q);
+    if(dp>=0)out.push(p);
+    if((dp<0)!==(dq<0))out.push(lerp(p,q,dp/(dp-dq)));
+  }
+  return out;
 }
 export function spellOutline(v: Volume): Vec[] {
   const g = v.geom;
@@ -34,12 +48,11 @@ const add = (out: number[], a: Vec, b: Vec) => {
 
 /** Sample a projected volume at the actual surface. Outline, interior wires and the
  * surface cut are distinct: the top of a solid can clear ground while a lower wire is buried. */
-export function floorLines(v: Volume, grid: GridSettings, world: SpellWorld, elevated: boolean, fast = false, withContact = true) {
+export function floorLines(v: Volume, grid: GridSettings, world: SpellWorld, elevated: boolean, fast = false) {
   const ground = world.ground ?? (() => 0),
     maps = world.maps ?? [];
   const outline: number[] = [],
-    wire: number[] = [],
-    contact: number[] = [];
+    wire: number[] = [];
   const tol = 1e-5,
     step = Math.max(grid.cell / (fast ? 3 : 8), Math.max(v.bounds.w, v.bounds.h) / (fast ? 44 : 96), .01);
   function line(out: number[], a: Vec, b: Vec, height: (p: Vec, t: number) => number) {
@@ -84,70 +97,9 @@ export function floorLines(v: Volume, grid: GridSettings, world: SpellWorld, ele
     line(wire, a, b, (_, t) => a.height + (b.height - a.height) * t);
   }
 
-  // Pad the sampling domain so floor contacts which meet the silhouette also close.
-  // Sample shared edges identically on both sides, including discontinuous ledges.
-  if (withContact && elevated && v.bounds.w > 0 && v.bounds.h > 0) {
-    const {
-        x,
-        y,
-        w,
-        h
-      } = v.bounds,
-      cols = Math.max(2, Math.ceil(w / step)) + 2,
-      rows = Math.max(2, Math.ceil(h / step)) + 2;
-    const pos = (i: number, j: number) => ({
-      x: x + w * (i - 1) / (cols - 2),
-      y: y + h * (j - 1) / (rows - 2)
-    });
-    function state(p: Vec) {
-      const span = v.heightSpan(p);
-      if (!span) return -Infinity;
-      const z = ground(p);
-      return Math.min(z - span[0], span[1] - z) + tol;
-    }
-    const row = (j: number) => Float64Array.from({
-      length: cols + 1
-    }, (_, i) => state(pos(i, j)));
-    let upper = row(0);
-    for (let j = 0; j < rows; j++) {
-      const lower = row(j + 1);
-      for (let i = 0; i < cols; i++) {
-        const values = [upper[i], upper[i + 1], lower[i + 1], lower[i]];
-        if (!values.some(n => n >= 0) || !values.some(n => n < 0)) continue;
-        const points = [pos(i, j), pos(i + 1, j), pos(i + 1, j + 1), pos(i, j + 1)],
-          cross: {
-            p: Vec;
-            inside: boolean;
-          }[] = [];
-        for (let k = 0; k < 4; k++) {
-          const n = (k + 1) % 4;
-          if (values[k] >= 0 === values[n] >= 0) continue;
-          let a = points[k],
-            b = points[n];
-          for (let t = 0; t < 7; t++) {
-            const q = lerp(a, b, .5);
-            if (state(q) >= 0 === values[k] >= 0) a = q;else b = q;
-          }
-          cross.push({
-            p: lerp(a, b, .5),
-            inside: Number.isFinite(state(values[k] < 0 ? a : b))
-          });
-        }
-        if (cross.length === 4 && state(lerp(points[0], points[2], .5)) >= 0 !== values[0] >= 0) cross.push(cross.shift()!);
-        for (let k = 1; k < cross.length; k += 2) {
-          const l = cross[k - 1],
-            r = cross[k];
-          if (!l.inside && !r.inside) continue;
-          for (const [a, b] of mapSegments(l.p, r.p, maps)) add(contact, a, b);
-        }
-      }
-      upper = lower;
-    }
-  }
   return {
     outline: new Float32Array(outline),
-    wire: new Float32Array(wire),
-    contact: new Float32Array(contact)
+    wire: new Float32Array(wire)
   };
 }
 export interface PictureRequest {
@@ -169,69 +121,88 @@ export function spellPicture(req: PictureRequest, grid: GridSettings, world: Spe
     v = spellVolume(spell, a, b, grid, world);
   const lines = floorLines(v, grid, world, spell.spell?.elevation !== false, fast);
   const solid = !cover && !v.hasWalls && !v.groundClips;
-  const diameter = Math.max(v.bounds.w, v.bounds.h);
-  const unit = grid.cell / 4;
-  const previewCell = unit * 2 ** Math.max(0, Math.ceil(Math.log2(diameter / (40 * unit))));
-  const sampling = cover ? grid : {
-    ...grid,
-    shape: 'square' as const,
-    cell: fast ? previewCell : Math.max(grid.cell / 10, diameter / 140)
-  };
-  const hex = isHex(sampling),
-    data: number[] = [];
-  let reached: ((x: number, y: number) => boolean) | undefined;
-  if (!solid) {
-    const cells = v.cells(sampling);
-    if (v.hasWalls || v.groundClips) {
-      // On gridded maps the core of each covered cell is authoritative. The
-      // spell shell still has a smooth outer rim where the center misses it.
-      const occupied = new Map<number, Set<number>>();
-      const tile = (x: number) => Math.round(x / sampling.cell * 1024);
-      for (const p of cells) {
-        const y = tile(p.y);
-        let row = occupied.get(y);
-        if (!row) occupied.set(y, row = new Set());
-        row.add(tile(p.x));
+  const data:number[]=[], triangles:number[]=[], contact:number[]=[];
+  const hex=cover && isHex(grid);
+  if (cover) {
+    const cells=v.cells(grid,true);
+    const edges=new Map<string,[Vec,Vec]>();
+    const key=(p:Vec)=>Math.round(p.x*10000)+','+Math.round(p.y*10000);
+    for (const p of cells) {
+      const cell=cellPoly(grid,p);
+      const ring=spell.k==='beam' ? trimSpellCell(cell,a,v.axis) : cell;
+      for(let i=0;i<ring.length;i++) {
+        const a=ring[i], b=ring[(i+1)%ring.length], ka=key(a),kb=key(b);
+        const id=ka<kb ? ka+';'+kb : kb+';'+ka;
+        if(!edges.delete(id)) edges.set(id,[a,b]);
       }
-      // Vertical faces project onto a footprint edge. A sample just outside it
-      // carries no information about blockers. Test the face itself there.
-      const boundary = new Map<number, Map<number, boolean>>();
-      reached = (x, y) => {
-        const c = snapToCellCenter(sampling, {
-          x,
-          y
-        });
-        if (occupied.get(tile(c.y))?.has(tile(c.x))) return true;
-        if (v.heightSpan(c)) return false;
-        const ix = Math.round(x * 8 / sampling.cell);
-        const iy = Math.round(y * 8 / sampling.cell);
-        let row = boundary.get(iy);
-        if (!row) boundary.set(iy, row = new Map());
-        let visible = row.get(ix);
-        if (visible === undefined) {
-          visible = v.hits({ x, y });
-          row.set(ix, visible);
-        }
-        return visible;
-      };
+      if(hex) data.push(p.x,p.y);
     }
-    if (hex) for (const p of cells) data.push(p.x, p.y);else {
-      cells.sort((a, b) => a.y - b.y || a.x - b.x);
-      const h = sampling.cell / 2;
-      for (let i = 0; i < cells.length;) {
-        const p = cells[i++];
-        let right = p.x + h;
-        while (i < cells.length && cells[i].y === p.y && cells[i].x - h <= right + 1e-6) right = cells[i++].x + h;
-        data.push(p.x - h, p.y - h, right, p.y + h);
+    if(!hex) {
+      cells.sort((a,b)=>a.y-b.y || a.x-b.x);
+      const h=grid.cell/2;
+      for(let i=0;i<cells.length;){
+        const p=cells[i++];let right=p.x+h;
+        while(i<cells.length && cells[i].y===p.y && cells[i].x-h<=right+1e-6)right=cells[i++].x+h;
+        data.push(p.x-h,p.y-h,right,p.y+h);
       }
+    }
+    for(const [a,b] of edges.values()) for(const [l,r] of mapSegments(a,b,world.maps ?? [])) add(contact,l,r);
+  } else if(solid) {
+    const ring=spellOutline(v);
+    for(let i=0;i<ring.length;i++) for(const [a,b] of mapSegments(ring[i],ring[(i+1)%ring.length],world.maps ?? [])) add(contact,a,b);
+  } else if (v.bounds.w>0 && v.bounds.h>0) {
+    // Use the same floor-height hit query for both the coloured region and
+    // its outline. Refine mixed cells on their edges; uniform rows are cheap.
+    const size=Math.max(grid.cell/(fast ? 3 : 9),Math.max(v.bounds.w,v.bounds.h)/(fast ? 40 : 128));
+    const x0=Math.floor(v.bounds.x/size)*size-size,y0=Math.floor(v.bounds.y/size)*size-size;
+    const cols=Math.ceil((v.bounds.x+v.bounds.w-x0)/size)+1, rows=Math.ceil((v.bounds.y+v.bounds.h-y0)/size)+1;
+    const hit=(p:Vec)=>v.hits(p,world.ground?.(p) ?? 0);
+    type Corner=Vec & {inside:boolean};
+    const corner=(x:number,y:number):Corner=>({x,y,inside:hit({x,y})});
+    const row=(y:number)=>Array.from({length:cols+1},(_,i)=>corner(x0+i*size,y));
+    const crossings=new WeakMap<Corner,WeakMap<Corner,Vec>>();
+    function boundary(a:Corner,b:Corner):Vec {
+      if (!a.inside) [a,b]=[b,a];
+      let edges=crossings.get(a);
+      if(!edges)crossings.set(a,edges=new WeakMap());
+      const cached=edges.get(b);
+      if(cached)return cached;
+      let l:Vec=a,r:Vec=b;
+      for(let n=0;n<(fast ? 2 : 5);n++){
+        const m=lerp(l,r,.5);
+        if(hit(m)===a.inside) l=m; else r=m;
+      }
+      const crossing=lerp(l,r,.5);
+      edges.set(b,crossing);
+      return crossing;
+    }
+    function clippedTriangle(ps:Corner[]) {
+      const poly:Vec[]=[], cut:Vec[]=[];
+      for(let k=0;k<3;k++){
+        const a=ps[k],b=ps[(k+1)%3];
+        if(a.inside) poly.push(a);
+        if(a.inside!==b.inside){ const p=boundary(a,b);poly.push(p);cut.push(p); }
+      }
+      for(let k=2;k<poly.length;k++) triangles.push(poly[0].x,poly[0].y,poly[k-1].x,poly[k-1].y,poly[k].x,poly[k].y);
+      if(cut.length===2) add(contact,cut[0],cut[1]);
+    }
+    let top=row(y0);
+    for(let j=0;j<rows;j++){
+      const y=y0+j*size,bottom=row(y0+(j+1)*size);
+      let full=-1;
+      for(let i=0;i<=cols;i++){
+        const ps=i<cols ? [top[i],top[i+1],bottom[i+1],bottom[i]] : [];
+        if(ps.length && ps.every(p=>p.inside)){ if(full<0)full=i; continue; }
+        if(full>=0){data.push(x0+full*size,y,x0+i*size,y+size);full=-1;}
+        if(!ps.length || !ps.some(p=>p.inside)) continue;
+        const m=corner(x0+(i+.5)*size,y+size/2);
+        for(let k=0;k<4;k++)clippedTriangle([ps[k],ps[(k+1)%4],m]);
+      }
+      top=bottom;
     }
   }
-  const surface = spellSurface(spell, a, v, grid, world, req.color, fast, reached);
-  return {
-    ...lines,
-    surface,
-    solid,
-    hex,
-    fill: new Float32Array(data)
-  };
+  // The translucent shell shows the solid above the terrain. A shadow on
+  // the floor does not cut a column through the sphere overhead.
+  const surface = spellSurface(spell, a, v, grid, world, req.color, fast);
+  return {...lines,contact:new Float32Array(contact),surface,solid,hex,fill:new Float32Array(data),triangles:new Float32Array(triangles)};
 }

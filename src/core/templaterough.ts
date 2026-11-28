@@ -14,13 +14,13 @@ export const TEMPLATE_ROUGH_PREFIX = 'tpl:';
  * can reach: a wall that stops the spell stops the difficult ground too, the same squares the map lights up).
  * `sight` and `groundAt` are what `reachableCells` takes.
  */
-export function templateRoughDraws(draws: Iterable<Drawing>, grid: GridSettings, sight?: Seg[], groundAt?: (p: Vec) => number, maps?:import('../types').Rect[]): Drawing[] {
+export function templateRoughDraws(draws: Iterable<Drawing>, grid: GridSettings, sight?: Seg[], groundAt?: (p: Vec) => number, maps?:import('../types').Rect[], openings?:Seg[]): Drawing[] {
   const out: Drawing[] = [];
   for (const d of draws) {
     if (!d.td || !isTemplate(d.k)) continue;
     const pts = parsePts(d.p);
     if (pts.length < 2) continue;
-    const cells = spellVolume(d,pts[0],pts[1],grid,{segs:sight ?? [],ground:groundAt,maps}).cells(grid,true);
+    const cells = spellVolume(d,pts[0],pts[1],grid,{segs:sight ?? [],ground:groundAt,maps,openings}).cells(grid,true);
     if (!cells.length) continue;
     const id = TEMPLATE_ROUGH_PREFIX + d.id;
     out.push({

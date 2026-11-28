@@ -1,3 +1,5 @@
+import {SpellPainter} from './SpellPainter';
+import {SpellTexture,type Shape} from './DrawLayer';
 import { spellAxis, spellVolume, snapSpellFeet, mapPoint, onMap, type Spell } from '../core/spellVolume';
 import { Application, Container, FillPattern, Graphics, Matrix, Sprite, Text, Texture, type Renderer } from 'pixi.js';
 import { FogView } from './FogView';
@@ -106,7 +108,26 @@ export class Board {
   private gridG = new Graphics();
   private tokenLayer = new Container();
   private fogLayer = new Container();
-  private drawLayer = new DrawLayer();
+  private previewSurface=new SpellTexture(96);
+  private spellPainter=new SpellPainter(
+    ()=>{
+      const {segs,maps,steppedGround}=this.wallsForSpells();
+      // Spell rays need only these numeric segment properties. Live terrain
+      // sight segments also carry non-transferable fog callbacks.
+      return {grid:this.client.grid,maps,steppedGround,draws:[...this.client.scene!.draws.values()].filter(isGroundDrawing),
+        segs:segs.map(({a,b,top,one,terrainPxPerFt})=>({a,b,top,one,terrainPxPerFt}))};
+    },
+    ()=>({grid:this.client.grid,world:this.wallsForSpells()}),
+    id=>{if(id!=='preview'){this.drawLayer.invalidate(id);this.spellDrawDirty=true;}this.invalidate();}
+  );
+  private spellDrawDirty=false;
+  private drawLayer = new DrawLayer((id,s)=>this.spellPicture(id,s),id=>this.spellPainter.forget(id));
+  private spellPicture(slot:string,s:Shape){
+    const drag=this.drag;
+    const fast=slot==='preview' || (drag?.kind==='drawresize' && !!drag.patch && drag.id===slot) || (drag?.kind==='drawmove' && drag.moved && drag.ids.includes(slot));
+    return this.spellPainter.request(this.sightSceneKey(),slot,{color:s.color,spell:{k:s.k,bw:s.bw,of:s.of,spell:s.spell},
+      a:s.pts[0],b:s.pts[1],cover:this.coverOn(),fast});
+  }
   private terrainLayer = new TerrainLayer(()=>this.invalidate());
   /** difficult terrain: a layer of its own, hatched on the map */
   private rough: Terrain = EMPTY_TERRAIN({ ...DEFAULT_GRID });
@@ -331,6 +352,8 @@ export class Board {
     setTextureFailHandler(null);
     cancelAnimationFrame(this.raf);
     this.sightSolver.destroy();
+    this.spellPainter.reset();
+    this.drawLayer.clear();
     this.fogView?.destroy();
     this.resizeObs?.disconnect();
     for (const u of this.unsubs) u();
@@ -344,6 +367,8 @@ export class Board {
     if (this.app) {
       try { this.app.destroy(true, { children: true }); } catch { /* already gone */ }
     }
+    this.previewSurface.destroy();
+    this.drawLayer.destroy();
   }
 
   invalidate() { this.dirty = true; }
@@ -572,7 +597,8 @@ export class Board {
       this.seenFogRev = scene.fogRev;
       this.updateFog();
     }
-    if (scene.drawRev !== this.seenDrawRev) {
+    if (scene.drawRev !== this.seenDrawRev || this.spellDrawDirty) {
+      this.spellDrawDirty=false;
       this.seenDrawRev = scene.drawRev;
       this.drawLayer.sync(this.drawingsShown(), c.grid, this.textRes, this.coverOn(), this.wallsForSpells());
       const stale = [...this.ui.data.drawSel].filter((id) => !scene.draws.has(id));
@@ -604,6 +630,7 @@ export class Board {
     this.drag = null;
     this.polyPts = [];
     this.ui.select([]);
+    this.spellPainter.reset();
     this.drawLayer.clear();
     this.wallLayer.clear();
     this.wallPreview = null; this.wallHover = null; this.wallStart = null;
@@ -1220,7 +1247,7 @@ export class Board {
     // a spell also depends on how high the ground is where it starts (a wall lower than that does not stop it)
     const {sight,openings}=this.wallSegs();
     const steppedGround=!openings.length && !this.zones.areas.some(a=>(a.gradient?.length ?? 0)>=2);
-    return { segs:sight, steppedGround, maps:this.terrainMaps, rev: `${this.client.scene?.wallRev ?? 0}:${this.zones.sig}:${JSON.stringify(this.terrainMaps)}`, ground: this.zones.areas.length ? this.spellGround() : undefined };
+    return { segs:sight, steppedGround, maps:this.terrainMaps, rev:this.sightSceneKey(), ground: this.zones.areas.length ? this.spellGround() : undefined };
   }
 
   /**
@@ -2004,6 +2031,7 @@ export class Board {
     if (u.rulerColor !== prev.rulerColor) { this.publishLive(); this.invalidate(); }
     if (u.heightView !== prev.heights || (prev.tool === 'height') !== (u.tool === 'height')) this.refreshDraws();
     if (prev.tool !== u.tool) {
+      if(u.tool==='template' && this.client.scene?.meta)this.spellPainter.warm(this.sightSceneKey());
       if(u.tool==='template' && u.tplMode==='select' && !this.drawingsShown().some(d=>isTemplate(d.k))) this.ui.set({tplMode:'place'});
       this.cancelPress();
       this.invalidate();
@@ -2377,7 +2405,7 @@ export class Board {
       if(isTemplate(dd.k)) {
         const shape=shapeOf(dd);
         if(mv) shape.pts=shape.pts.map(p=>({x:p.x+mv.dx,y:p.y+mv.dy}));
-        paintShape(g,{...shape,color:'#4da3ff'},grid,1,false,{segs:[],ground:p=>this.groundAtPoint(p),maps:this.terrainMaps},1.5/z);
+        paintShape(g,{...shape,color:'#4da3ff'},grid,1,false,{segs:[],ground:p=>this.groundAtPoint(p),maps:this.terrainMaps},1.5/z,this.spellPicture(id,shape));
         continue;
       }
       const b = this.drawLayer.boundsOf(dd, grid);
@@ -2393,6 +2421,7 @@ export class Board {
       }
     }
 
+    if(d?.kind!=='shape') this.spellPainter.forget('preview');
     // the shape being dragged out
     if (d?.kind === 'shape') {
       const isT = isTemplate(d.dk);
@@ -2400,10 +2429,10 @@ export class Board {
         const zc = zoneColor(d.hz);
         paintShape(g, { k: d.dk, pts: d.pts, color: zc, w: Math.max(2, grid.cell * 0.05), fill: 0.4, fc: zc, dash: false, bw: 5 }, grid, 0.85, false);
         if (d.pts.length >= 2) this.plotLabel(li++, `${Math.round(d.hz)} ft`, (d.pts[0].x + d.pts[1].x) / 2, Math.min(d.pts[0].y, d.pts[1].y) - 8 / z, num(zc));
-      } else paintShape(g, {
+      } else {const shape:Shape={
         k: d.dk, pts: d.pts, color: isT ? u.tplColor : u.drawColor, w: isT ? Math.max(2, this.strokePx()) : this.strokePx(),
         fill: !isT && (d.dk === 'rect' || d.dk === 'ellipse') ? FILL_LEVEL[u.drawFillMode] : 0, fc: isT ? undefined : u.drawFillColor, dash: !isT && u.drawDash, bw: u.tplWidth, of: d.of, spell:{...u.tplSettings,range:d.range},
-      }, grid, 0.85, this.coverOn(), this.wallsForSpells());
+      };paintShape(g,shape,grid,0.85,this.coverOn(),this.wallsForSpells(),undefined,isT && d.pts.length>=2 ? this.spellPicture('preview',shape) : undefined,this.previewSurface);}
       if (isT && d.pts.length >= 2) {
         const axis=spellAxis({k:d.dk,bw:u.tplWidth,of:d.of,spell:{...u.tplSettings,range:d.range}},d.pts[0],d.pts[1],grid,p=>this.groundAtPoint(p));
         const tip=mapPoint(axis.b,this.terrainMaps);
@@ -2774,9 +2803,9 @@ export class Board {
     return currentOverlay(this.client.grid) !== 'none';
   }
 
-  private refreshDraws() {
+  private refreshDraws(groundChanged=true) {
     this.drawLayer.sync(this.drawingsShown(), this.client.grid, this.textRes, this.coverOn(), this.wallsForSpells());
-    this.syncTerrain();
+    if(groundChanged)this.syncTerrain();
     this.invalidate();
   }
 
@@ -2795,7 +2824,8 @@ export class Board {
   /** Repaint the high and low ground (a resize that is still being dragged shows as it goes). */
   private syncTerrain() {
     const pv = this.drawPreview;
-    const t = pv ? zonesOf(this.client.drawingsSorted().map((d) => (d.id === pv.id ? { ...d, ...pv.patch } : d)), this.client.grid) : this.zones;
+    const changed = pv && this.client.scene?.draws.get(pv.id);
+    const t = pv && changed && isGroundDrawing(changed) ? zonesOf(this.client.drawingsSorted().map((d) => (d.id === pv.id ? { ...d, ...pv.patch } : d)), this.client.grid) : this.zones;
     const shown = this.heightFade > 0.001;
     this.terrainLayer.container.alpha = this.heightFade;
     const sel = new Set(this.ui.data.heightPatches ? [] : this.selectedAreas().map((a) => a.id));
@@ -3207,7 +3237,7 @@ export class Board {
       const [a,b]=parsePts(item.p);
       if (!b) continue;
       const volume=spellVolume(item,a,b,this.client.grid,{segs:[],ground:p=>this.groundAtPoint(p),maps:this.terrainMaps});
-      if (volume.hits(w) || Math.hypot(w.x-a.x,w.y-a.y)<=tol) return item;
+      if (this.spellPainter.surfaceAt(item.id,w) || volume.hits(w) || Math.hypot(w.x-a.x,w.y-a.y)<=tol) return item;
     }
     return null;
   }
@@ -3238,6 +3268,7 @@ export class Board {
     const sn = this.templateSnap(kind, w, w, e, d);
     d.pts = [sn.a, sn.a];
     d.snap = sn.st;
+    this.spellPainter.forget('preview');
     this.drag = d;
   }
 
@@ -3377,6 +3408,7 @@ export class Board {
       spell:isT ? {...u.tplSettings,range:d.range} : undefined,
       td: isT && u.tplRough ? true : undefined,
     }, { onId: (id) => {
+      if(isT) this.spellPainter.placed(id);
       if(isT && !u.tplCustomColor) this.ui.set({tplColor:DRAW_COLORS[(DRAW_COLORS.indexOf(u.tplColor)+1)%DRAW_COLORS.length]});
       if (closed || k === 'line' || k === 'arrow' || k === 'pen') this.ui.selectDrawings([id]);
     } }).catch((err: Error) => this.cb.onNotice(err.message, 'error'));
@@ -3521,7 +3553,7 @@ export class Board {
           d.patch={p:joinPts([sn.a,sn.b]),spell:{...d.orig.spell,range:sn.range}};
         } else d.patch=resizeDrawing(d.orig,d.handle,w,{shift:e.shiftKey,alt:e.altKey,grid:this.client.grid});
         this.drawPreview = { id: d.id, patch: d.patch };
-        this.refreshDraws();
+        this.refreshDraws(!spell);
         break;
       }
       case 'erase': this.eraseAt(w); break;
@@ -3540,7 +3572,7 @@ export class Board {
           const clipped=mapPoint({x:p.x+dx,y:p.y+dy},this.terrainMaps); dx=clipped.x-p.x; dy=clipped.y-p.y;
         }
         d.moved = true; d.dx = dx; d.dy = dy;
-        if(spells.length) this.refreshDraws();
+        if(spells.length) this.refreshDraws(false);
         if (!this.ui.data.heightPatches) this.drawLayer.setOffset(new Set(d.ids.filter(id=>!spells.some(s=>s.id===id))), dx, dy);
         break;
       }
@@ -3732,6 +3764,8 @@ export class Board {
         break;
       }
       case 'drawmove':
+        for(const id of d.ids)this.drawLayer.invalidate(id);
+        this.spellDrawDirty=true;
         this.drawLayer.setOffset(new Set(), 0, 0);
         if (d.moved) {
           if (this.ui.data.heightPatches) this.editPickedGround({delta:{x:d.dx,y:d.dy}});
@@ -3739,6 +3773,7 @@ export class Board {
         }
         break;
       case 'drawresize': {
+        this.drawLayer.invalidate(d.id);this.spellDrawDirty=true;
         const patch = d.patch;
         if (patch && Object.keys(patch).length) {
           void this.client.updateDrawings([d.id], patch).finally(() => { this.drawPreview = null; this.refreshDraws(); });

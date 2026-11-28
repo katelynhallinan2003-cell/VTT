@@ -1,10 +1,11 @@
+import {floorLines,spellOutline,spellPicture} from '../core/spellPicture';
+import type {PictureView} from './SpellPainter';
 import clip, {type MultiPolygon, type Polygon, type Pair} from 'polygon-clipping';
-import { mapSegments, spellVolume, type SpellWorld } from '../core/spellVolume';
+import { spellVolume, type SpellWorld } from '../core/spellVolume';
 import { rectContains } from '../core/geometry';
-import { Container, Graphics, Text } from 'pixi.js';
-import { LINE_H, beamWidthPx, templateWidthPx, footprintPoly, boundsOf, dashSegments, drawingBounds, fontStack, isTemplate, parsePts, templateGeom, textMetrics } from '../core/draw';
+import { Container, Graphics, Text, Texture, CanvasSource } from 'pixi.js';
+import { LINE_H, beamWidthPx, templateWidthPx, footprintPoly, boundsOf, dashSegments, drawingBounds, fontStack, isTemplate, parsePts, textMetrics } from '../core/draw';
 import { cellPoly } from '../core/cells';
-import { isHex } from '../core/hex';
 import type { DrawKind, Drawing, GridSettings, Vec } from '../types';
 
 const hex = (c: string) => parseInt(c.replace('#', '').padEnd(6, '0').slice(0, 6), 16) || 0;
@@ -46,8 +47,46 @@ function ellipsePts(cx: number, cy: number, rx: number, ry: number): Vec[] {
   return Array.from({ length: n + 1 }, (_, i) => ({ x: cx + Math.cos((i / n) * Math.PI * 2) * rx, y: cy + Math.sin((i / n) * Math.PI * 2) * ry }));
 }
 
+/** A single GPU texture per displayed spell. Its pixels change when the solver
+ * finishes a new view, independently of how often overlays are repainted. */
+export class SpellTexture {
+  private canvas?:HTMLCanvasElement;
+  private texture?:Texture<CanvasSource>;
+  private staging?:HTMLCanvasElement;
+  constructor(private size=256){}
+  private image?:import('../core/spellSurface').SurfaceImage;
+  draw(g:Graphics,img:import('../core/spellSurface').SurfaceImage,alpha:number){
+    if(!this.canvas){
+      this.canvas=document.createElement('canvas');
+      this.staging=document.createElement('canvas');
+      const source=new CanvasSource({resource:this.canvas,width:this.size,height:this.size,resolution:1,scaleMode:'linear'});
+      this.texture=new Texture({source});
+    }
+    if(this.image!==img){
+      // Keep the GPU allocation fixed throughout a drag. Resizing a live
+      // canvas source can invalidate an upload already queued by WebGL.
+      const tile=this.staging!;
+      tile.width=img.cols;tile.height=img.rows;
+      const src=tile.getContext('2d')!,frame=src.createImageData(img.cols,img.rows);
+      frame.data.set(img.rgba);src.putImageData(frame,0,0);
+      const ctx=this.canvas.getContext('2d')!;
+      ctx.clearRect(0,0,this.size,this.size);
+      ctx.drawImage(tile,0,0,this.size,this.size);
+      this.texture!.source.update();
+      this.image=img;
+    }
+    g.rect(img.x,img.y,img.w,img.h).fill({texture:this.texture!,textureSpace:'local',alpha});
+  }
+  get allocated(){return !!this.texture;}
+  release(){
+    this.image=undefined;
+    this.texture?.source.unload();
+  }
+  destroy(){this.texture?.destroy(true);this.texture=undefined;this.image=undefined;this.canvas=undefined;this.staging=undefined;}
+}
+
 /** Paint a shape onto a Graphics object. Text is handled separately by DrawLayer. */
-export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1, cover = false, world:SpellWorld={segs:[]}, outlineWidth?:number) {
+export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1, cover = false, world:SpellWorld={segs:[]}, outlineWidth?:number, view?:PictureView, surface?:SpellTexture) {
   const pts = s.pts;
   if (!pts.length) return;
   const col = hex(s.color);
@@ -59,8 +98,8 @@ export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1,
     const hexShape = grid.shape === 'square' ? undefined : grid.shape;
     const widthPx = templateWidthPx(grid, { k: s.k, bw: s.bw, of: s.of });
     const maps=world.maps ?? [];
-    const volume=spellVolume(s,pts[0],pts[1],grid,world);
-    const geom=volume.geom, fillA=(s.fill || TEMPLATE_FILL)*alpha;
+    const volume=spellVolume(s,pts[0],pts[1],grid,{...world,segs:[]});
+    const fillA=(s.fill || TEMPLATE_FILL)*alpha;
     // Only clip geometry that straddles the edge of a map.
     let playable:MultiPolygon|undefined;
     const paint=(poly:Vec[],fill:number|null,line=0,hole?:Vec[])=>{
@@ -82,17 +121,27 @@ export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1,
         else if(fill!=null) g.fill({color:fcol,alpha:fill});
       }
     };
-    const outline=geom.type==='circle' ? ellipsePts(geom.c.x,geom.c.y,geom.r,geom.r) : geom.pts;
+    const outline=spellOutline(volume);
+    const req={color:s.color,spell:{k:s.k,bw:s.bw,of:s.of,spell:s.spell},a:pts[0],b:pts[1],cover,fast:false};
+    const picture=view ? view.picture : spellPicture(req,grid,world);
+    const current=!view || view.current;
+    const lines=(parts:Float32Array,width:number,color:number,opacity:number)=>{
+      if(!parts.length)return;
+      for(let i=0;i<parts.length;i+=4) g.moveTo(parts[i],parts[i+1]).lineTo(parts[i+2],parts[i+3]);
+      g.stroke({width,color,alpha:opacity,cap:'round',join:'round'});
+    };
+    // The moving silhouette is cheap enough to cut against the ground immediately,
+    // even while the worker is still finding the affected cells around walls.
+    const skin=current && picture ? picture : floorLines(volume,grid,world,s.spell?.elevation!==false,true,false);
+    const rim=(width:number,opacity=alpha)=>lines(skin.outline,width,col,opacity);
     if(outlineWidth!==undefined) {
-      paint(outline,null,outlineWidth);
+      rim(outlineWidth);
+      if(picture) lines(picture.contact,outlineWidth,col,alpha);
       if(s.k==='emanation') paint(footprintPoly(pts[0],widthPx,hexShape),null,outlineWidth);
       return;
     }
-    if(cover || volume.hasWalls || volume.groundClips) {
-      // Without a visible grid, sample finely enough to show wall shadows without square outlines.
-      const sampling=cover ? grid : {...grid,shape:'square' as const,cell:Math.max(grid.cell/10,Math.max(volume.bounds.w,volume.bounds.h)/140)};
+    if(picture && !picture.solid) {
       const lit=cover ? Math.max(.5,fillA)*alpha : fillA;
-      const cells=volume.cells(sampling);
       const paintCells=(poly:Vec[])=>{
         if(s.k==='beam') {
           // A covered cell can straddle the emitter. Cut just its rear portion.
@@ -110,28 +159,24 @@ export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1,
         }
         if(poly.length>=3) paint(poly,lit);
       };
-      if(isHex(sampling)) {
-        for(const c of cells) paintCells(cellPoly(sampling,c));
-      } else {
-        // One rectangle per continuous row also prevents seams between filled pixels.
-        cells.sort((a,b)=>a.y-b.y || a.x-b.x);
-        const h=sampling.cell/2;
-        for(let i=0;i<cells.length;) {
-          const first=cells[i++];
-          let right=first.x+h;
-          while(i<cells.length && cells[i].y===first.y && cells[i].x-h<=right+1e-6) right=cells[i++].x+h;
-          const left=first.x-h, top=first.y-h, bottom=first.y+h;
-          paintCells([{x:left,y:top},{x:right,y:top},{x:right,y:bottom},{x:left,y:bottom}]);
-        }
+      const data=picture.fill;
+      if(picture.hex) {
+        for(let i=0;i<data.length;i+=2) paintCells(cellPoly(grid,{x:data[i],y:data[i+1]}));
+      } else for(let i=0;i<data.length;i+=4) {
+        const left=data[i],top=data[i+1],right=data[i+2],bottom=data[i+3];
+        paintCells([{x:left,y:top},{x:right,y:top},{x:right,y:bottom},{x:left,y:bottom}]);
       }
-    } else {
+    } else if(picture?.solid) {
       paint(outline,fillA,0,s.k==='emanation' ? footprintPoly(pts[0],widthPx,hexShape) : undefined);
     }
-    paint(outline,null,Math.max(2,s.w));
-    if(volume.edges.length) {
-      for(const path of volume.edges) for(let i=1;i<path.length;i++)
-        for(const [from,to] of mapSegments(path[i-1],path[i],maps)) g.moveTo(from.x,from.y).lineTo(to.x,to.y);
-      g.stroke({...stroke,width:Math.max(1,s.w*.55),alpha:alpha*.65});
+    if(picture && surface)surface.draw(g,picture.surface,alpha*Math.min(1,fillA/TEMPLATE_FILL));
+    rim(Math.max(1.5,s.w*.65),picture ? alpha*.65 : alpha);
+    if(!picture) lines(skin.wire,Math.max(1,s.w*.55),col,alpha*.65);
+    if(picture){
+      // A lighter line inside a spell-coloured edge distinguishes the ground cut
+      // from both the spell outline and the boundary of covered grid squares.
+      lines(picture.contact,Math.max(2.5,s.w*.9),col,alpha*.95);
+      lines(picture.contact,Math.max(1,s.w*.35),0xffffff,alpha*.9);
     }
     if(s.k==='emanation') paint(footprintPoly(pts[0],widthPx,hexShape),null,Math.max(1.5,s.w*.6));
     else paint(ellipsePts(pts[0].x,pts[0].y,Math.max(3,s.w*1.2),Math.max(3,s.w*1.2)),alpha);
@@ -194,13 +239,18 @@ export function paintShape(g: Graphics, s: Shape, grid: GridSettings, alpha = 1,
   }
 }
 
-interface Item { root: Container; g: Graphics; text: Text | null; sig: string }
+interface Item { root: Container; g: Graphics; text: Text | null; sig: string; surface:SpellTexture }
 
 /** All saved drawings, kept as one Graphics (or Text) per drawing and only repainted when that drawing changes. */
 export class DrawLayer {
   readonly container = new Container();
   private items = new Map<string, Item>();
   private grid = '';
+  private freeSurfaces:SpellTexture[]=[];
+
+  invalidate(id:string){const item=this.items.get(id);if(item)item.sig='';}
+
+  constructor(private picture?:(id:string,s:Shape)=>PictureView,private forget?:(id:string)=>void){}
 
   sync(list: Drawing[], grid: GridSettings, textRes: number, cover = false, walls?: SpellWorld & {rev:string}) {
     const gridSig = `${grid.shape}|${grid.cell}|${grid.ft}|${grid.ox}|${grid.oy}|${cover}|${walls?.rev ?? 0}`;
@@ -212,7 +262,7 @@ export class DrawLayer {
       const sig = `${d.k}|${d.p}|${d.color}|${d.w}|${d.fill}|${d.fc}|${d.dash}|${d.txt}|${d.fs}|${d.font}|${d.b}|${d.i}|${d.u}|${d.ho}|${d.bw}|${d.hz}|${d.of}|${JSON.stringify(d.spell)}|${textRes}`;
       let it = this.items.get(d.id);
       if (!it) {
-        it = { root: new Container(), g: new Graphics(), text: null, sig: '' };
+        it = { root: new Container(), g: new Graphics(), text: null, sig: '', surface:isTemplate(d.k) ? this.freeSurfaces.pop() ?? new SpellTexture() : new SpellTexture() };
         it.root.addChild(it.g);
         this.items.set(d.id, it);
         this.container.addChild(it.root);
@@ -222,12 +272,12 @@ export class DrawLayer {
         it.sig = sig;
         it.g.clear();
         if (d.k === 'text') this.paintText(it, d, textRes);
-        else { paintShape(it.g, shapeOf(d), grid, 1, cover, walls); this.paintZoneLabel(it, d, grid, textRes); }
+        else { const shape=shapeOf(d);paintShape(it.g, shape, grid, 1, cover, walls,undefined,isTemplate(d.k) && shape.pts.length>=2 ? this.picture?.(d.id,shape) : undefined,it.surface); this.paintZoneLabel(it, d, grid, textRes); }
       }
       if (it.text && it.text.resolution !== textRes) it.text.resolution = textRes;
     });
     for (const [id, it] of this.items) {
-      if (!seen.has(id)) { it.root.destroy({ children: true }); this.items.delete(id); }
+      if (!seen.has(id)) { this.forget?.(id); this.releaseItem(it); this.items.delete(id); }
     }
     this.container.sortableChildren = true;
   }
@@ -301,8 +351,19 @@ export class DrawLayer {
     for (const [id, it] of this.items) it.root.alpha = ids.has(id) ? 0.2 : 1;
   }
 
+  private releaseItem(it:Item){
+    it.root.destroy({children:true});
+    if(it.surface.allocated){it.surface.release();this.freeSurfaces.push(it.surface);}
+  }
+
+  destroy(){
+    this.clear();
+    for(const surface of this.freeSurfaces)surface.destroy();
+    this.freeSurfaces=[];
+  }
+
   clear() {
-    for (const it of this.items.values()) it.root.destroy({ children: true });
+    for (const it of this.items.values())this.releaseItem(it);
     this.items.clear();
     this.grid = '';
   }

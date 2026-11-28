@@ -1,3 +1,4 @@
+import {indexSpellWalls} from './spellWallIndex';
 import type { Drawing, GridSettings, Rect, Vec } from '../types';
 import { boundsOf, distToSegment, footprintPoly, pointInPoly, templateGeom, templateWidthPx } from './draw';
 import { rayHit, sideOf, type Seg } from './walls';
@@ -94,6 +95,9 @@ export function snapSpellFeet(feet:number,gridded:boolean) {
   return gridded ? Math.max(5,Math.round(feet/5)*5) : feet;
 }
 
+// As a radial spell grows, its routing lattice stays fixed to the casting point.
+// Traversing an already-tested link in the same direction has the same result.
+const radialLinks=new WeakMap<Seg[],{key:string;ground:SpellWorld['ground'];links:Map<number,number>}>();
 /** All distances inside the volume calculation use the same unit, including Z. */
 export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWorld={segs:[]}) {
   const px=grid.cell/grid.ft, settings=d.spell ?? {}, ground=world.ground ?? (()=>0);
@@ -108,16 +112,16 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
   const own=d.k==='emanation' ? footprintPoly(a,width,hex) : undefined;
   const radius=own ? Math.max(0,run-width/2) : run;
   let geom=templateGeom(d.k,a,b,width,hex);
-  const edges:Vec[][]=[];
+  const edges:(Vec & {height:number})[][]=[];
   if (aimed && rise) {
-    const project=(at:Vec,side:number,up:number)=>({x:at.x-uy*side-ux*sin*up,y:at.y+ux*side-uy*sin*up});
+    const project=(at:Vec,side:number,up:number)=>({x:at.x-uy*side-ux*sin*up,y:at.y+ux*side-uy*sin*up,height:(at===a ? start : end)+cos*up/px});
     if(d.k==='beam') {
       const tip={x:b.x+ux*Math.abs(sin)*half,y:b.y+uy*Math.abs(sin)*half};
       geom={type:'poly',pts:[project(a,half,0),project(tip,half,0),project(tip,-half,0),project(a,-half,0)]};
     } else if(d.k==='cone') {
       const rim=Array.from({length:64},(_,i)=>project(b,Math.cos(i*Math.PI/32)*length/2,Math.sin(i*Math.PI/32)*length/2));
       geom={type:'poly',pts:hull([a,...rim])};
-      edges.push([...rim,rim[0]],[a,rim[16]]);
+      edges.push([...rim,rim[0]],[{...a,height:start},rim[16]]);
     } else {
       const face=(p:Vec)=>[project(p,-half,half),project(p,half,half),project(p,half,-half),project(p,-half,-half)];
       const near=face(a), far=face(b);
@@ -173,14 +177,17 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
   }
   const walls=world.segs.filter(s=>(settings.walls!==false || (elevated && s.terrainPxPerFt!==undefined)) && Math.min(s.a.x,s.b.x)<=bounds.x+bounds.w+eps &&
     Math.max(s.a.x,s.b.x)>=bounds.x-eps && Math.min(s.a.y,s.b.y)<=bounds.y+bounds.h+eps && Math.max(s.a.y,s.b.y)>=bounds.y-eps);
+  let wallIndex:ReturnType<typeof indexSpellWalls>|undefined;
   const blocker=(from:Vec,z0:number,to:Vec,z1:number)=>{
-    for(const wall of walls) {
-      if(wall.one && !(elevated && wall.terrainPxPerFt!==undefined) && sideOf(wall,from)===-wall.one) continue;
-      const t=rayHit(from,to.x-from.x,to.y-from.y,wall);
-      if(t>=1-1e-7) continue;
-      if(elevated && wall.top!==undefined && start+(z0+t*(z1-z0))/px>=wall.top-1e-6) continue;
-      return wall;
-    }
+    const dx=to.x-from.x,dy=to.y-from.y;
+    const blocks=(wall:Seg)=>{
+      if(wall.one && !(elevated && wall.terrainPxPerFt!==undefined) && sideOf(wall,from)===-wall.one) return false;
+      const t=rayHit(from,dx,dy,wall);
+      return t<1-1e-7 && !(elevated && wall.top!==undefined && start+(z0+t*(z1-z0))/px>=wall.top-1e-6);
+    };
+    if(walls.length<=24) return walls.find(blocks);
+    wallIndex ??= indexSpellWalls(walls);
+    return wallIndex(from,to,blocks);
   };
   const floor=(p:Vec)=>(ground(p)-start)*px;
   // Complete flat terrace boundaries are already tested at exact ray crossings.
@@ -267,15 +274,40 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
     }
     return Math.hypot(distance(from,to),z1-z0);
   }
-  function around(p:Vec,z:number,first:Seg) {
-    // A single exposed tip gives an exact detour without rasterizing a short wall.
-    for(const [tip,other] of [[first.a,first.b],[first.b,first.a]]) {
-      const len=distance(tip,other) || 1;
-      const q={x:tip.x+(tip.x-other.x)*.001/len,y:tip.y+(tip.y-other.y)*.001/len};
-      const qz=axisZ(q);
-      if(onMap(q,world.maps) && slice(q) && travel(a,0,q,qz)+travel(q,qz,p,z)<=reach+eps &&
-        clear(a,0,q,qz) && clear(q,qz,p,z)) return true;
+  const tips=new Map<Seg,Station[]>();
+  let linkMemo:Map<number,number>|undefined;
+  if(!aimed){
+    const key=[a.x,a.y,start,step,px,elevated,world.steppedGround,settings.walls!==false].join('|');
+    let entry=radialLinks.get(world.segs);
+    if(!entry || entry.key!==key || entry.ground!==world.ground){
+      entry={key,ground:world.ground,links:new Map()};
+      radialLinks.set(world.segs,entry);
     }
+    linkMemo=entry.links;
+  }
+  function traversable(i:number,j:number,di:number,dj:number,cur:Station,q:Vec,z:number){
+    if(!linkMemo)return clear(cur.p,cur.z,q,z);
+    // The routing step bounds each coordinate to ±80 inside this volume.
+    const key=(j+128)*256+i+128,bit=1<<((dj+1)*3+di+1);
+    const flags=linkMemo.get(key) ?? 0;
+    if(flags&bit)return !!(flags&(bit<<9));
+    const open=clear(cur.p,cur.z,q,z);
+    linkMemo.set(key,flags|bit|(open?bit<<9:0));
+    return open;
+  }
+  function around(p:Vec,z:number,first:Seg) {
+    let ends=tips.get(first);
+    if(!ends){
+      ends=[];
+      for(const [tip,other] of [[first.a,first.b],[first.b,first.a]]) {
+        const len=distance(tip,other) || 1;
+        const q={x:tip.x+(tip.x-other.x)*.001/len,y:tip.y+(tip.y-other.y)*.001/len};
+        const qz=axisZ(q),cost=travel(a,0,q,qz);
+        if(cost<=reach+eps && onMap(q,world.maps) && slice(q) && clear(a,0,q,qz)) ends.push({p:q,z:qz,cost});
+      }
+      tips.set(first,ends);
+    }
+    for(const end of ends) if(end.cost+travel(end.p,end.z,p,z)<=reach+eps && clear(end.p,end.z,p,z)) return true;
     const key=(i:number,j:number)=>i+','+j;
     if(!routes) {
       routes=new Map();
@@ -292,7 +324,7 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
           const qz=axisZ(q),cost=cur.cost+travel(cur.p,cur.z,q,qz);
           if(cost>reach+eps || cost>=(routes.get(id)?.cost ?? Infinity)-eps || !onMap(q,world.maps)) continue;
           if(!slice(q) && !(own && pointInPoly(q,own))) continue;
-          if(!clear(cur.p,cur.z,q,qz)) continue;
+          if(!traversable(i,j,di,dj,cur,q,qz)) continue;
           routes.set(id,{p:q,z:qz,cost});queue.push({i:ni,j:nj});
         }
       }
@@ -347,6 +379,10 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
     }
     return out;
   }
-  return {geom,bounds,axis,edges,handle,hits,cells,hasWalls:walls.length>0,
+  function heightSpan(p:Vec):[number,number]|null {
+    const range=slice(p);
+    return range ? [start+range[0]/px,start+range[1]/px] : null;
+  }
+  return {geom,bounds,axis,edges,handle,hits,cells,heightSpan,hasWalls:walls.length>0,
     groundClips:elevated && (!!world.ground || rise!==0 || start<0),feet:axis.feet};
 }

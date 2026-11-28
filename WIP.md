@@ -308,3 +308,6 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
 - [x] **#188 Drawing spell templates lags** (added 2026-11-27, completed 2026-11-27): ground height lookups use indexed strokes and
   stop at the top layer that sets the ground (bit-identical on 200,000 points); spells remember ground per point while drawn;
   placing a non-ground drawing no longer rebuilds the terrain contours. Sphere p99 125 to 14 ms, emanation 167 to 21 ms.
+  Dense-wall follow-up. Spell painting now solves wall paths in a background worker, reuses wall lookups and replaces queued drag samples with the latest pointer position. Verified on the coast in campaign (5).
+- [x] **#189 Show where spell volumes meet the ground** (added 2026-11-27, completed 2026-11-27). Terrain clips buried faces and edges. A bright contour follows the intersection on slopes and ledges.
+- [x] **#190 Make spell templates read as three-dimensional objects** (added 2026-11-27, completed 2026-11-27). Draw shaded faces on cubes and beams, a capped cone, a curved sphere and an emanation around its source. Keep the rules footprint on the map.

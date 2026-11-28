@@ -1,3 +1,6 @@
+import {floorLines,spellPicture} from '../src/core/spellPicture';
+import {indexSpellWalls} from '../src/core/spellWallIndex';
+import {rayHit} from '../src/core/walls';
 import { describe,it,expect } from 'vitest';
 import { spellAxis, snapSpellFeet, spellVolume, type Spell, type SpellWorld } from '../src/core/spellVolume';
 import {heightNote} from '../src/core/height';
@@ -132,5 +135,56 @@ describe('spell volumes',()=>{
     expect(terrainEdges(terrain,[],[map])).toEqual([]);
     const edges=terrainEdges(terrain,[],[map,{x:20,y:5,w:20,h:10}]);
     expect(edges.map(e=>[e.a,e.b])).toEqual([[point(20,5),point(20,15)]]);
+  });
+});
+
+describe('spell presentation',()=>{
+  it('traces the actual floor slice of a 10 ft sphere with its center 6 ft high',()=>{
+    const v=spell('sphere',10,{start:6});
+    const cut=floorLines(v,grid,{segs:[]},true);
+    expect(cut.contact.length).toBeGreaterThan(8);
+    for(let i=0;i<cut.contact.length;i+=2)
+      expect(Math.hypot(cut.contact[i],cut.contact[i+1])).toBeCloseTo(8,1);
+    expect(floorLines(spell('sphere',10,{start:11}),grid,{segs:[]},true).contact).toHaveLength(0);
+    expect(floorLines(v,grid,{segs:[]},false).contact).toHaveLength(0);
+  });
+  it.each(['beam','cone','cube','sphere','emanation'] as const)('shades the %s volume and removes buried surfaces',k=>{
+    const render=(height:number,elevation=true)=>spellPicture({spell:{k,bw:6,of:5,spell:{start:0,end:0,elevation}},
+      a,b:point(20),color:'#539aff',cover:false,fast:true},grid,{segs:[],ground:()=>height});
+    const surface=render(-30).surface;
+    const colors=new Set<number>();
+    for(let i=0;i<surface.rgba.length;i+=4) if(surface.rgba[i+3]) colors.add(surface.rgba[i]);
+    expect(colors.size).toBeGreaterThan(2);
+    const buried=render(50);
+    expect(buried.surface.rgba.some(Boolean)).toBe(false);
+    expect(buried.outline.length).toBe(0);
+    expect(render(50,false).surface.rgba.some(Boolean)).toBe(true);
+  });
+  it('keeps a rotated airborne cube face continuous across coverage samples',()=>{
+    const req={spell:{k:'cube' as const,bw:5,spell:{start:100,end:100}},a,b:point(-24,18),color:'#72beff',cover:false,fast:false};
+    const open=spellPicture(req,grid,{segs:[]}).surface;
+    // A low cliff below the cube cannot take strips out of its vertical faces.
+    const lowCliff=spellPicture(req,grid,{segs:[{a:point(-10,-5),b:point(-10,20),top:2}],ground:()=>0}).surface;
+    expect(lowCliff.rgba).toEqual(open.rgba);
+  });
+  it('cuts the far rim of a cone and keeps the exposed wire on a sloping floor',()=>{
+    const world={segs:[],ground:(p:{x:number})=>p.x*.25};
+    const v=spell('cone',25,{start:8,end:1},world),cut=floorLines(v,grid,world,true);
+    expect(cut.wire.length).toBeGreaterThan(0);
+    expect(cut.contact.length).toBeGreaterThan(0);
+    expect(cut.wire).not.toEqual(floorLines(v,grid,world,false).wire);
+    for(let i=0;i<cut.contact.length;i+=2){
+      const q=point(cut.contact[i],cut.contact[i+1]),span=v.heightSpan(q);
+      if(span)expect(Math.min(Math.abs(world.ground(q)-span[0]),Math.abs(world.ground(q)-span[1]))).toBeLessThan(.15);
+    }
+  });
+  it('keeps the authored first blocker when tracing across many indexed walls',()=>{
+    const walls=Array.from({length:80},(_,i)=>({a:point((i*19)%83,(i%5)-4),b:point((i*19)%83+3,i%9+3)}));
+    const query=indexSpellWalls(walls);
+    for(let i=0;i<60;i++){
+      const from=point(i-5,i%9),to=point(80-i,i%7-1);
+      const hit=(w:typeof walls[number])=>rayHit(from,to.x-from.x,to.y-from.y,w)<1-1e-7;
+      expect(query(from,to,hit)).toBe(walls.find(hit));
+    }
   });
 });

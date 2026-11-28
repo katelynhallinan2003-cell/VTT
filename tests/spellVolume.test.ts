@@ -198,6 +198,16 @@ describe('spell presentation',()=>{
     }
     expect(spell('sphere',40,{start:0},open).hits(point(9),30)).toBe(true);
   });
+  it('spends burst radius traveling out from beneath a deck and back across its top',()=>{
+    const edge={a:point(-40,3),b:point(40,3)};
+    const open={segs:[],ground:(p:{y:number})=>p.y<3 ? 30 : 0,openings:[edge]};
+    const burst=(wrap:boolean)=>spell('sphere',20,{start:29,wrap},open);
+    expect(burst(false).hits(a,30)).toBe(false);
+    expect(burst(true).hits(a,30)).toBe(true);
+    expect(burst(true).hits(point(0,-8),30)).toBe(true);
+    expect(burst(true).hits(point(0,-17),30)).toBe(false);
+    expect(spell('sphere',20,{start:29,wrap:true},{...open,openings:[]}).hits(a,30)).toBe(false);
+  });
   it('maps visible cone pixels to their physical overhead positions',()=>{
     const d={k:'cone' as const,bw:5,spell:{start:18,end:11}},end=point(-32,24);
     const v=spellVolume(d,a,end,grid),pic=spellPicture({spell:d,a,b:end,color:'#ff7900',cover:false,fast:false},grid,{segs:[]});

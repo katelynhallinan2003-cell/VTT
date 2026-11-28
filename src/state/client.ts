@@ -1272,7 +1272,7 @@ export class TableClient {
   /** Slide drawings by (dx, dy). `record` makes it one undo step. */
   async moveDrawings(ids: string[], dx: number, dy: number, record = true): Promise<void> {
     if (ids.some(id=>this.isGroundDrawing(this.scene?.draws.get(id)))) await this.prepareGradients();
-    const before = ids.map((id) => this.scene?.draws.get(id)).filter((d): d is Drawing => !!d && this.canEditDrawing(d)).map((d) => ({ id: d.id, p: d.p, gradient: d.gradient }));
+    const before = ids.map((id) => this.scene?.draws.get(id)).filter((d): d is Drawing => !!d && this.canEditDrawing(d) && !(d.k==='emanation' && d.spell?.stick)).map((d) => ({ id: d.id, p: d.p, gradient: d.gradient }));
     if (!before.length) return;
     const after = before.map((b) => ({ id: b.id, p: movedPoints(b, dx, dy), gradient: b.gradient?.map(c => ({...c, path: c.path.map(p => ({...p,x:p.x+dx,y:p.y+dy}))})) }));
     const write = (list: typeof before) => {

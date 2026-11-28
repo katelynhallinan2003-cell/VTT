@@ -4,7 +4,7 @@ import clip, { type MultiPolygon, type Pair, type Polygon } from 'polygon-clippi
 import type { GridSettings, Rect, Vec } from '../types';
 import { snapToCellCenter } from './geometry';
 import { cellPoly } from './cells';
-import { areaAt, newAreaId, groundAtTerrain, surfaceHeight, type Area, type Terrain, type TStroke } from './terrain';
+import { hasSlope, areaAt, newAreaId, groundAtTerrain, surfaceHeight, type Area, type Terrain, type TStroke } from './terrain';
 import { HeightField, type SightRegion, type SightSegments } from './terrainSight';
 import { simplifyPoly, type Seg } from './walls';
 
@@ -138,7 +138,7 @@ function heightRegions(t: Terrain): Plan {
       const current = next.get(z);
       next.set(z, current ? clip.union(current, shape) : shape);
     };
-    const adds = area.add && (area.gradient?.length ?? 0)<2;
+    const adds = area.add && !hasSlope(area);
     let bare = mask;
     for (const [z, region] of regions) {
       add(z, clip.difference(region, mask));
@@ -325,6 +325,31 @@ export function fillTerrainHoles(t:Terrain, ids:string[], patch:HeightPatch|unde
 }
 
 /** Limit a brush erasure to the selected surface, even if another island shares its stroke. */
+export function bucketRegion(t:Terrain,p:Vec,maps:Rect[]) {
+  const layers=terrainLayers(t);
+  const picked=[...layers].reverse().find(l=>l.shape.some(poly=>inRegion(poly,p)));
+  if (picked?.area.gradientEnabled || (!maps.length && !picked)) return;
+  const rectangles:Polygon[]=maps.map(({x,y,w,h})=>[[[x,y],[x+w,y],[x+w,y+h],[x,y+h]]]);
+  const bounds=rectangles.length ? clip.union(rectangles) : undefined;
+  const base=picked ? (bounds ? clip.intersection(bounds,picked.shape) : picked.shape) : bounds!;
+  const above=layers.filter(l=>!picked || l.area.order>picked.area.order);
+  const exposed=clip.difference(base,...above.map(l=>l.shape));
+  return exposed.find(poly=>inRegion(poly,p));
+}
+
+export function extendGradient(t:Terrain,id:string,pts:Vec[],width:number,cells:boolean,maps:Rect[]) {
+  const area=t.areas.find(a=>a.id===id && a.gradientEnabled);
+  if (!area) return [];
+  const brush=clippedBrush(t.grid,pts,width,cells,maps) ?? brushFootprint(t.grid,pts,width/2,cells);
+  if (!brush.length) return [];
+  const edits:ReturnType<typeof patchStroke>[]=[];
+  for (const layer of terrainLayers(t)) if (layer.area.order>area.order) {
+    for (const poly of clip.intersection(brush,layer.shape)) edits.push(patchStroke(poly,layer.area.id,null));
+  }
+  for (const poly of clip.difference(brush,areaShape(t,id))) edits.push(patchStroke(poly,id,area.h));
+  return edits;
+}
+
 export function brushCuts(patches: HeightPatch[], grid: GridSettings, pts: Vec[], width: number, cells: boolean, clipped?: MultiPolygon | null) {
   const brush = clipped ?? brushFootprint(grid,pts,width/2,cells);
   return patches.map(p => ({...p,whole:false,cuts:p.cuts.map(c => ({...c,shape:clip.intersection(c.shape,brush)}))

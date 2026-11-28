@@ -8,7 +8,7 @@
 // Where areas overlap, they are folded from the bottom up. An area either SETS the height there ("this ground is at 20 ft")
 // or ADDS to whatever is below it ("5 ft more than the ground under me"), so a 5 ft ramp on a 20 ft hill is 25 ft high
 // and a 20 ft ledge painted over it is simply 20 ft.
-import { resolveGradientBoundaries } from './gradientBoundaries';
+import { resolveMatchedLines, resolveGradientBoundaries } from './gradientBoundaries';
 import type { Drawing, GridSettings, Rect, Vec } from '../types';
 import { cellPoly } from './cells';
 import { boundsOf, distToSegment, parsePts, pointInPoly } from './draw';
@@ -43,6 +43,7 @@ export interface Area {
   gradientEnabled?: boolean;
   gradientFixed?: boolean;
   boundaryDefaults?: Drawing['gradient'];
+  editControls?: Drawing['gradient'];
   /** the height in feet */
   h: number;
   /** adds to the ground below instead of setting it */
@@ -269,6 +270,7 @@ export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings, layer: '
     // A filled hole belongs to its original box or ellipse, including its gradient controls.
     const fills=(groups.get(a.id)?.paint ?? []).map(d=>strokeOf(d,grid)).filter((s):s is TStroke=>!!s);
     a.paint.push(...fills);
+    if (fills.length) a.b=unionRect(a.paint.map(s=>s.b));
     a.strokes.push(...[...cuts,...fills].sort((x,y)=>x.t-y.t || x.id.localeCompare(y.id)));
     a.ids.push(...cuts.map(s=>s.id),...fills.map(s=>s.id));
     groups.delete(a.id);
@@ -294,6 +296,7 @@ export function terrainOf(draws: Iterable<Drawing>, grid: GridSettings, layer: '
       a.h = a.gradient[0].height;
       a.add = false;
     }
+    if (areas.some(a=>a.gradient?.some(c=>c.match))) resolveMatchedLines(terrain);
     lastGradientTerrain = terrain;
   }
   return terrain;
@@ -318,8 +321,11 @@ export function areaHas(a: Area, p: Vec, grid: GridSettings): boolean {
 }
 
 /** How high the ground is at a point, in feet: the areas folded from the bottom up. No area means 0. */
+export function hasSlope(a:Pick<Area,"gradient">) {
+  return !!a.gradient && (a.gradient.length>=2 || !!a.gradient[0]?.match);
+}
 export function surfaceHeight(a: Pick<Area, "gradient" | "h">, p: Vec): number {
-  if (!a.gradient || a.gradient.length < 2) return a.h;
+  if (!a.gradient || !hasSlope(a)) return a.h;
   let weights = 0, total = 0;
   for (const {path,height} of a.gradient) {
     let d = Math.hypot(p.x-path[0].x,p.y-path[0].y);
@@ -352,12 +358,12 @@ export function groundAtTerrain(t: Terrain, p: Vec): number {
   for (; i >= 0; i--) {
     const a = areas[i];
     if (!areaHas(a, p, t.grid)) continue;
-    if ((a.gradient && a.gradient.length >= 2) || !a.add) break;
+    if (hasSlope(a) || !a.add) break;
     raised++;
   }
   let h = 0;
-  if (i >= 0) { const a = areas[i]; h = a.gradient && a.gradient.length >= 2 ? surfaceHeight(a, p) : a.h; }
-  if (raised) for (let k = i + 1; k < areas.length; k++) if (areas[k].add && !(areas[k].gradient && areas[k].gradient!.length >= 2) && areaHas(areas[k], p, t.grid)) h = h + areas[k].h;
+  if (i >= 0) { const a = areas[i]; h = hasSlope(a) ? surfaceHeight(a, p) : a.h; }
+  if (raised) for (let k = i + 1; k < areas.length; k++) if (areas[k].add && !hasSlope(areas[k]) && areaHas(areas[k], p, t.grid)) h = h + areas[k].h;
   return h;
 }
 
@@ -367,7 +373,7 @@ export function slopeAt(t: Terrain, p: Vec): ((at: Vec) => number) | undefined {
   for (let i=t.areas.length-1; i>=0; i--) {
     const area=t.areas[i];
     if (!areaHas(area,p,t.grid)) continue;
-    if ((area.gradient?.length ?? 0)>=2) return at => surfaceHeight(area,at)+offset;
+    if (hasSlope(area)) return at => surfaceHeight(area,at)+offset;
     if (!area.add) break;
     offset+=area.h;
   }

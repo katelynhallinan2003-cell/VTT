@@ -3,7 +3,7 @@ import { DEFAULT_GRID, drawingToWire, normalizeDrawing } from '../src/core/model
 import { initialBoundaryControls } from '../src/core/gradientBoundaries';
 import { dragGradient, gradientPath, initialGradientLine } from '../src/core/gradientGeometry';
 import { heightColor, groundAtTerrain, slopeAt, standingGround, terrainOf } from '../src/core/terrain';
-import { connectedHeight, areaShape, terrainEdges, fillTerrainHoles, terrainHoleOptions, patchStroke } from '../src/core/terrainEdges';
+import { bucketRegion, extendGradient, inRegion, connectedHeight, areaShape, terrainEdges, fillTerrainHoles, terrainHoleOptions, patchStroke } from '../src/core/terrainEdges';
 import { movementCost } from '../src/core/movementCost';
 import type { Seg } from '../src/core/walls';
 import type { GradientControl, Vec } from '../src/types';
@@ -171,4 +171,40 @@ it('joins equal-height border fragments along the outline and preserves explicit
   expect(changed.find(c=>c.height===18)?.path).toEqual(joined.path);
   const older=controls({...hill,gradient:[{id:'join:two:0',height:13,path:[at(18),at(36)],boundary:'height'}]});
   expect(older.find(c=>c.height===13)?.path).toEqual([at(18),at(36)]);
+});
+
+describe('terrain painting at a shared boundary',()=>{
+  const maps=[{x:0,y:-10,w:30,h:20}];
+  const rect=(id:string,p:string,h:number,gradient?:GradientControl[])=>normalizeDrawing(id,{k:'rect',p,hz:h,gradient,gradientFixed:!!gradient})!;
+  it('matches a variable line after a neighbor changes and leaves no seam wall',()=>{
+    for(const high of [20,35]) {
+      const ramp=rect('ramp','0,-10,8,10',0,[
+        {id:'low',height:0,path:[at(0,-10),at(8,-10)]},
+        {id:'high',height:high,path:[at(0,10),at(8,10)]}
+      ]);
+      const joined=rect('hill','8,-10,16,10',5,[{...line(8,5),match:true}]);
+      const t=terrainOf([ramp,joined],grid);
+      for(const y of [-9,-2,4,9]) {
+        expect(groundAtTerrain(t,at(8.001,y))).toBeCloseTo((y+10)*high/20,3);
+      }
+      expect(terrainEdges(t).filter(e=>e.a.x===8 && e.b.x===8)).toHaveLength(0);
+      expect(joined.gradient![0].path).toHaveLength(2);
+    }
+  });
+  it('keeps bucket fill inside the clicked component and the map',()=>{
+    const divider=rect('divider','12,-10,14,10',0,[line(12,2),line(14,8)]);
+    const t=terrainOf([divider],grid),left=bucketRegion(t,at(4),maps)!;
+    expect(inRegion(left,at(11))).toBe(true);
+    for(const x of [-1,13,22]) expect(inRegion(left,at(x))).toBe(false);
+    expect(bucketRegion(t,at(13),maps)).toBeUndefined();
+  });
+  it('adds brush area to an existing gradient across younger paint, retaining its controls',()=>{
+    const hill=rect('hill','0,-10,8,10',0,[line(0,0),line(8,10)]);
+    const paint=normalizeDrawing('paint',{...patchStroke([[[8,-10],[16,-10],[16,10],[8,10],[8,-10]]],'flat',35),t:1})!;
+    const edits=extendGradient(terrainOf([hill,paint],grid),'hill',[at(7),at(12)],3,false,maps);
+    const t=terrainOf([hill,paint,...edits.map((e,i)=>normalizeDrawing('brush'+i,{...e,t:2})!)],grid);
+    expect(t.areas.find(a=>a.id==='hill')!.gradient).toEqual(hill.gradient);
+    expect(groundAtTerrain(t,at(11))).toBeLessThan(11);
+    expect(groundAtTerrain(t,at(11,5))).toBe(35);
+  });
 });

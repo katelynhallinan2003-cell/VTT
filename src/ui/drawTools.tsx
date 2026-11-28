@@ -232,7 +232,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
       <div class="seg">
         {modes.map(([k,label]) => <button key={k} class={mode===k ? 'on' : ''} aria-pressed={mode===k} onClick={()=>{if(k==='paint' && one?.gradientEnabled) ui.selectDrawings([]); ui.set({heightMode:k});}}>{label}</button>)}
       </div>
-      {mode !== 'move' && !gradient && <>
+      {((mode !== 'move' && !gradient && !d.heightBucket) || d.paintGradient) && <>
         {!gridless && <Toggle checked={d.heightSnap} onChange={v=>ui.set({heightSnap:v})} label={`Fill whole ${cellWord}s`} hint="Hold Alt to flip this for one stroke." />}
         <span class="field-label">Brush diameter ({gridless ? 'ft' : cellWord+'s'})</span>
         <div class="chips terrain-presets">{BRUSH_SIZES.map(x => <button key={x} class={`chip ${d.heightBrush===x ? 'on' : ''}`} onClick={()=>ui.set({heightBrush:x})}>{x==='fine' ? (gridless ? '2' : '2 ft') : gridless ? x*grid.ft : x}</button>)}</div>
@@ -240,6 +240,7 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
       {!rough && (mode === 'paint' || (mode === 'move' && selectionCount > 0)) && <div class="ht-card">
         <div class="row">
           <strong>{mode === 'move' ? 'Set Height' : selectionCount > 1 ? `${selectionCount} areas selected` : editing ? 'Selected ground' : 'Next ground you paint'}</strong>
+          {mode==='paint' && !editing && <button class={`btn small ${d.heightBucket ? 'on' : ''}`} aria-label="Bucket fill elevation" title="Bucket fill elevation" aria-pressed={!!d.heightBucket} onClick={()=>ui.set({heightBucket:!d.heightBucket})}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l9-9 9 9-9 9zM5 2l8 9M4 13h15"/><path d="M18 19l3-5 2 5q-2 5-5 0" fill="currentColor"/></svg></button>}
           <span class="grow" />
           {editing && <button class="btn small" title="Deselect terrain (Esc)" onClick={() => ui.selectDrawings([])}>Done</button>}
         </div>
@@ -259,12 +260,13 @@ export function HeightFlyout(props: { ui: UiState; client: TableClient; onFromCo
           <div class="row wrap">
             {(!picks || picks.every(p => p.whole)) && paintable.length > 1 && <button class="btn small" title="Make these one area" onClick={() => { ui.selectDrawings(paintable.flatMap(a => a.ids)); void client.mergeAreas(paintable); }}>Merge</button>}
             {!one?.gradientEnabled && (one || picks?.length === 1) && <button class="btn small" onClick={() => void editGradient().catch(e=>toast(e.message,'error'))}>Make Gradient</button>}
+            {gradient && <button class={`btn small ${d.paintGradient ? 'on' : ''}`} aria-pressed={!!d.paintGradient} onClick={()=>ui.set({paintGradient:!d.paintGradient})}>Paint gradient</button>}
             {holes?.bare && <button class="btn small" onClick={()=>void fillHoles(false).catch(e=>toast(e.message,'error'))}>Fill unpainted holes</button>}
             {holes?.all && <button class="btn small" onClick={()=>void fillHoles(true).catch(e=>toast(e.message,'error'))}>Fill all holes</button>}
             <button class="btn small danger" onClick={() => { if (picks) void client.editHeightPatches(picks,'delete'); else void client.removeDrawings(mine.flatMap((a) => a.ids), 'Delete ground'); ui.selectDrawings([]); }}>Delete {one || picks?.length === 1 ? 'area' : 'areas'}</button>
           </div>
         ) : null}
-        {gradient && <p class="hint">Click to add a height. Drag either end to extend a line.</p>}
+        {gradient && !d.paintGradient && <p class="hint">Click to add a height. Drag either end to extend a line.</p>}
       </div>}
       {!rough && !gradient && mode !== 'paint' && (
         <p class="hint">
@@ -519,6 +521,7 @@ export function TemplateFlyout(props: { ui: UiState; client: TableClient; board:
         {TEMPLATES.map((x) => <button key={x.id} class={d.tplKind === x.id ? 'on' : ''} onClick={() => ui.set({ tplKind: x.id })}>{x.label}</button>)}
       </div>
       <Colors value={d.tplColor} onPick={(tplColor,custom=false) => ui.set({tplColor,tplCustomColor:custom})} />
+      {d.tplKind==='emanation' && <Toggle checked={!!d.tplSettings.stick} onChange={stick=>ui.set({tplSettings:{...d.tplSettings,stick}})} label="Stick to token"/>}
       {d.tplKind === 'beam' && <LineWidth value={d.tplWidth} onChange={tplWidth=>ui.set({tplWidth})}/>}
       {d.tplKind === 'sphere' && (
         <>
@@ -648,9 +651,10 @@ export function DrawInspector(props: { ui: UiState; client: TableClient; board: 
   const allZones = list.every((x) => x.hz != null);
   const strokeKey = (['thin', 'medium', 'thick'] as StrokeSize[]).reduce((best, k) => (Math.abs(STROKE_CELLS[k] * client.grid.cell - first.w) < Math.abs(STROKE_CELLS[best] * client.grid.cell - first.w) ? k : best), 'medium' as StrokeSize);
   const size = one ? sizeFt(one, client.grid) : null;
-  const ends=one && allTemplates ? parsePts(one.p) : [];
+  const placed=one && (board?.attachedDrawing(one) ?? one);
+  const ends=placed && allTemplates ? parsePts(placed.p) : [];
   const dimension=one?.k==='sphere' || one?.k==='emanation' ? 'Radius' : one?.k==='cube' ? 'Side length' : 'Length';
-  const axis=one && ends.length===2 ? spellAxis(one,ends[0],ends[1],client.grid,p=>board?.groundAtPoint(p) ?? 0) : null;
+  const axis=placed && ends.length===2 ? spellAxis(placed,ends[0],ends[1],client.grid,p=>board?.groundAtPoint(p) ?? 0) : null;
   const gridded=currentOverlay(client.grid)!=='none';
   if (size && 'len' in size && axis) size.len=axis.feet;
   const changeSpell=(spell:SpellSettings)=>{
@@ -718,6 +722,10 @@ export function DrawInspector(props: { ui: UiState; client: TableClient; board: 
             else { const patch=withSizeFt(one,client.grid,'len',n); if(patch.p) upd(patch); }
           }} />
         )}
+        {one?.k==='emanation' && board && (one.spell?.stick || board.emanationToken(one)) && <Toggle label="Stick to token" checked={!!one.spell?.stick} onChange={stick=>{
+          const token=board.emanationToken(one);
+          upd({p:placed!.p,spell:{...one.spell,stick,...(token ? {source:token.id} : {})}});
+        }}/>}
         {one?.k==='beam' && <LineWidth value={one.bw} onChange={bw=>upd({bw})}/>}
         {one && axis && <SpellAdvanced key={one.id} placed settings={one.spell ?? {}} heights={axis} kind={one.k} onChange={changeSpell}/>}
         {allText && (

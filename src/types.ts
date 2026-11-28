@@ -230,9 +230,11 @@ export interface Aura {
 export type DrawKind = 'pen' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'cone' | 'cube' | 'sphere' | 'emanation' | 'beam' | 'terrain';
 
 /** Something drawn on the map: freehand, a shape, text or a spell template. */
-export interface GradientControl { id: string; height: number; path: (Vec & { rise?: number })[]; boundary?: "height" | "path" | "both" | "hidden" }
+export interface GradientControl { match?: boolean; id: string; height: number; path: (Vec & { rise?: number })[]; boundary?: "height" | "path" | "both" | "hidden" }
 
 export interface SpellSettings {
+  source?: string;
+  stick?: boolean;
   /** Spatial range in feet. The stored points supply the origin and bearing. */
   range?: number;
   walls?: boolean;

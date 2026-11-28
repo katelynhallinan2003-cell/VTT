@@ -385,6 +385,34 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
     }
     return false;
   }
+  // A burst under a deck can turn up through an open lip and back onto
+  // the top. Both legs spend radius and must clear the actual terrain.
+  let lips: Station[] | undefined;
+  function overDeck(p:Vec,lo:number,hi:number) {
+    if (!elevated || aimed || !openings.length || floor(a)<=eps) return false;
+    if (!lips) {
+      lips=[];
+      for (const s of openings) {
+        const dx=s.b.x-s.a.x,dy=s.b.y-s.a.y,len=Math.hypot(dx,dy);
+        if (!len) continue;
+        const count=Math.max(1,Math.ceil(len/(grid.cell/4)));
+        const nx=-dy/len*grid.cell*.002,ny=dx/len*grid.cell*.002;
+        for (let i=0;i<count;i++) {
+          const t=(i+.5)/count,x=s.a.x+dx*t,y=s.a.y+dy*t;
+          const left={x:x+nx,y:y+ny},right={x:x-nx,y:y-ny};
+          const l=floor(left),r=floor(right),q=l<r ? left : right;
+          const top=Math.max(l,r),cost=travel(a,0,q,top);
+          if (Math.abs(l-r)>eps && cost<=reach+eps && onMap(q,world.maps) && clear(a,0,q,top)) lips.push({p:q,z:top,cost});
+        }
+      }
+      lips.sort((l,r)=>l.cost-r.cost);
+    }
+    return lips.some(q=>{
+      const nearest=clamp(q.z,lo,hi);
+      const reaches=(z:number)=>q.cost+travel(q.p,q.z,p,z)<=reach+eps && clear(q.p,q.z,p,z);
+      return reaches(nearest) || (hi!==nearest && reaches(hi));
+    });
+  }
   function hits(p:Vec,lowFt?:number,highFt=lowFt) {
     if(!onMap(p,world.maps)) return false;
     const span=slice(p);
@@ -405,9 +433,11 @@ export function spellVolume(d:Spell, a:Vec,b:Vec,grid:GridSettings,world:SpellWo
     const clearAtMid=lowFt===undefined && aboveGround(a,0,p,mid);
     const z=clearAtMid ? mid : hi;
     const first=blocker(a,0,p,z);
-    if(!first) return clearAtMid || aboveGround(a,0,p,z);
+    if(!first && (clearAtMid || aboveGround(a,0,p,z))) return true;
     if(settings.walls===false || settings.wrap===false) return false;
     const nearest=clamp(axisZ(p),lo,hi);
+    if(overDeck(p,lo,hi)) return true;
+    if(!first) return false;
     return around(p,nearest,first) || (z!==nearest && around(p,z,first));
   }
   function cells(sampling:GridSettings=grid,groundOnly=false) {

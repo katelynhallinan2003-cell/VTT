@@ -1,5 +1,5 @@
 import {cellPoly} from '../core/cells';
-import {groundAtTerrain as groundAt, heightColor, surfaceHeight, type Terrain} from '../core/terrain';
+import {groundAtTerrain as groundAt, heightColor, hasSlope, surfaceHeight, type Terrain} from '../core/terrain';
 import {terrainLabelBoxes} from '../core/terrainLabels';
 
 const MAX_SIDE = 2048;
@@ -86,7 +86,7 @@ export function paintTerrain(t:Terrain,selected:Set<string>,context:(w:number,h:
     const isSel = selected.has(a.id);
     // Sample the smooth colour field on a small lattice; the coverage mask keeps the exact outline.
     const stride=8, cols=Math.ceil(W/stride)+1, rows=Math.ceil(H/stride)+1;
-    const field=(a.gradient?.length ?? 0)>=2 ? new Float32Array(cols*rows) : null;
+    const field=hasSlope(a) ? new Float32Array(cols*rows) : null;
     if (field) for (let y=Math.floor(y0/stride);y<=Math.min(rows-1,Math.ceil(y1/stride));y++) for (let x=Math.floor(x0/stride);x<=Math.min(cols-1,Math.ceil(x1/stride));x++) {
       field[y*cols+x]=surfaceHeight(a,{x:bx+(x*stride+0.5)/s,y:by+(y*stride+0.5)/s});
     }

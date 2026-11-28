@@ -314,3 +314,8 @@ Newest at the bottom. Work finished before 2026-11-22 was recorded in `TASKS.md`
 - [x] **#191 Spell ground targeting and elevation edits** (added 2026-11-27, completed 2026-11-27). The footprint checks reachable ground at its own height. Edits update while typing and clear stale footprints. Raised and lowered a 25 ft sphere in the coast inspector.
 - [x] **#192 Align spell shells with the board** (added 2026-11-27, completed 2026-11-27). The texture canvas matches its upload dimensions. Draw the solid from overhead and keep the target tint and its bright border together. Floor shadows no longer punch holes in the shell.
 - [x] **#193 Cast under open bridges** (added 2026-11-27, completed 2026-11-27). The path through an erased cliff boundary can run below a deck. Verified a cast through the coast bridge at ravine height, with three points on the deck outside its reach.
+- [x] **#194 Wrap spells over open bridge edges** (added 2026-11-27, completed 2026-11-27). A burst spends its radius traveling around the lip and back onto the deck.
+- [x] **#195 Stick emanations to their source** (added 2026-11-27, completed 2026-11-27). Attached spells follow the token and can be detached in the inspector.
+- [x] **#196 Bucket fill elevation** (added 2026-11-27, completed 2026-11-27). Fill the connected region under the cursor up to painted boundaries and map edges.
+- [x] **#197 Match a gradient boundary line** (added 2026-11-27, completed 2026-11-27). New boundary controls start as lines. Match follows adjacent flat or sloped surfaces.
+- [x] **#198 Paint more of a selected gradient** (added 2026-11-27, completed 2026-11-27). Extend the area with the terrain brush and retain its height controls.

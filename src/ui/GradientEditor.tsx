@@ -73,6 +73,7 @@ export function GradientEditor({board,ui,client}: {board: Board; ui: UiState; cl
   return <div class="gradient-editor">
     {controls.map(c=>{
       const path=preview?.id===c.id ? preview.path : c.path;
+      const variable=!!c.match && board.matchedLineVaries(id,c.id);
       const screen=path.map(p=>({x:origin.x+p.x*zoom,y:origin.y+p.y*zoom}));
       const pos=(p:Vec)=>({left:p.x+'px',top:p.y+'px'});
       const points=screen.map(p=>p.x+','+p.y).join(' ');
@@ -85,18 +86,19 @@ export function GradientEditor({board,ui,client}: {board: Board; ui: UiState; cl
           {...handlers(c,'end')} onClick={e=>{if(!e.detail) focus(c.id);}}/>}
         <div class="gradient-box" style={pos(screen[0])} onKeyDown={e=>e.stopPropagation()}>
           <label><input ref={field=>{if(field) fields.current.set(c.id,field); else fields.current.delete(c.id);}}
-            key={c.height} type="number" aria-label="Gradient height" min="-1000" max="5000" step="any"
-            defaultValue={Math.round(c.height)} onKeyDown={e=>{if(e.key==='Enter') e.currentTarget.blur();}}
+            disabled={variable} placeholder={variable ? "Varies" : undefined} key={variable ? "variable" : c.height} type="number" aria-label="Gradient height" min="-1000" max="5000" step="any"
+            defaultValue={variable ? "" : Math.round(c.height)} onKeyDown={e=>{if(e.key==='Enter') e.currentTarget.blur();}}
             onBlur={e=>{
               const field=e.currentTarget, value=field.valueAsNumber;
               if(field.value===field.defaultValue) return;
-              if(Number.isFinite(value) && field.validity.valid && value!==c.height) update(c.id,control=>({...control,height:value,path:control.path.map(({x,y})=>({x,y}))}));
+              if(Number.isFinite(value) && field.validity.valid && value!==c.height) update(c.id,control=>({...control,match:false,height:value,path:control.path.map(({x,y})=>({x,y}))}));
               field.value=String(Math.round(c.height));
             }}/> ft</label>
           <button aria-label="Delete height point" class="gradient-delete" onClick={()=>update(c.id,()=>null)}>×</button>
+          {c.path.length>1 && <label class="gradient-match"><input type="checkbox" checked={!!c.match} onChange={e=>update(c.id,control=>({...control,match:e.currentTarget.checked}))}/> Match</label>}
           <button class="gradient-convert" onClick={()=>{
             const next=c.path.length>1 ? [c.path[0]] : board.makeGradientLine(id,c.path[0]);
-            if(next) update(c.id,control=>({...control,path:next}));
+            if(next) update(c.id,control=>({...control,match:false,path:next}));
           }}>{c.path.length>1 ? 'To point' : 'To line'}</button>
         </div>
       </div>;

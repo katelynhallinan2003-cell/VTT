@@ -1,7 +1,7 @@
 import clip, { type MultiPolygon, type Pair } from 'polygon-clipping';
 import type { GradientControl, Vec } from '../types';
-import {groundAtTerrain, type Terrain} from './terrain';
-import { inRegion, terrainLayers } from './terrainEdges';
+import {groundAtTerrain, slopeAt, type Area, type Terrain} from './terrain';
+import { areaShape, inRegion, terrainLayers } from './terrainEdges';
 import { locate } from './gradientGeometry';
 
 const eps = 1e-7;
@@ -176,4 +176,59 @@ export function resolveGradientBoundaries(t:Terrain) {
       return saved?.boundary==='both' || saved?.boundary==='path' ? visible({...c,height,path:saved.path}) : [{...c,height}];
     }),...stored.filter(c=>!shared(c.id)).flatMap(visible)];
   }
+}
+
+/** Build numerical profiles for the solver while keeping the editable controls compact.
+ * Resolve dependencies once. In a reciprocal match the first visit supplies the
+ * authored seam, so both sides settle on the same profile without recursion. */
+export function resolveMatchedLines(t:Terrain) {
+  const layers=terrainLayers(t),visited=new Set<Area>();
+  function resolve(area:Area) {
+    if (visited.has(area) || !area.gradient?.some(c=>c.match)) return;
+    visited.add(area);
+    const outline=areaShape(t,area.id);
+    const other=layers.filter(l=>l.area!==area);
+    const outside={...t,areas:other.map(l=>l.area)};
+    const neighboringEdges=other.flatMap(l=>edges(l.shape));
+    const controls=area.gradient;
+    area.gradient=controls.map(c=>{
+      if (!c.match || c.path.length<2) return c;
+      const profile:(Vec & {rise:number})[]=[];
+      for(let i=1;i<c.path.length;i++) {
+        const a=c.path[i-1],b=c.path[i],len=distance(a,b);
+        if (!len) continue;
+        const cuts=boundarySplits(a,b,neighboringEdges);
+        for(let j=1;j<cuts.length;j++) {
+          const from=along(a,b,cuts[j-1]),to=along(a,b,cuts[j]),m=along(from,to,.5);
+          const shift=Math.min(t.grid.cell*.0001,distance(from,to)*.01)/len;
+          const nx=(a.y-b.y)*shift,ny=(b.x-a.x)*shift;
+          const l={x:m.x+nx,y:m.y+ny},r={x:m.x-nx,y:m.y-ny};
+          const inL=outline.some(poly=>inRegion(poly,l)),inR=outline.some(poly=>inRegion(poly,r));
+          const q=inL ? r : l;
+          const touching=inL!==inR;
+          if(touching) for (const layer of other) if (layer.shape.some(poly=>inRegion(poly,q))) resolve(layer.area);
+          const slope=touching && slopeAt(outside,q);
+          const flat=touching ? groundAtTerrain(outside,q) : c.height;
+          const at=(p:Vec)=>slope ? slope(p) : flat;
+          const append=(p:Vec,h:number)=>{
+            const last=profile[profile.length-1];
+            if(!last || distance(last,p)>eps || Math.abs(last.rise-h)>eps) profile.push({...p,rise:h});
+          };
+          const split=(p:Vec,v:number,end:Vec,w:number,depth:number)=>{
+            const mid=along(p,end,.5),h=at(mid);
+            if(slope && depth<12 && (distance(p,end)>t.grid.cell/4 ||
+              [.25,.5,.75].some(f=>Math.abs(at(along(p,end,f))-(v+(w-v)*f))>.00025))) {
+              split(p,v,mid,h,depth+1); split(mid,h,end,w,depth+1);
+            } else append(end,w);
+          };
+          append(from,at(from)); split(from,at(from),to,at(to),0);
+        }
+      }
+      if(!profile.length) return c;
+      const height=profile[0].rise;
+      return {...c,height,path:profile.map(p=>({...p,rise:p.rise-height}))};
+    });
+    area.editControls=controls.map((c,i)=>c.match ? {...c,height:area.gradient![i].height} : c);
+  }
+  for(const area of t.areas) resolve(area);
 }

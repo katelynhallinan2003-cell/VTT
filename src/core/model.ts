@@ -226,7 +226,7 @@ function readGradient(raw: unknown): Drawing['gradient'] {
     if (!c || typeof c.id !== 'string' || !Number.isFinite(c.height)) return [];
     const path = values(c.path);
     if (!path.length || !path.every(p => p && Number.isFinite(p.x) && Number.isFinite(p.y) && (p.rise===undefined || Number.isFinite(p.rise)))) return [];
-    return [{...( ['height','path','both','hidden'].includes(c.boundary) ? {boundary:c.boundary} : {}),id:c.id,height:Math.max(-1000,Math.min(5000,c.height)),path}];
+    return [{...(c.match===true && path.length>1 ? {match:true} : {}),...( ['height','path','both','hidden'].includes(c.boundary) ? {boundary:c.boundary} : {}),id:c.id,height:Math.max(-1000,Math.min(5000,c.height)),path}];
   });
   return controls.length ? controls : undefined;
 }
@@ -236,7 +236,8 @@ export function spellSettings(raw: unknown): import('../types').SpellSettings {
   if (!raw || typeof raw!=='object') return out;
   const v=raw as Record<string,unknown>;
   if(typeof v.range==='number' && Number.isFinite(v.range) && v.range>0) out.range=v.range;
-  for (const key of ['walls','wrap','elevation'] as const) if (typeof v[key]==='boolean') out[key]=v[key];
+  if (typeof v.source==='string' && v.source) out.source=v.source;
+  for (const key of ['walls','wrap','elevation','stick'] as const) if (typeof v[key]==='boolean') out[key]=v[key];
   for (const key of ['start','end'] as const) if (typeof v[key]==='number' && Number.isFinite(v[key])) out[key]=v[key];
   return out;
 }

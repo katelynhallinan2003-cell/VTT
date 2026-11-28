@@ -392,7 +392,7 @@ export function TableView(props: { client: TableClient; user: AuthUser; demo: bo
       {d.tool === 'ruler' && <RulerFlyout ui={ui} client={client} />}
       {d.tool === 'height' && client.isDM && <HeightFlyout ui={ui} client={client} onFromColor={() => setModal({ kind: 'colorHeights' })} />}
       {d.tool === 'wall' && client.isDM && <WallFlyout ui={ui} client={client} onDetect={() => setModal({ kind: 'detectWalls' })} />}
-      {board && client.isDM && d.tool==='height' && d.gradientArea && <GradientEditor key={d.gradientArea} board={board} ui={ui} client={client} />}
+      {board && client.isDM && d.tool==='height' && d.gradientArea && !d.paintGradient && <GradientEditor key={d.gradientArea} board={board} ui={ui} client={client} />}
       <TextEditor ui={ui} client={client} board={board} />
       <DrawInspector ui={ui} client={client} board={board} />
 

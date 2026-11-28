@@ -13,11 +13,11 @@ import { templateRoughDraws } from '../core/templaterough';
 import { FogMask, lineOp, polyOp, rectOp } from '../core/fog';
 import { hexCentersIn, hexCorners, hexNudge, isHex } from '../core/hex';
 import { altitudeOf, dayOf, dimOf, groundAt, heightNote, isRough, roughOf, setAltitude, zoneColor, zonesOf, type Altitude } from '../core/height';
-import { dragGradient, gradientPath, initialGradientLine } from '../core/gradientGeometry';
+import { dragGradient, gradientPath, initialGradientLine, locate } from '../core/gradientGeometry';
 import type { SightSegments } from '../core/terrainSight';
-import { withSightTerrain, areaShape, brushCuts, clippedBrush, patchStroke, connectedHeight, type TerrainEdge } from '../core/terrainEdges';
+import { withSightTerrain, areaShape, brushCuts, bucketRegion, extendGradient, clippedBrush, patchStroke, connectedHeight, type TerrainEdge } from '../core/terrainEdges';
 import { movementCost } from '../core/movementCost';
-import { EMPTY_TERRAIN, MAX_STROKE_CELLS, slopeAt, surfaceHeight, standingSurface, standingGround, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
+import { EMPTY_TERRAIN, MAX_STROKE_CELLS, slopeAt, surfaceHeight, hasSlope, standingSurface, standingGround, groundAtTerrain, areaAt, areaLabelAt, areasSelected, cellKey, cellsAlong, newAreaId, terrainBounds, type Area, type Terrain } from '../core/terrain';
 import { MAX_COVERED, auraCells, cellCentersIn, cellPoly, outlineEdges } from '../core/cells';
 import { scaleCut, type GridCut, type PixelImage } from '../core/gridcut';
 import { AUTO_GRID_STRENGTH, detectPrintedGrid, impliedGrid } from '../core/mapgrid';
@@ -62,12 +62,12 @@ type Drag =
   /** dragging one of the extra maps */
   | { kind: 'xmap'; id: string; start: Vec; orig: Vec; moved: boolean; cur: Vec }
   | { kind: 'shape'; dk: DrawKind; start: Vec; pts: Vec[]; /** set while drawing a height zone: its height in feet */ hz?: number;
-      /** an emanation from a creature: where it comes out, and how wide that creature's space is in feet */ of?: number; fixedOrigin?: Vec;
+      /** an emanation from a creature: where it comes out, and how wide that creature's space is in feet */ of?: number; fixedOrigin?: Vec; source?: string;
       /** what the last template snap decided (so it only changes when the pointer clearly moves on) */ snap?: TemplateSnapState; range?:number }
   | { kind: 'erase'; ids: Set<string> }
   /** painting (or rubbing out) ground with the Heights brush */
   | { kind: 'lightpaint'; /** taking painted light away instead of adding it */ erase: boolean; /** dim light (half as strong) instead of daylight */ dim: boolean; pts: Vec[]; last: Vec; /** brush width in pixels */ size: number }
-  | { kind: 'terrain'; /** painting difficult terrain instead of height */ rough?: boolean; erase: boolean; /** the area it paints into (empty: erase from every area) */ group: string; h: number; add: boolean; /** the cells covered so far (null for a free brush) */ cells: Map<string, Vec> | null; pts: Vec[]; last: Vec; size: number }
+  | { kind: 'terrain'; extend?: boolean; /** painting difficult terrain instead of height */ rough?: boolean; erase: boolean; /** the area it paints into (empty: erase from every area) */ group: string; h: number; add: boolean; /** the cells covered so far (null for a free brush) */ cells: Map<string, Vec> | null; pts: Vec[]; last: Vec; size: number }
   | { kind: 'ruler'; /** another leg added to a measurement that is already there */ extend?: boolean }
   /** drawing a wall (or a box of walls) with the Walls tool; `cont` when it carries on from the last wall */
   | { kind: 'wall'; a: Vec; b: Vec; down: Vec; moved: boolean; cont: boolean; shape: 'line' | 'box' | 'free' | 'circle'; /** the pointer's path (freehand walls) */ pts: Vec[] }
@@ -589,6 +589,15 @@ export class Board {
     }
     if (scene.drawRev!==this.seenDrawRev || scene.wallRev!==this.seenWallRev) this.seenTokensRev=-1;
     if (scene.tokensRev !== this.seenTokensRev) {
+      if (scene.drawRev!==this.seenDrawRev) this.attachedSources=[...new Set([...scene.draws.values()].flatMap(d=>d.k==='emanation' && d.spell?.stick && d.spell.source ? [d.spell.source] : []))];
+      const state=this.attachedSources.map(id=>{
+        const t=scene.tokens.get(id);
+        return t && this.visibleToViewer(t) ? [id,t.x,t.y,t.size,this.heightOf(t).alt].join(',') : '';
+      }).join('|');
+      if(state!==this.attachedState) {
+        this.attachedState=state; this.spellCache=undefined; this.spellDrawDirty=true;
+        this.refreshRough();
+      }
       this.seenTokensRev = scene.tokensRev;
       this.reconcileTokens();
       this.dirty = true;
@@ -975,8 +984,9 @@ export class Board {
     const saved=this.spellCache,preview=this.ui.data.dmPreview;
     if(saved && saved.scene===scene && saved.draw===scene.drawRev && saved.wall===scene.wallRev && saved.meta===scene.metaRev && saved.preview===preview) return saved.entries;
     const entries=[];
-    for(const d of scene.draws.values()) {
-      if(!isTemplate(d.k) || (d.pv && d.uid!==this.client.uid && (!this.client.isDM || preview))) continue;
+    for(const raw of scene.draws.values()) {
+      const d=this.attachedDrawing(raw);
+      if(!isTemplate(d.k) || !this.sourceVisible(d) || (d.pv && d.uid!==this.client.uid && (!this.client.isDM || preview))) continue;
       const [a,b]=parsePts(d.p);
       if(b) entries.push({color:d.color,volume:spellVolume(d,a,b,this.client.grid,this.wallsForSpells())});
     }
@@ -1121,9 +1131,9 @@ export class Board {
     const scene = this.client.scene;
     if (!scene) return;
     const grid = this.client.grid;
-    const templates=[...scene.draws.values()].filter(d=>d.td && isTemplate(d.k) && (!d.pv || (this.client.isDM && !this.ui.data.dmPreview) || d.uid===this.client.uid));
+    const templates=[...scene.draws.values()].filter(d=>d.td && this.sourceVisible(d) && isTemplate(d.k) && (!d.pv || (this.client.isDM && !this.ui.data.dmPreview) || d.uid===this.client.uid));
     const w = templates.length ? this.wallsForSpells() : undefined;
-    const spell = w ? templateRoughDraws(templates, grid, w.segs, w.ground,w.maps,w.openings) : [];
+    const spell = w ? templateRoughDraws(templates.map(d=>this.attachedDrawing(d)), grid, w.segs, w.ground,w.maps,w.openings) : [];
     const next = roughOf(spell.length ? [...scene.draws.values(), ...spell] : scene.draws.values(), grid);
     if (next.sig !== this.rough.sig) { this.rough = next; this.paintRough(); }
   }
@@ -1206,7 +1216,7 @@ export class Board {
   private moveCost(path: Vec[], fly: boolean, elevation = 0, stops: number[] = []): { ft: number; note: string } {
     const grid = this.client.gridAt(path[0] ?? { x: 0, y: 0 });
     const { terrain, move, levelJoins, openings } = this.wallSegs();
-    const slopes = this.zones.areas.some(a => (a.gradient?.length ?? 0) >= 2);
+    const slopes = this.zones.areas.some(hasSlope);
     if (!slopes && !terrain.length && !openings.length && !move.length && !this.rough.areas.length) return { ft: pathFt(grid,path), note: '' };
     return movementCost(grid, path, fly ? elevation : null, {
       slope: slopes ? p => slopeAt(this.zones,p) : undefined,
@@ -1245,7 +1255,7 @@ export class Board {
   private wallsForSpells() {
     // a spell also depends on how high the ground is where it starts (a wall lower than that does not stop it)
     const {sight,openings}=this.wallSegs();
-    const steppedGround=!openings.length && !this.zones.areas.some(a=>(a.gradient?.length ?? 0)>=2);
+    const steppedGround=!openings.length && !this.zones.areas.some(hasSlope);
     return { segs:sight, openings, steppedGround, maps:this.terrainMaps, rev:this.sightSceneKey(), ground: this.zones.areas.length ? this.spellGround() : undefined };
   }
 
@@ -2444,9 +2454,9 @@ export class Board {
     if (d?.kind === 'lightpaint') this.paintLightBrush(g, z, d.last, d);
     else if (!d && u.tool === 'light' && this.pointerW && this.client.isDM) this.paintLightBrush(g, z, this.pointerW, null);
     else if (d?.kind === 'terrain') li = this.paintBrush(this.terrainBrushG, z, d.last, d, li);
-    else if (!d && !u.gradientArea && u.tool === 'height' && this.pointerW && this.client.isDM) {
+    else if (!d && !u.heightBucket && (!u.gradientArea || u.paintGradient) && u.tool === 'height' && this.pointerW && this.client.isDM) {
       const mode = terrainBrushMode(u);
-      if (mode === 'paint' || mode === 'erase') li = this.paintBrush(this.terrainBrushG, z, this.pointerW, null, li);
+      if (mode === 'paint' || mode === 'erase' || u.paintGradient) li = this.paintBrush(this.terrainBrushG, z, this.pointerW, null, li);
     }
     this.terrainLayer.avoidBrushReadout(li > brushLabelIndex ? this.plotLabels[brushLabelIndex] : undefined);
     if (!u.heightPatches && d?.kind === 'drawmove' && d.moved) this.paintMoveGhost(g, d);
@@ -2581,7 +2591,8 @@ export class Board {
     if (d?.kind === 'pan' || d?.kind === 'tokens') c.style.cursor = 'grabbing';
     else if (this.spaceDown) c.style.cursor = 'grab';
     else if (u.tool === 'select') c.style.cursor = this.pointerW && this.hitToken(this.pointerW) ? 'grab' : 'default';
-    else if ((u.tool === 'height' && terrainBrushMode(u) === 'move') || (u.tool === 'template' && u.tplMode === 'select')) c.style.cursor = 'default';
+    else if (u.tool === 'height' && u.heightBucket) c.style.cursor = "url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2228%22 height=%2228%22 viewBox=%220 0 24 24%22%3E%3Cpath stroke=%22white%22 stroke-width=%222%22 fill=%22%232b3645%22 d=%22M3 12l9-9 9 9-9 9zM5 2l8 9%22/%3E%3Cpath fill=%22%2349aaff%22 d=%22M18 18l3-5 2 5q-2 5-5 0%22/%3E%3C/svg%3E') 3 12, crosshair";
+    else if ((u.tool === 'height' && !u.paintGradient && terrainBrushMode(u) === 'move') || (u.tool === 'template' && u.tplMode === 'select')) c.style.cursor = 'default';
     else c.style.cursor = 'crosshair';
   }
 
@@ -2744,14 +2755,40 @@ export class Board {
     return Math.max(1.5, STROKE_CELLS[this.ui.data.drawSize] * this.client.grid.cell);
   }
 
+  emanationToken(d:Drawing) {
+    if (d.k!=='emanation') return null;
+    if (d.spell?.source) {
+      const token=this.client.scene?.tokens.get(d.spell.source);
+      return token && this.visibleToViewer(token) ? token : null;
+    }
+    const [p]=parsePts(d.p);
+    return p ? this.emanationSource(p,p) : null;
+  }
+
+  attachedDrawing(d:Drawing):Drawing {
+    if (d.k!=='emanation' || !d.spell?.stick || !d.spell.source) return d;
+    const token=this.emanationToken(d);
+    const points=parsePts(d.p);
+    if (!token || !points.length) return d;
+    const dx=token.x-points[0].x,dy=token.y-points[0].y;
+    return {...d,p:joinPts(points.map(p=>({x:p.x+dx,y:p.y+dy}))),of:Math.max(1,token.size)*this.client.grid.ft,
+      spell:{...d.spell,start:d.spell.start ?? this.heightOf(token).alt}};
+  }
+
+  private sourceVisible(d:Drawing) {
+    return !(d.k==='emanation' && d.spell?.stick && d.spell.source) || !!this.emanationToken(d);
+  }
+
+  private attachedSources:string[]=[];
+  private attachedState='';
   drawingsShown(): Drawing[] {
     // ground (boxes, circles and brush strokes with a height) is painted by the terrain layer, not here
     const c = this.client;
     // a template its maker kept private is for them and the DM only
-    const list = c.drawingsSorted().filter((d) => d.hz == null && d.k !== 'terrain' && !(d.pv && (!c.isDM || this.ui.data.dmPreview) && d.uid !== c.uid));
+    const list = c.drawingsSorted().filter((d) => d.hz == null && d.k !== 'terrain' && this.sourceVisible(d) && !(d.pv && (!c.isDM || this.ui.data.dmPreview) && d.uid !== c.uid)).map(d=>this.attachedDrawing(d));
     const pv = this.drawPreview;
     const move=this.drag;
-    if(move?.kind==='drawmove' && move.moved) return list.map(d=>move.ids.includes(d.id) && isTemplate(d.k)
+    if(move?.kind==='drawmove' && move.moved) return list.map(d=>move.ids.includes(d.id) && isTemplate(d.k) && !d.spell?.stick
       ? {...d,p:joinPts(parsePts(d.p).map(p=>({x:p.x+move.dx,y:p.y+move.dy})))} : d);
     return pv ? list.map((d) => (d.id === pv.id ? { ...d, ...pv.patch } : d)) : list;
   }
@@ -2794,7 +2831,7 @@ export class Board {
   private shownDrawing(id: string): Drawing | undefined {
     const d = this.client.scene?.draws.get(id);
     const pv = this.drawPreview;
-    return d && pv?.id === id ? { ...d, ...pv.patch } : d;
+    return d && (pv?.id === id ? { ...this.attachedDrawing(d), ...pv.patch } : this.attachedDrawing(d));
   }
 
   /** Are the squares a template covers lit up? Never on a gridless scene, where there are no squares to light. */
@@ -2856,8 +2893,8 @@ export class Board {
 
   private hitSelectedDrawingInside(p: Vec): Drawing | null {
     for (const id of this.ui.data.drawSel) {
-      const d = this.client.scene?.draws.get(id);
-      if (d && this.client.canEditDrawing(d) && this.drawingHit(d,p,6/this.cam.zoom,true)) return d;
+      const d = this.shownDrawing(id);
+      if (d && this.sourceVisible(d) && this.client.canEditDrawing(d) && this.drawingHit(d,p,6/this.cam.zoom,true)) return d;
     }
     return null;
   }
@@ -2875,8 +2912,8 @@ export class Board {
     const list = this.client.drawingsSorted().filter((d) => d.k !== 'terrain' && (d.hz == null || this.zonesVisible()));
     const tol = 6 / this.cam.zoom;
     for (let i = list.length - 1; i >= 0; i--) {
-      const d = list[i];
-      if (this.client.canEditDrawing(d) && this.drawingHit(d,p,tol,solid)) return d;
+      const d = this.attachedDrawing(list[i]);
+      if (this.sourceVisible(d) && this.client.canEditDrawing(d) && this.drawingHit(d,p,tol,solid)) return d;
     }
     return null;
   }
@@ -2981,7 +3018,12 @@ export class Board {
     return scene && scene.drawRev===this.seenZoneRev && this.zones.grid===this.client.grid ? this.zones : zonesOf(scene?.draws.values() ?? [],this.client.grid);
   }
 
-  gradientControls(id: string) { return this.gradientTerrain().areas.find(a=>a.id===id)?.gradient ?? []; }
+  gradientControls(id: string) { const a=this.gradientTerrain().areas.find(a=>a.id===id); return a?.editControls ?? a?.gradient ?? []; }
+
+  matchedLineVaries(id:string,key:string) {
+    const c=this.gradientTerrain().areas.find(a=>a.id===id)?.gradient?.find(c=>c.id===key);
+    return !!c?.match && c.path.some(p=>Math.abs(p.rise ?? 0)>.0001);
+  }
 
   makeGradientLine(id:string,p:Vec) {
     return initialGradientLine(areaShape(this.zones,id),p,64/this.cam.zoom);
@@ -3017,9 +3059,16 @@ export class Board {
     const u = this.ui.data;
     const rough = u.groundKind === 'rough';
     const gridless = currentOverlay(this.client.grid) === 'none';
-    const mode = terrainBrushMode(u);
+    const mode = u.paintGradient && u.gradientArea ? 'paint' : terrainBrushMode(u);
+    if (!rough && u.heightBucket && mode==='paint') {
+      if (!onMap(w,this.terrainMaps) || areaAt(this.zones,w)?.gradientEnabled) return;
+      const poly=bucketRegion(this.zones,w,this.terrainMaps);
+      if (poly) void this.client.addDrawings([{...patchStroke(poly,newAreaId(),u.heightFt),ha:u.heightAdds}],'Bucket fill elevation')
+        .catch((err:Error)=>this.cb.onNotice(err.message,'error'));
+      return;
+    }
     const clicked = !rough && mode === 'move' ? areaAt(this.zones,w) : null;
-    if (u.gradientArea && !rough && !e.shiftKey) {
+    if (u.gradientArea && !u.paintGradient && !rough && !e.shiftKey) {
       // A click just across the seam must still snap to the edited perimeter.
       const area = this.zones.areas.find(a => a.id === u.gradientArea);
       const path = area && this.gradientPlacement(area.id,w);
@@ -3028,7 +3077,9 @@ export class Board {
         const controls = this.gradientControls(area.id);
         const h = clicked && clicked.id !== area.id || controls.length < 2 ? groundAt(this.zones,w) : surfaceHeight(area,path[0]);
         const id = newAreaId();
-        this.saveGradient(area.id,[...controls,{id,height:Math.round(h*10)/10,path}]);
+        const boundary=locate(areaShape(this.zones,area.id),path[0],1e-5)?.edge;
+        const setter=boundary ? this.makeGradientLine(area.id,path[0]) ?? path : path;
+        this.saveGradient(area.id,[...controls,{id,height:Math.round(h*10)/10,path:setter}]);
         this.ui.set({gradientFocus:id});
         return;
       }
@@ -3054,13 +3105,14 @@ export class Board {
       return;
     }
     const erase = mode === 'erase';
-    const cur = rough ? null : this.currentArea();
+    const cur = rough ? null : u.paintGradient ? this.zones.areas.find(a=>a.id===u.gradientArea) : this.currentArea();
+    if (u.paintGradient && !cur) return;
     const pick = !rough && u.heightPatches?.[0];
-    const add = !pick && !rough && !erase && (cur?.add ?? u.heightAdds);
+    const add = !u.paintGradient && !pick && !rough && !erase && (cur?.add ?? u.heightAdds);
     // Each additive gesture goes above the ground already there, even if the previous area is selected.
     const group = rough ? 'dt' : erase ? cur?.id ?? '' : add ? newAreaId() : cur?.id ?? newAreaId();
     const d: Extract<Drag, { kind: 'terrain' }> = {
-      kind: 'terrain', erase, group, rough,
+      kind: 'terrain', erase, group, rough, extend:!!u.paintGradient,
       h: rough ? 1 : (pick ? pick.height : cur?.h ?? u.heightFt), add,
       cells: u.heightBrush!=='fine' && !gridless && u.heightSnap !== e.altKey ? new Map() : null, pts: [], last: w, size: u.heightBrush==='fine' ? 2/this.client.grid.ft : u.heightBrush,
     };
@@ -3096,6 +3148,11 @@ export class Board {
       pts = d.pts.length > 2 ? fitPenPoints(d.pts, Math.max(0.5, wpx * 0.06)) : d.pts;
     }
     if (!pts.length) return;
+    if (d.extend) {
+      const edits=extendGradient(this.zones,d.group,pts,wpx,!!d.cells,this.terrainMaps);
+      if (edits.length) void this.client.addDrawings(edits,'Paint gradient').catch((err:Error)=>this.cb.onNotice(err.message,'error'));
+      return;
+    }
     const clipped = clippedBrush(grid,pts,wpx,!!d.cells,this.terrainMaps);
     if (clipped && !clipped.length) return;
     const picks = this.ui.data.heightPatches;
@@ -3262,7 +3319,7 @@ export class Board {
       // it comes out of whoever is standing there: a bigger creature's space is bigger, and the area is measured from its edge
       const grid = this.client.grid;
       const t = this.emanationSource(w, snapToCellCenter(grid, w));
-      if (t) { d.fixedOrigin = { x: t.x, y: t.y }; d.of = Math.max(1, t.size) * grid.ft; }
+      if (t) { d.source=t.id; d.fixedOrigin = { x: t.x, y: t.y }; d.of = Math.max(1, t.size) * grid.ft; }
     }
     const sn = this.templateSnap(kind, w, w, e, d);
     d.pts = [sn.a, sn.a];
@@ -3404,7 +3461,7 @@ export class Board {
       k, p: joinPts(pts), color: isT ? u.tplColor : u.drawColor, w: isT ? Math.max(2, stroke) : stroke,
       fill: !isT && closed ? FILL_LEVEL[u.drawFillMode] : 0, fc: closed ? u.drawFillColor : '',
       dash: !isT && u.drawDash, txt: '', fs: 28, bw: u.tplWidth, of: k === 'emanation' && d.of ? d.of : undefined, pv: isT && !u.tplShare ? true : undefined,
-      spell:isT ? {...u.tplSettings,range:d.range} : undefined,
+      spell:isT ? {...u.tplSettings,stick:d.source && u.tplSettings.stick ? true : undefined,source:d.source,range:d.range} : undefined,
       td: isT && u.tplRough ? true : undefined,
     }, { onId: (id) => {
       if(isT) this.spellPainter.placed(id);
